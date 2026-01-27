@@ -1,5 +1,5 @@
 use eframe::egui;
-use egui_plot::{Line, Plot, PlotPoints, Points, Polygon};
+use egui_plot::{Line, Plot, PlotPoints, PlotPoint, Points, Polygon, Text};
 use std::f64::consts::PI;
 
 const EARTH_RADIUS_KM: f64 = 6371.0;
@@ -44,6 +44,8 @@ impl WalkerConstellation {
             for sat in 0..sats_per_plane {
                 let sat_spacing = (2.0 * PI / sats_per_plane as f64) * sat as f64;
                 let true_anomaly = sat_spacing + mean_motion * time;
+                let normalized_anomaly = true_anomaly.rem_euclid(2.0 * PI);
+                let ascending = normalized_anomaly < PI;
 
                 let inc = self.inclination_deg.to_radians();
 
@@ -51,19 +53,21 @@ impl WalkerConstellation {
                 let y_orbital = orbit_radius * true_anomaly.sin();
 
                 let x = x_orbital * raan.cos() - y_orbital * inc.cos() * raan.sin();
-                let y = x_orbital * raan.sin() + y_orbital * inc.cos() * raan.cos();
-                let z = y_orbital * inc.sin();
+                let z = x_orbital * raan.sin() + y_orbital * inc.cos() * raan.cos();
+                let y = y_orbital * inc.sin();
 
-                let lat = (z / orbit_radius).asin().to_degrees();
-                let lon = y.atan2(x).to_degrees();
+                let lat = (y / orbit_radius).asin().to_degrees();
+                let lon = z.atan2(x).to_degrees();
 
                 positions.push(SatelliteState {
                     plane,
+                    sat_index: sat,
                     x,
                     y,
                     z,
                     lat,
                     lon,
+                    ascending,
                 });
             }
         }
@@ -83,29 +87,37 @@ impl WalkerConstellation {
                 let y_orbital = orbit_radius * theta.sin();
 
                 let x = x_orbital * raan.cos() - y_orbital * inc.cos() * raan.sin();
-                let y = x_orbital * raan.sin() + y_orbital * inc.cos() * raan.cos();
-                let z = y_orbital * inc.sin();
+                let z = x_orbital * raan.sin() + y_orbital * inc.cos() * raan.cos();
+                let y = y_orbital * inc.sin();
 
                 (x, y, z)
             })
             .collect()
     }
-
-    fn name(&self) -> &'static str {
-        match self.walker_type {
-            WalkerType::Delta => "Walker Delta",
-            WalkerType::Star => "Walker Star",
-        }
-    }
 }
 
 struct SatelliteState {
     plane: usize,
+    sat_index: usize,
     x: f64,
     y: f64,
     z: f64,
     lat: f64,
     lon: f64,
+    ascending: bool,
+}
+
+fn rotate_point(x: f64, y: f64, z: f64, rot_x: f64, rot_y: f64) -> (f64, f64, f64) {
+    let (sin_x, cos_x) = rot_x.sin_cos();
+    let (sin_y, cos_y) = rot_y.sin_cos();
+
+    let y1 = y * cos_x - z * sin_x;
+    let z1 = y * sin_x + z * cos_x;
+
+    let x2 = x * cos_y + z1 * sin_y;
+    let z2 = -x * sin_y + z1 * cos_y;
+
+    (x2, y1, z2)
 }
 
 struct App {
@@ -118,6 +130,10 @@ struct App {
     speed: f64,
     animate: bool,
     show_orbits: bool,
+    rot_x: f64,
+    rot_y: f64,
+    torus_rot_x: f64,
+    torus_rot_y: f64,
 }
 
 impl Default for App {
@@ -132,6 +148,10 @@ impl Default for App {
             speed: 1.0,
             animate: true,
             show_orbits: true,
+            rot_x: 0.0,
+            rot_y: 0.0,
+            torus_rot_x: PI / 2.0,
+            torus_rot_y: 0.0,
         }
     }
 }
@@ -178,7 +198,7 @@ impl eframe::App for App {
             ui.heading("Walker Constellations");
 
             ui.add_space(10.0);
-            ui.label("Shared Configuration");
+            ui.label("Configuration");
             ui.separator();
 
             let mut sats = self.sats_per_plane as i32;
@@ -233,6 +253,13 @@ impl eframe::App for App {
                 self.time = 0.0;
             }
 
+            if ui.button("Reset view").clicked() {
+                self.rot_x = 0.0;
+                self.rot_y = 0.0;
+                self.torus_rot_x = PI / 2.0;
+                self.torus_rot_y = 0.0;
+            }
+
             ui.add_space(20.0);
             ui.label(format!("Total: {} satellites", self.total_sats()));
 
@@ -240,28 +267,79 @@ impl eframe::App for App {
             ui.separator();
             ui.label("Delta: RAAN spread 360°");
             ui.label("Star: RAAN spread 180°");
+            ui.add_space(5.0);
+            ui.label("Drag 3D views to rotate");
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let show_orbits = self.show_orbits;
 
+            let available_width = ui.available_width();
+            let available_height = ui.available_height();
+            let plot_width = (available_width - 30.0) / 2.0;
+            let plot_3d_height = (available_height - 80.0) * 0.4;
+            let plot_ground_height = (available_height - 80.0) * 0.25;
+            let plot_torus_height = (available_height - 80.0) * 0.35;
+
+            let mut rot_x = self.rot_x;
+            let mut rot_y = self.rot_y;
+            let mut torus_rot_x = self.torus_rot_x;
+            let mut torus_rot_y = self.torus_rot_y;
+
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.heading("Walker Delta");
-                    draw_3d_view(ui, "delta_3d", &delta, &delta_positions, show_orbits);
+                    let (new_rot_x, new_rot_y) = draw_3d_view(
+                        ui,
+                        "delta_3d",
+                        &delta,
+                        &delta_positions,
+                        show_orbits,
+                        rot_x,
+                        rot_y,
+                        plot_width,
+                        plot_3d_height,
+                    );
+                    rot_x = new_rot_x;
+                    rot_y = new_rot_y;
                     ui.add_space(5.0);
-                    draw_ground_track(ui, "delta_ground", &delta_positions, delta.num_planes);
+                    draw_ground_track(ui, "delta_ground", &delta_positions, delta.num_planes, plot_width, plot_ground_height);
+                    ui.add_space(5.0);
+                    let (new_torus_rot_x, new_torus_rot_y) = draw_torus(ui, "delta_torus", &delta, &delta_positions, self.time, torus_rot_x, torus_rot_y, plot_width, plot_torus_height);
+                    torus_rot_x = new_torus_rot_x;
+                    torus_rot_y = new_torus_rot_y;
                 });
 
                 ui.add_space(20.0);
 
                 ui.vertical(|ui| {
                     ui.heading("Walker Star");
-                    draw_3d_view(ui, "star_3d", &star, &star_positions, show_orbits);
+                    let (new_rot_x, new_rot_y) = draw_3d_view(
+                        ui,
+                        "star_3d",
+                        &star,
+                        &star_positions,
+                        show_orbits,
+                        rot_x,
+                        rot_y,
+                        plot_width,
+                        plot_3d_height,
+                    );
+                    rot_x = new_rot_x;
+                    rot_y = new_rot_y;
                     ui.add_space(5.0);
-                    draw_ground_track(ui, "star_ground", &star_positions, star.num_planes);
+                    draw_ground_track(ui, "star_ground", &star_positions, star.num_planes, plot_width, plot_ground_height);
+                    ui.add_space(5.0);
+                    let (new_torus_rot_x, new_torus_rot_y) = draw_torus(ui, "star_torus", &star, &star_positions, self.time, torus_rot_x, torus_rot_y, plot_width, plot_torus_height);
+                    torus_rot_x = new_torus_rot_x;
+                    torus_rot_y = new_torus_rot_y;
                 });
             });
+
+            self.rot_x = rot_x;
+            self.rot_y = rot_y;
+            self.torus_rot_x = torus_rot_x;
+            self.torus_rot_y = torus_rot_y;
         });
     }
 }
@@ -272,15 +350,32 @@ fn draw_3d_view(
     constellation: &WalkerConstellation,
     positions: &[SatelliteState],
     show_orbits: bool,
-) {
+    mut rot_x: f64,
+    mut rot_y: f64,
+    width: f32,
+    height: f32,
+) -> (f64, f64) {
+    let orbit_radius = EARTH_RADIUS_KM + constellation.altitude_km;
+    let axis_len = EARTH_RADIUS_KM * 1.5;
+    let margin = orbit_radius.max(axis_len) * 1.25;
+    let sat_radius = (width.min(height) / 80.0).max(2.0);
+
     let plot = Plot::new(id)
         .data_aspect(1.0)
-        .width(350.0)
-        .height(300.0)
+        .width(width)
+        .height(height)
         .show_axes(false)
-        .show_grid(false);
+        .show_grid(false)
+        .allow_drag(false)
+        .allow_zoom(false)
+        .allow_scroll(false)
+        .allow_boxed_zoom(false)
+        .include_x(-margin)
+        .include_x(margin)
+        .include_y(-margin)
+        .include_y(margin);
 
-    plot.show(ui, |plot_ui| {
+    let response = plot.show(ui, |plot_ui| {
         if show_orbits {
             for plane in 0..constellation.num_planes {
                 let orbit_pts = constellation.orbit_points_3d(plane);
@@ -288,8 +383,9 @@ fn draw_3d_view(
 
                 let mut behind_segment: Vec<[f64; 2]> = Vec::new();
                 for &(x, y, z) in &orbit_pts {
-                    if z < 0.0 {
-                        behind_segment.push([x, y]);
+                    let (rx, ry, rz) = rotate_point(x, y, z, rot_x, rot_y);
+                    if rz < 0.0 {
+                        behind_segment.push([rx, ry]);
                     } else if !behind_segment.is_empty() {
                         plot_ui.line(
                             Line::new(PlotPoints::new(behind_segment.clone()))
@@ -312,31 +408,64 @@ fn draw_3d_view(
         for plane in 0..constellation.num_planes {
             let pts: PlotPoints = positions
                 .iter()
-                .filter(|s| s.plane == plane && s.z < 0.0)
-                .map(|s| [s.x, s.y])
+                .filter_map(|s| {
+                    if s.plane != plane {
+                        return None;
+                    }
+                    let (rx, ry, rz) = rotate_point(s.x, s.y, s.z, rot_x, rot_y);
+                    if rz < 0.0 {
+                        Some([rx, ry])
+                    } else {
+                        None
+                    }
+                })
                 .collect();
             plot_ui.points(
                 Points::new(pts)
                     .color(dim_color(plane_color(plane)))
-                    .radius(4.0)
+                    .radius(sat_radius * 0.8)
                     .filled(true),
             );
         }
 
-        let earth_fill: PlotPoints = (0..=100)
+        let earth_pts: PlotPoints = (0..=100)
             .map(|i| {
                 let theta = 2.0 * PI * i as f64 / 100.0;
-                [
-                    EARTH_RADIUS_KM * theta.cos(),
-                    EARTH_RADIUS_KM * theta.sin(),
-                ]
+                [EARTH_RADIUS_KM * theta.cos(), EARTH_RADIUS_KM * theta.sin()]
             })
             .collect();
         plot_ui.polygon(
-            Polygon::new(earth_fill)
+            Polygon::new(earth_pts)
                 .fill_color(egui::Color32::from_rgb(30, 60, 120))
                 .stroke(egui::Stroke::new(2.0, egui::Color32::from_rgb(70, 130, 180))),
         );
+
+        let (x1, y1, _) = rotate_point(axis_len, 0.0, 0.0, rot_x, rot_y);
+        let (x2, y2, _) = rotate_point(-axis_len, 0.0, 0.0, rot_x, rot_y);
+        plot_ui.line(
+            Line::new(PlotPoints::new(vec![[x2, y2], [x1, y1]]))
+                .color(egui::Color32::from_rgb(255, 100, 100))
+                .width(1.5),
+        );
+
+        let (yp_x, yp_y, _) = rotate_point(0.0, axis_len, 0.0, rot_x, rot_y);
+        let (yn_x, yn_y, _) = rotate_point(0.0, -axis_len, 0.0, rot_x, rot_y);
+        plot_ui.line(
+            Line::new(PlotPoints::new(vec![[yn_x, yn_y], [yp_x, yp_y]]))
+                .color(egui::Color32::from_rgb(100, 100, 255))
+                .width(1.5),
+        );
+
+        let label_offset = axis_len * 1.15;
+        let (n_x, n_y, _) = rotate_point(0.0, label_offset, 0.0, rot_x, rot_y);
+        let (s_x, s_y, _) = rotate_point(0.0, -label_offset, 0.0, rot_x, rot_y);
+        let (e_x, e_y, _) = rotate_point(label_offset, 0.0, 0.0, rot_x, rot_y);
+        let (w_x, w_y, _) = rotate_point(-label_offset, 0.0, 0.0, rot_x, rot_y);
+
+        plot_ui.text(Text::new(PlotPoint::new(n_x, n_y), "N").color(egui::Color32::BLACK));
+        plot_ui.text(Text::new(PlotPoint::new(s_x, s_y), "S").color(egui::Color32::BLACK));
+        plot_ui.text(Text::new(PlotPoint::new(e_x, e_y), "E").color(egui::Color32::BLACK));
+        plot_ui.text(Text::new(PlotPoint::new(w_x, w_y), "W").color(egui::Color32::BLACK));
 
         if show_orbits {
             for plane in 0..constellation.num_planes {
@@ -345,8 +474,9 @@ fn draw_3d_view(
 
                 let mut front_segment: Vec<[f64; 2]> = Vec::new();
                 for &(x, y, z) in &orbit_pts {
-                    if z >= 0.0 {
-                        front_segment.push([x, y]);
+                    let (rx, ry, rz) = rotate_point(x, y, z, rot_x, rot_y);
+                    if rz >= 0.0 {
+                        front_segment.push([rx, ry]);
                     } else if !front_segment.is_empty() {
                         plot_ui.line(
                             Line::new(PlotPoints::new(front_segment.clone()))
@@ -366,26 +496,66 @@ fn draw_3d_view(
             }
         }
 
+        let link_color = egui::Color32::from_rgb(200, 200, 200);
+        let is_star = constellation.walker_type == WalkerType::Star;
+        for sat in positions {
+            if is_star && sat.plane == constellation.num_planes - 1 {
+                continue;
+            }
+            let next_plane = (sat.plane + 1) % constellation.num_planes;
+            if let Some(neighbor) = positions.iter().find(|s| {
+                s.plane == next_plane && s.sat_index == sat.sat_index && s.ascending == sat.ascending
+            }) {
+                let (rx1, ry1, rz1) = rotate_point(sat.x, sat.y, sat.z, rot_x, rot_y);
+                let (rx2, ry2, rz2) = rotate_point(neighbor.x, neighbor.y, neighbor.z, rot_x, rot_y);
+                if rz1 >= 0.0 && rz2 >= 0.0 {
+                    plot_ui.line(
+                        Line::new(PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
+                            .color(link_color)
+                            .width(1.0),
+                    );
+                }
+            }
+        }
+
         for plane in 0..constellation.num_planes {
             let pts: PlotPoints = positions
                 .iter()
-                .filter(|s| s.plane == plane && s.z >= 0.0)
-                .map(|s| [s.x, s.y])
+                .filter_map(|s| {
+                    if s.plane != plane {
+                        return None;
+                    }
+                    let (rx, ry, rz) = rotate_point(s.x, s.y, s.z, rot_x, rot_y);
+                    if rz >= 0.0 {
+                        Some([rx, ry])
+                    } else {
+                        None
+                    }
+                })
                 .collect();
             plot_ui.points(
                 Points::new(pts)
                     .color(plane_color(plane))
-                    .radius(5.0)
+                    .radius(sat_radius)
                     .filled(true),
             );
         }
     });
+
+    if response.response.dragged() {
+        let drag = response.response.drag_delta();
+        rot_y += drag.x as f64 * 0.01;
+        rot_x += drag.y as f64 * 0.01;
+    }
+
+    (rot_x, rot_y)
 }
 
-fn draw_ground_track(ui: &mut egui::Ui, id: &str, positions: &[SatelliteState], num_planes: usize) {
+fn draw_ground_track(ui: &mut egui::Ui, id: &str, positions: &[SatelliteState], num_planes: usize, width: f32, height: f32) {
+    let sat_radius = (width.min(height) / 80.0).max(2.0);
     let plot = Plot::new(id)
-        .width(350.0)
-        .height(150.0)
+        .width(width)
+        .height(height)
         .include_x(-180.0)
         .include_x(180.0)
         .include_y(-90.0)
@@ -402,7 +572,7 @@ fn draw_ground_track(ui: &mut egui::Ui, id: &str, positions: &[SatelliteState], 
             plot_ui.points(
                 Points::new(pts)
                     .color(plane_color(plane))
-                    .radius(4.0)
+                    .radius(sat_radius)
                     .filled(true),
             );
         }
@@ -418,6 +588,121 @@ fn draw_ground_track(ui: &mut egui::Ui, id: &str, positions: &[SatelliteState], 
                 .width(0.5),
         );
     });
+}
+
+fn draw_torus(
+    ui: &mut egui::Ui,
+    id: &str,
+    constellation: &WalkerConstellation,
+    positions: &[SatelliteState],
+    time: f64,
+    mut rot_x: f64,
+    mut rot_y: f64,
+    width: f32,
+    height: f32,
+) -> (f64, f64) {
+    let major_radius = 2.0;
+    let minor_radius = 0.8;
+    let sat_radius = (width.min(height) / 80.0).max(2.0);
+    let sats_per_plane = constellation.total_sats / constellation.num_planes;
+    let orbit_radius = EARTH_RADIUS_KM + constellation.altitude_km;
+    let period = 2.0 * PI * (orbit_radius.powi(3) / 398600.4418_f64).sqrt();
+    let mean_motion = 2.0 * PI / period;
+
+    let torus_pos = |plane: usize, sat_idx: usize| -> (f64, f64, f64) {
+        let angle = 2.0 * PI * plane as f64 / constellation.num_planes as f64;
+        let sat_spacing = 2.0 * PI * sat_idx as f64 / sats_per_plane as f64;
+        let phase = sat_spacing + mean_motion * time;
+        let r = major_radius + minor_radius * phase.cos();
+        let y = minor_radius * phase.sin();
+        let x = r * angle.cos();
+        let z = r * angle.sin();
+        rotate_point(x, y, z, rot_x, rot_y)
+    };
+
+    let margin = (major_radius + minor_radius) * 1.3;
+    let plot = Plot::new(id)
+        .data_aspect(1.0)
+        .width(width)
+        .height(height)
+        .show_axes(false)
+        .show_grid(false)
+        .allow_drag(false)
+        .allow_zoom(false)
+        .allow_scroll(false)
+        .allow_boxed_zoom(false)
+        .include_x(-margin)
+        .include_x(margin)
+        .include_y(-margin)
+        .include_y(margin);
+
+    let response = plot.show(ui, |plot_ui| {
+        let is_star = constellation.walker_type == WalkerType::Star;
+
+        for plane in 0..constellation.num_planes {
+            let angle = 2.0 * PI * plane as f64 / constellation.num_planes as f64;
+            let orbit: PlotPoints = (0..=50)
+                .map(|i| {
+                    let phase = 2.0 * PI * i as f64 / 50.0;
+                    let r = major_radius + minor_radius * phase.cos();
+                    let y = minor_radius * phase.sin();
+                    let x = r * angle.cos();
+                    let z = r * angle.sin();
+                    let (rx, ry, _) = rotate_point(x, y, z, rot_x, rot_y);
+                    [rx, ry]
+                })
+                .collect();
+            plot_ui.line(
+                Line::new(orbit)
+                    .color(plane_color(plane))
+                    .width(1.0),
+            );
+        }
+
+        let link_color = egui::Color32::from_rgb(150, 150, 150);
+        for sat in positions {
+            if is_star && sat.plane == constellation.num_planes - 1 {
+                continue;
+            }
+            let next_plane = (sat.plane + 1) % constellation.num_planes;
+            if let Some(neighbor) = positions.iter().find(|s| {
+                s.plane == next_plane && s.sat_index == sat.sat_index && s.ascending == sat.ascending
+            }) {
+                let (x1, y1, _) = torus_pos(sat.plane, sat.sat_index);
+                let (x2, y2, _) = torus_pos(neighbor.plane, neighbor.sat_index);
+                plot_ui.line(
+                    Line::new(PlotPoints::new(vec![[x1, y1], [x2, y2]]))
+                        .color(link_color)
+                        .width(1.0),
+                );
+            }
+        }
+
+        for plane in 0..constellation.num_planes {
+            let pts: PlotPoints = positions
+                .iter()
+                .filter(|s| s.plane == plane)
+                .map(|s| {
+                    let (x, y, _) = torus_pos(s.plane, s.sat_index);
+                    [x, y]
+                })
+                .collect();
+            plot_ui.points(
+                Points::new(pts)
+                    .color(plane_color(plane))
+                    .radius(sat_radius)
+                    .filled(true),
+            );
+        }
+    });
+
+    if response.response.dragged() {
+        let drag = response.response.drag_delta();
+        rot_y += drag.x as f64 * 0.01;
+        rot_x += drag.y as f64 * 0.01;
+    }
+
+    (rot_x, rot_y)
 }
 
 fn plane_color(plane: usize) -> egui::Color32 {
@@ -445,7 +730,7 @@ fn dim_color(color: egui::Color32) -> egui::Color32 {
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1000.0, 600.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]),
         ..Default::default()
     };
 
