@@ -723,7 +723,7 @@ fn draw_3d_view(
         }
     });
 
-    if response.response.dragged() {
+    if response.response.dragged() && !response.response.drag_started() {
         let drag = response.response.drag_delta();
         let delta_rot = rotation_from_drag(drag.x as f64 * 0.01, drag.y as f64 * 0.01);
         rotation = rotation * delta_rot;
@@ -879,7 +879,7 @@ fn draw_torus(
         }
     });
 
-    if response.response.dragged() {
+    if response.response.dragged() && !response.response.drag_started() {
         let drag = response.response.drag_delta();
         let delta_rot = rotation_from_drag(drag.x as f64 * 0.01, drag.y as f64 * 0.01);
         rotation = rotation * delta_rot;
