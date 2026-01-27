@@ -200,11 +200,58 @@ fn rotation_from_drag(dx: f64, dy: f64) -> Matrix3<f64> {
     rot_x * rot_y
 }
 
-struct App {
+#[derive(Clone, Copy, PartialEq)]
+enum Preset {
+    None,
+    Starlink,
+    OneWeb,
+    Iridium,
+    Kuiper,
+    Iris2,
+    Telesat,
+}
+
+struct TabConfig {
+    name: String,
     sats_per_plane: usize,
     num_planes: usize,
     altitude_km: f64,
     inclination: f64,
+    walker_type: WalkerType,
+    preset: Preset,
+}
+
+impl TabConfig {
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            sats_per_plane: 11,
+            num_planes: 6,
+            altitude_km: 780.0,
+            inclination: 86.4,
+            walker_type: WalkerType::Star,
+            preset: Preset::Iridium,
+        }
+    }
+
+    fn total_sats(&self) -> usize {
+        self.sats_per_plane * self.num_planes
+    }
+
+    fn constellation(&self) -> WalkerConstellation {
+        WalkerConstellation {
+            walker_type: self.walker_type,
+            total_sats: self.total_sats(),
+            num_planes: self.num_planes,
+            altitude_km: self.altitude_km,
+            inclination_deg: self.inclination,
+        }
+    }
+}
+
+struct App {
+    tabs: Vec<TabConfig>,
+    tab_counter: usize,
     time: f64,
     speed: f64,
     animate: bool,
@@ -213,16 +260,15 @@ struct App {
     show_ground_track: bool,
     show_torus: bool,
     hide_behind_earth: bool,
-    walker_type: WalkerType,
+    zoom: f64,
+    sat_radius: f32,
     rotation: Matrix3<f64>,
     torus_rotation: Matrix3<f64>,
     earth_texture: Arc<EarthTexture>,
     earth_image_handle: Option<egui::TextureHandle>,
     last_rotation: Option<Matrix3<f64>>,
-    last_resolution: usize,
-    zoom: f64,
     earth_resolution: usize,
-    sat_radius: f32,
+    last_resolution: usize,
 }
 
 impl Default for App {
@@ -233,10 +279,8 @@ impl Default for App {
             0.0, 1.0, 0.0,
         );
         Self {
-            sats_per_plane: 11,
-            num_planes: 6,
-            altitude_km: 200.0,
-            inclination: 53.0,
+            tabs: vec![TabConfig::new("Config 1".to_string())],
+            tab_counter: 1,
             time: 0.0,
             speed: 1.0,
             animate: true,
@@ -245,43 +289,23 @@ impl Default for App {
             show_ground_track: false,
             show_torus: false,
             hide_behind_earth: true,
-            walker_type: WalkerType::Delta,
+            zoom: 1.0,
+            sat_radius: 5.0,
             rotation: Matrix3::identity(),
             torus_rotation: torus_initial,
             earth_texture: Arc::new(EarthTexture::load()),
             earth_image_handle: None,
             last_rotation: None,
-            last_resolution: 0,
-            zoom: 1.0,
             earth_resolution: 512,
-            sat_radius: 5.0,
+            last_resolution: 0,
         }
     }
 }
 
 impl App {
-    fn total_sats(&self) -> usize {
-        self.sats_per_plane * self.num_planes
-    }
-
-    fn delta_constellation(&self) -> WalkerConstellation {
-        WalkerConstellation {
-            walker_type: WalkerType::Delta,
-            total_sats: self.total_sats(),
-            num_planes: self.num_planes,
-            altitude_km: self.altitude_km,
-            inclination_deg: self.inclination,
-        }
-    }
-
-    fn star_constellation(&self) -> WalkerConstellation {
-        WalkerConstellation {
-            walker_type: WalkerType::Star,
-            total_sats: self.total_sats(),
-            num_planes: self.num_planes,
-            altitude_km: self.altitude_km,
-            inclination_deg: self.inclination,
-        }
+    fn add_tab(&mut self) {
+        self.tab_counter += 1;
+        self.tabs.push(TabConfig::new(format!("Config {}", self.tab_counter)));
     }
 }
 
@@ -305,61 +329,18 @@ impl eframe::App for App {
             self.last_resolution = self.earth_resolution;
         }
 
-        let delta = self.delta_constellation();
-        let star = self.star_constellation();
-        let delta_positions = delta.satellite_positions(self.time);
-        let star_positions = star.satellite_positions(self.time);
-
-        egui::SidePanel::left("controls").show(ctx, |ui| {
-            ui.heading("Walker Constellations");
-
-            ui.add_space(10.0);
-            ui.label("Configuration");
-            ui.separator();
-
-            let mut sats = self.sats_per_plane as i32;
-            let mut planes = self.num_planes as i32;
-
-            ui.horizontal(|ui| {
-                ui.label("Sats per orbit:");
-                ui.add(egui::DragValue::new(&mut sats).range(1..=50));
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Orbital planes:");
-                ui.add(egui::DragValue::new(&mut planes).range(1..=20));
-            });
-
-            if sats > 0 && planes > 0 {
-                self.sats_per_plane = sats as usize;
-                self.num_planes = planes as usize;
-            }
-
-            ui.horizontal(|ui| {
-                ui.label("Altitude (km):");
-                ui.add(egui::DragValue::new(&mut self.altitude_km).range(200.0..=36000.0));
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Inclination (°):");
-                ui.add(egui::DragValue::new(&mut self.inclination).range(0.0..=180.0));
-            });
-
-            ui.add_space(10.0);
+        egui::SidePanel::left("global_controls").show(ctx, |ui| {
+            ui.heading("Display Settings");
             ui.separator();
 
             ui.checkbox(&mut self.animate, "Animate");
             ui.checkbox(&mut self.show_orbits, "Show orbits");
             ui.checkbox(&mut self.show_links, "Show links");
-            ui.checkbox(&mut self.show_ground_track, "Show ground track");
             ui.checkbox(&mut self.show_torus, "Show torus");
+            ui.checkbox(&mut self.show_ground_track, "Show ground");
             ui.checkbox(&mut self.hide_behind_earth, "Hide behind Earth");
 
-            ui.horizontal(|ui| {
-                ui.label("Type:");
-                ui.selectable_value(&mut self.walker_type, WalkerType::Delta, "Delta");
-                ui.selectable_value(&mut self.walker_type, WalkerType::Star, "Star");
-            });
+            ui.add_space(10.0);
 
             ui.horizontal(|ui| {
                 ui.label("Speed:");
@@ -372,31 +353,11 @@ impl eframe::App for App {
             });
 
             ui.horizontal(|ui| {
-                ui.label("Earth res:");
-                let mut res = self.earth_resolution as i32;
-                if ui.add(egui::Slider::new(&mut res, 64..=512).step_by(64.0)).changed() {
-                    self.earth_resolution = res as usize;
-                }
-            });
-
-            ui.horizontal(|ui| {
                 ui.label("Sat size:");
                 ui.add(egui::Slider::new(&mut self.sat_radius, 1.0..=15.0));
             });
 
-            if ui.button("Reset time").clicked() {
-                self.time = 0.0;
-            }
-
-            if ui.button("Reset view").clicked() {
-                self.rotation = Matrix3::identity();
-                self.torus_rotation = Matrix3::new(
-                    1.0, 0.0, 0.0,
-                    0.0, 0.0, -1.0,
-                    0.0, 1.0, 0.0,
-                );
-                self.zoom = 1.0;
-            }
+            ui.add_space(10.0);
 
             ui.horizontal(|ui| {
                 if ui.button("N/S view").clicked() {
@@ -411,65 +372,21 @@ impl eframe::App for App {
                 }
             });
 
-            ui.add_space(10.0);
-            ui.separator();
-            ui.label("Presets");
+            if ui.button("Reset view").clicked() {
+                self.rotation = Matrix3::identity();
+                self.torus_rotation = Matrix3::new(
+                    1.0, 0.0, 0.0,
+                    0.0, 0.0, -1.0,
+                    0.0, 1.0, 0.0,
+                );
+                self.zoom = 1.0;
+            }
 
-            ui.horizontal(|ui| {
-                if ui.button("Starlink").clicked() {
-                    self.sats_per_plane = 22;
-                    self.num_planes = 72;
-                    self.altitude_km = 550.0;
-                    self.inclination = 53.0;
-                    self.walker_type = WalkerType::Delta;
-                }
-                if ui.button("OneWeb").clicked() {
-                    self.sats_per_plane = 49;
-                    self.num_planes = 36;
-                    self.altitude_km = 1200.0;
-                    self.inclination = 87.9;
-                    self.walker_type = WalkerType::Delta;
-                }
-            });
-
-            ui.horizontal(|ui| {
-                if ui.button("Iridium").clicked() {
-                    self.sats_per_plane = 11;
-                    self.num_planes = 6;
-                    self.altitude_km = 780.0;
-                    self.inclination = 86.4;
-                    self.walker_type = WalkerType::Star;
-                }
-                if ui.button("Kuiper").clicked() {
-                    self.sats_per_plane = 28;
-                    self.num_planes = 28;
-                    self.altitude_km = 630.0;
-                    self.inclination = 51.9;
-                    self.walker_type = WalkerType::Delta;
-                }
-            });
-
-            ui.horizontal(|ui| {
-                if ui.button("Iris² (EU)").clicked() {
-                    self.sats_per_plane = 29;
-                    self.num_planes = 10;
-                    self.altitude_km = 500.0;
-                    self.inclination = 55.0;
-                    self.walker_type = WalkerType::Delta;
-                }
-                if ui.button("Telesat").clicked() {
-                    self.sats_per_plane = 13;
-                    self.num_planes = 6;
-                    self.altitude_km = 1015.0;
-                    self.inclination = 98.98;
-                    self.walker_type = WalkerType::Star;
-                }
-            });
+            if ui.button("Reset time").clicked() {
+                self.time = 0.0;
+            }
 
             ui.add_space(20.0);
-            ui.label(format!("Total: {} satellites", self.total_sats()));
-
-            ui.add_space(10.0);
             ui.separator();
             ui.label("Delta: RAAN spread 360°");
             ui.label("Star: RAAN spread 180°");
@@ -477,74 +394,217 @@ impl eframe::App for App {
             ui.label("Drag 3D views to rotate");
         });
 
+        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading("LEO Viz");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("+ Add Config").clicked() {
+                        self.add_tab();
+                    }
+                });
+            });
+        });
+
         egui::CentralPanel::default().show(ctx, |ui| {
+            let time = self.time;
             let show_orbits = self.show_orbits;
             let show_links = self.show_links;
-            let show_ground = self.show_ground_track;
             let show_torus = self.show_torus;
+            let show_ground = self.show_ground_track;
+            let hide_behind_earth = self.hide_behind_earth;
+            let zoom = self.zoom;
+            let sat_radius = self.sat_radius;
+            let earth_handle = self.earth_image_handle.clone();
 
-            let (constellation, positions) = match self.walker_type {
-                WalkerType::Delta => (&delta, &delta_positions),
-                WalkerType::Star => (&star, &star_positions),
-            };
+            let mut new_rotation = self.rotation;
+            let mut new_torus_rotation = self.torus_rotation;
 
             let available_width = ui.available_width();
             let available_height = ui.available_height();
+            let num_tabs = self.tabs.len().max(1) as f32;
+            let separator_space = (num_tabs - 1.0).max(0.0) * 10.0;
 
-            let (top_height, ground_height) = if show_ground {
-                let h = available_height - 60.0;
-                (h * 0.65, h * 0.35)
-            } else {
-                (available_height - 40.0, 0.0)
-            };
+            let controls_height = 120.0;
+            let height_ratio = 0.8
+                + if show_torus { 0.5 } else { 0.0 }
+                + if show_ground { 0.35 } else { 0.0 };
+            let max_width_from_height = (available_height - controls_height) / height_ratio;
 
-            let plot_width = if show_torus {
-                (available_width - 30.0) / 2.0
-            } else {
-                available_width - 20.0
-            };
+            let width_based = (available_width - separator_space) / num_tabs;
+            let panel_width = width_based.min(max_width_from_height).max(200.0);
 
-            let mut rotation = self.rotation;
-            let mut torus_rotation = self.torus_rotation;
-
-            let earth_handle = self.earth_image_handle.clone();
-
-            let title = match self.walker_type {
-                WalkerType::Delta => "Walker Delta",
-                WalkerType::Star => "Walker Star",
-            };
-            ui.heading(title);
+            let mut tab_to_remove: Option<usize> = None;
 
             ui.horizontal(|ui| {
-                rotation = draw_3d_view(
-                    ui,
-                    "earth_3d",
-                    constellation,
-                    positions,
-                    show_orbits,
-                    rotation,
-                    plot_width,
-                    top_height,
-                    earth_handle.as_ref(),
-                    self.zoom,
-                    self.sat_radius,
-                    show_links,
-                    self.hide_behind_earth,
-                );
+                for (idx, tab) in self.tabs.iter_mut().enumerate() {
+                    ui.vertical(|ui| {
+                        ui.set_min_width(panel_width);
+                        ui.set_max_width(panel_width);
 
-                if show_torus {
-                    ui.add_space(10.0);
-                    torus_rotation = draw_torus(ui, "torus", constellation, positions, self.time, torus_rotation, plot_width, top_height, self.sat_radius, show_links);
+                            ui.horizontal(|ui| {
+                                ui.strong(&tab.name);
+                                if ui.small_button("X").clicked() {
+                                    tab_to_remove = Some(idx);
+                                }
+                            });
+
+                            ui.horizontal(|ui| {
+                                let mut sats = tab.sats_per_plane as i32;
+                                let mut planes = tab.num_planes as i32;
+                                ui.label("Sats:");
+                                let sats_resp = ui.add(egui::DragValue::new(&mut sats).range(1..=100));
+                                ui.label("Orbits:");
+                                let planes_resp = ui.add(egui::DragValue::new(&mut planes).range(1..=100));
+                                if sats > 0 && planes > 0 {
+                                    tab.sats_per_plane = sats as usize;
+                                    tab.num_planes = planes as usize;
+                                }
+                                if sats_resp.changed() || planes_resp.changed() {
+                                    tab.preset = Preset::None;
+                                }
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Alt:");
+                                let alt_resp = ui.add(egui::DragValue::new(&mut tab.altitude_km).range(200.0..=36000.0).suffix(" km"));
+                                ui.label("Inc:");
+                                let inc_resp = ui.add(egui::DragValue::new(&mut tab.inclination).range(0.0..=180.0).suffix("°"));
+                                if alt_resp.changed() || inc_resp.changed() {
+                                    tab.preset = Preset::None;
+                                }
+                            });
+
+                            ui.horizontal(|ui| {
+                                let old_type = tab.walker_type;
+                                ui.selectable_value(&mut tab.walker_type, WalkerType::Delta, "Delta");
+                                ui.selectable_value(&mut tab.walker_type, WalkerType::Star, "Star");
+                                ui.label(format!("({} sats)", tab.total_sats()));
+                                if tab.walker_type != old_type {
+                                    tab.preset = Preset::None;
+                                }
+                            });
+
+                            ui.label("Presets:");
+                            ui.horizontal(|ui| {
+                                // https://en.wikipedia.org/wiki/Starlink
+                                if ui.selectable_label(tab.preset == Preset::Starlink, "Starlink").clicked() {
+                                    tab.sats_per_plane = 22; tab.num_planes = 72;
+                                    tab.altitude_km = 550.0; tab.inclination = 53.0;
+                                    tab.walker_type = WalkerType::Delta;
+                                    tab.preset = Preset::Starlink;
+                                }
+                                // https://www.eoportal.org/satellite-missions/oneweb
+                                if ui.selectable_label(tab.preset == Preset::OneWeb, "OneWeb").clicked() {
+                                    tab.sats_per_plane = 54; tab.num_planes = 12;
+                                    tab.altitude_km = 1200.0; tab.inclination = 87.9;
+                                    tab.walker_type = WalkerType::Star;
+                                    tab.preset = Preset::OneWeb;
+                                }
+                                // https://en.wikipedia.org/wiki/Iridium_satellite_constellation
+                                if ui.selectable_label(tab.preset == Preset::Iridium, "Iridium").clicked() {
+                                    tab.sats_per_plane = 11; tab.num_planes = 6;
+                                    tab.altitude_km = 780.0; tab.inclination = 86.4;
+                                    tab.walker_type = WalkerType::Star;
+                                    tab.preset = Preset::Iridium;
+                                }
+                            });
+
+                            ui.horizontal(|ui| {
+                                // https://www.eoportal.org/satellite-missions/projectkuiper
+                                if ui.selectable_label(tab.preset == Preset::Kuiper, "Kuiper").clicked() {
+                                    tab.sats_per_plane = 34; tab.num_planes = 34;
+                                    tab.altitude_km = 630.0; tab.inclination = 51.9;
+                                    tab.walker_type = WalkerType::Delta;
+                                    tab.preset = Preset::Kuiper;
+                                }
+                                // https://en.wikipedia.org/wiki/IRIS%C2%B2
+                                if ui.selectable_label(tab.preset == Preset::Iris2, "Iris²").clicked() {
+                                    tab.sats_per_plane = 22; tab.num_planes = 12;
+                                    tab.altitude_km = 1200.0; tab.inclination = 87.0;
+                                    tab.walker_type = WalkerType::Star;
+                                    tab.preset = Preset::Iris2;
+                                }
+                                // https://www.eoportal.org/satellite-missions/telesat-lightspeed
+                                if ui.selectable_label(tab.preset == Preset::Telesat, "Telesat").clicked() {
+                                    tab.sats_per_plane = 13; tab.num_planes = 6;
+                                    tab.altitude_km = 1015.0; tab.inclination = 98.98;
+                                    tab.walker_type = WalkerType::Star;
+                                    tab.preset = Preset::Telesat;
+                                }
+                            });
+
+                            ui.separator();
+
+                            let constellation = tab.constellation();
+                            let positions = constellation.satellite_positions(time);
+
+                            let viz_width = panel_width - 10.0;
+                            let viz_height = viz_width * 0.8;
+
+                            let rot = draw_3d_view(
+                                ui,
+                                &format!("earth_3d_{}", idx),
+                                &constellation,
+                                &positions,
+                                show_orbits,
+                                new_rotation,
+                                viz_width,
+                                viz_height,
+                                earth_handle.as_ref(),
+                                zoom,
+                                sat_radius,
+                                show_links,
+                                hide_behind_earth,
+                            );
+                            if rot != new_rotation {
+                                new_rotation = rot;
+                            }
+
+                            if show_torus {
+                                ui.add_space(5.0);
+                                let trot = draw_torus(
+                                    ui,
+                                    &format!("torus_{}", idx),
+                                    &constellation,
+                                    &positions,
+                                    time,
+                                    new_torus_rotation,
+                                    viz_width,
+                                    viz_width * 0.5,
+                                    sat_radius,
+                                    show_links,
+                                );
+                                if trot != new_torus_rotation {
+                                    new_torus_rotation = trot;
+                                }
+                            }
+
+                            if show_ground {
+                                ui.add_space(5.0);
+                                draw_ground_track(
+                                    ui,
+                                    &format!("ground_{}", idx),
+                                    &positions,
+                                    constellation.num_planes,
+                                    viz_width,
+                                    viz_width * 0.35,
+                                    sat_radius,
+                                );
+                            }
+                        });
+
+                    ui.separator();
                 }
             });
 
-            if show_ground {
-                ui.add_space(5.0);
-                draw_ground_track(ui, "ground", positions, constellation.num_planes, available_width - 20.0, ground_height, self.sat_radius);
+            if let Some(idx) = tab_to_remove {
+                if self.tabs.len() > 1 {
+                    self.tabs.remove(idx);
+                }
             }
 
-            self.rotation = rotation;
-            self.torus_rotation = torus_rotation;
+            self.rotation = new_rotation;
+            self.torus_rotation = new_torus_rotation;
         });
     }
 }
@@ -565,8 +625,9 @@ fn draw_3d_view(
     hide_behind_earth: bool,
 ) -> Matrix3<f64> {
     let orbit_radius = EARTH_RADIUS_KM + constellation.altitude_km;
-    let axis_len = EARTH_RADIUS_KM * 1.5;
-    let margin = (orbit_radius.max(axis_len) * 1.25) / zoom;
+    let axis_len = EARTH_RADIUS_KM * 1.1;
+    let label_offset = axis_len * 1.15;
+    let margin = (orbit_radius.max(label_offset) * 1.08) / zoom;
 
     let plot = Plot::new(id)
         .data_aspect(1.0)
@@ -1049,7 +1110,7 @@ fn dim_color(color: egui::Color32) -> egui::Color32 {
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1600.0, 1000.0]),
         ..Default::default()
     };
 
