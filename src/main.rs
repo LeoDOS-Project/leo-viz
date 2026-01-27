@@ -105,30 +105,35 @@ impl WalkerConstellation {
     }
 
     fn satellite_positions(&self, time: f64) -> Vec<SatelliteState> {
-        let mut positions = Vec::new();
+        let mut positions = Vec::with_capacity(self.total_sats);
         let sats_per_plane = self.sats_per_plane();
         let orbit_radius = EARTH_RADIUS_KM + self.altitude_km;
         let period = 2.0 * PI * (orbit_radius.powi(3) / 398600.4418_f64).sqrt();
         let mean_motion = 2.0 * PI / period;
         let raan_spread = self.raan_spread();
+        let inc = self.inclination_deg.to_radians();
+        let inc_cos = inc.cos();
+        let inc_sin = inc.sin();
+        let raan_step = raan_spread / self.num_planes as f64;
+        let sat_step = 2.0 * PI / sats_per_plane as f64;
+        let is_star = self.walker_type == WalkerType::Star;
 
         for plane in 0..self.num_planes {
-            let raan = (raan_spread / self.num_planes as f64) * plane as f64;
+            let raan = raan_step * plane as f64;
+            let raan_cos = raan.cos();
+            let raan_sin = raan.sin();
 
             for sat in 0..sats_per_plane {
-                let sat_spacing = (2.0 * PI / sats_per_plane as f64) * sat as f64;
-                let true_anomaly = sat_spacing + mean_motion * time;
+                let true_anomaly = sat_step * sat as f64 + mean_motion * time;
                 let normalized_anomaly = true_anomaly.rem_euclid(2.0 * PI);
                 let ascending = normalized_anomaly < PI;
-
-                let inc = self.inclination_deg.to_radians();
 
                 let x_orbital = orbit_radius * true_anomaly.cos();
                 let y_orbital = orbit_radius * true_anomaly.sin();
 
-                let x = x_orbital * raan.cos() - y_orbital * inc.cos() * raan.sin();
-                let z = x_orbital * raan.sin() + y_orbital * inc.cos() * raan.cos();
-                let y = y_orbital * inc.sin();
+                let x = x_orbital * raan_cos - y_orbital * inc_cos * raan_sin;
+                let z = x_orbital * raan_sin + y_orbital * inc_cos * raan_cos;
+                let y = y_orbital * inc_sin;
 
                 let lat = (y / orbit_radius).asin().to_degrees();
                 let lon = z.atan2(x).to_degrees();
@@ -142,17 +147,41 @@ impl WalkerConstellation {
                     lat,
                     lon,
                     ascending,
+                    neighbor_idx: None,
                 });
             }
         }
+
+        for i in 0..positions.len() {
+            let sat = &positions[i];
+            if is_star && sat.plane == self.num_planes - 1 {
+                continue;
+            }
+            let next_plane = (sat.plane + 1) % self.num_planes;
+            let next_plane_start = next_plane * sats_per_plane;
+            let next_plane_end = next_plane_start + sats_per_plane;
+            let target_idx = sat.sat_index;
+            let target_ascending = sat.ascending;
+            for j in next_plane_start..next_plane_end {
+                let other = &positions[j];
+                if other.sat_index == target_idx && other.ascending == target_ascending {
+                    positions[i].neighbor_idx = Some(j);
+                    break;
+                }
+            }
+        }
+
         positions
     }
 
     fn orbit_points_3d(&self, plane: usize) -> Vec<(f64, f64, f64)> {
         let orbit_radius = EARTH_RADIUS_KM + self.altitude_km;
-        let raan_spread = self.raan_spread();
-        let raan = (raan_spread / self.num_planes as f64) * plane as f64;
+        let raan = (self.raan_spread() / self.num_planes as f64) * plane as f64;
         let inc = self.inclination_deg.to_radians();
+        let inc_cos = inc.cos();
+        let inc_sin = inc.sin();
+        let raan_cos = raan.cos();
+        let raan_sin = raan.sin();
 
         (0..=200)
             .map(|i| {
@@ -160,9 +189,9 @@ impl WalkerConstellation {
                 let x_orbital = orbit_radius * theta.cos();
                 let y_orbital = orbit_radius * theta.sin();
 
-                let x = x_orbital * raan.cos() - y_orbital * inc.cos() * raan.sin();
-                let z = x_orbital * raan.sin() + y_orbital * inc.cos() * raan.cos();
-                let y = y_orbital * inc.sin();
+                let x = x_orbital * raan_cos - y_orbital * inc_cos * raan_sin;
+                let z = x_orbital * raan_sin + y_orbital * inc_cos * raan_cos;
+                let y = y_orbital * inc_sin;
 
                 (x, y, z)
             })
@@ -179,6 +208,7 @@ struct SatelliteState {
     lat: f64,
     lon: f64,
     ascending: bool,
+    neighbor_idx: Option<usize>,
 }
 
 fn rotate_point_matrix(x: f64, y: f64, z: f64, rot: &Matrix3<f64>) -> (f64, f64, f64) {
@@ -742,11 +772,10 @@ fn draw_3d_view(
                             behind_segment.push([rx, ry]);
                         } else if !behind_segment.is_empty() {
                             plot_ui.line(
-                                Line::new(PlotPoints::new(behind_segment.clone()))
+                                Line::new(PlotPoints::new(std::mem::take(&mut behind_segment)))
                                     .color(dim_color(color))
                                     .width(1.0),
                             );
-                            behind_segment.clear();
                         }
                     }
                     if !behind_segment.is_empty() {
@@ -864,11 +893,10 @@ fn draw_3d_view(
                             front_segment.push([rx, ry]);
                         } else if !front_segment.is_empty() {
                             plot_ui.line(
-                                Line::new(PlotPoints::new(front_segment.clone()))
+                                Line::new(PlotPoints::new(std::mem::take(&mut front_segment)))
                                     .color(color)
                                     .width(1.5),
                             );
-                            front_segment.clear();
                         }
                     }
                     if !front_segment.is_empty() {
@@ -885,16 +913,10 @@ fn draw_3d_view(
         if show_links {
             let link_color = egui::Color32::from_rgb(200, 200, 200);
             let link_dim = egui::Color32::from_rgba_unmultiplied(80, 80, 100, 100);
-            for (constellation, positions, _) in constellations {
-                let is_star = constellation.walker_type == WalkerType::Star;
+            for (_, positions, _) in constellations {
                 for sat in positions {
-                    if is_star && sat.plane == constellation.num_planes - 1 {
-                        continue;
-                    }
-                    let next_plane = (sat.plane + 1) % constellation.num_planes;
-                    if let Some(neighbor) = positions.iter().find(|s| {
-                        s.plane == next_plane && s.sat_index == sat.sat_index && s.ascending == sat.ascending
-                    }) {
+                    if let Some(neighbor_idx) = sat.neighbor_idx {
+                        let neighbor = &positions[neighbor_idx];
                         let (rx1, ry1, rz1) = rotate_point_matrix(sat.x, sat.y, sat.z, &rotation);
                         let (rx2, ry2, rz2) = rotate_point_matrix(neighbor.x, neighbor.y, neighbor.z, &rotation);
                         let visible1 = rz1 >= 0.0 || (rx1 * rx1 + ry1 * ry1) >= earth_r_sq;
@@ -1071,7 +1093,6 @@ fn draw_torus(
             let orbit_radius = EARTH_RADIUS_KM + constellation.altitude_km;
             let period = 2.0 * PI * (orbit_radius.powi(3) / 398600.4418_f64).sqrt();
             let mean_motion = 2.0 * PI / period;
-            let is_star = constellation.walker_type == WalkerType::Star;
 
             let torus_pos = |plane: usize, sat_idx: usize| -> (f64, f64, f64) {
                 let angle = 2.0 * PI * plane as f64 / constellation.num_planes as f64;
@@ -1099,21 +1120,19 @@ fn draw_torus(
                         front_segment.push([rx, ry]);
                         if !back_segment.is_empty() {
                             plot_ui.line(
-                                Line::new(PlotPoints::new(back_segment.clone()))
+                                Line::new(PlotPoints::new(std::mem::take(&mut back_segment)))
                                     .color(dim_col)
                                     .width(1.0),
                             );
-                            back_segment.clear();
                         }
                     } else {
                         back_segment.push([rx, ry]);
                         if !front_segment.is_empty() {
                             plot_ui.line(
-                                Line::new(PlotPoints::new(front_segment.clone()))
+                                Line::new(PlotPoints::new(std::mem::take(&mut front_segment)))
                                     .color(color)
                                     .width(1.5),
                             );
-                            front_segment.clear();
                         }
                     }
                 }
@@ -1129,13 +1148,8 @@ fn draw_torus(
                 let link_color = egui::Color32::from_rgb(150, 150, 150);
                 let link_dim = egui::Color32::from_rgba_unmultiplied(150, 150, 150, 140);
                 for sat in positions {
-                    if is_star && sat.plane == constellation.num_planes - 1 {
-                        continue;
-                    }
-                    let next_plane = (sat.plane + 1) % constellation.num_planes;
-                    if let Some(neighbor) = positions.iter().find(|s| {
-                        s.plane == next_plane && s.sat_index == sat.sat_index && s.ascending == sat.ascending
-                    }) {
+                    if let Some(neighbor_idx) = sat.neighbor_idx {
+                        let neighbor = &positions[neighbor_idx];
                         let angle1 = 2.0 * PI * sat.plane as f64 / constellation.num_planes as f64;
                         let angle2 = 2.0 * PI * neighbor.plane as f64 / constellation.num_planes as f64;
                         let phase1 = 2.0 * PI * sat.sat_index as f64 / sats_per_plane as f64 + mean_motion * time;
