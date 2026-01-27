@@ -1252,17 +1252,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "example-rust-egui"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui",
- "egui_plot",
- "image",
- "nalgebra",
-]
-
-[[package]]
 name = "exr"
 version = "1.74.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3672,6 +3661,17 @@ checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
 dependencies = [
  "same-file",
  "winapi-util",
+]
+
+[[package]]
+name = "walker-delta"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "egui_plot",
+ "image",
+ "nalgebra",
 ]
 
 [[package]]
