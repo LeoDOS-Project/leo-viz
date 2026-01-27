@@ -391,6 +391,19 @@ impl eframe::App for App {
                 self.zoom = 1.0;
             }
 
+            ui.horizontal(|ui| {
+                if ui.button("N/S view").clicked() {
+                    self.rotation = Matrix3::identity();
+                }
+                if ui.button("E/W view").clicked() {
+                    self.rotation = Matrix3::new(
+                        1.0, 0.0, 0.0,
+                        0.0, 0.0, 1.0,
+                        0.0, -1.0, 0.0,
+                    );
+                }
+            });
+
             ui.add_space(20.0);
             ui.label(format!("Total: {} satellites", self.total_sats()));
 
