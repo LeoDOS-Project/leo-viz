@@ -1,0 +1,10 @@
+[package]
+name = "example-rust-egui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = "0.29"
+egui = "0.29"
+egui_plot = "0.29"
+nalgebra = "0.33"
