@@ -522,13 +522,14 @@ fn draw_3d_view(
         .allow_drag(false)
         .allow_zoom(false)
         .allow_scroll(false)
-        .allow_boxed_zoom(false)
-        .include_x(-margin)
-        .include_x(margin)
-        .include_y(-margin)
-        .include_y(margin);
+        .allow_boxed_zoom(false);
 
     let response = plot.show(ui, |plot_ui| {
+        plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
+            [-margin, -margin],
+            [margin, margin],
+        ));
+
         if show_orbits {
             for plane in 0..constellation.num_planes {
                 let orbit_pts = constellation.orbit_points_3d(plane);
@@ -721,7 +722,7 @@ fn draw_3d_view(
     if response.response.dragged() {
         let drag = response.response.drag_delta();
         let delta_rot = rotation_from_drag(drag.x as f64 * 0.01, drag.y as f64 * 0.01);
-        rotation = delta_rot * rotation;
+        rotation = rotation * delta_rot;
     }
 
     rotation
@@ -805,13 +806,14 @@ fn draw_torus(
         .allow_drag(false)
         .allow_zoom(false)
         .allow_scroll(false)
-        .allow_boxed_zoom(false)
-        .include_x(-margin)
-        .include_x(margin)
-        .include_y(-margin)
-        .include_y(margin);
+        .allow_boxed_zoom(false);
 
     let response = plot.show(ui, |plot_ui| {
+        plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
+            [-margin, -margin],
+            [margin, margin],
+        ));
+
         let is_star = constellation.walker_type == WalkerType::Star;
 
         for plane in 0..constellation.num_planes {
@@ -874,7 +876,7 @@ fn draw_torus(
     if response.response.dragged() {
         let drag = response.response.drag_delta();
         let delta_rot = rotation_from_drag(drag.x as f64 * 0.01, drag.y as f64 * 0.01);
-        rotation = delta_rot * rotation;
+        rotation = rotation * delta_rot;
     }
 
     rotation
