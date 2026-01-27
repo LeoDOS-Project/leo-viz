@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LEO Viz - Walker Constellation Visualizer</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #1a1a1a;
+        }
+        canvas {
+            width: 100%;
+            height: 100%;
+        }
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-family: sans-serif;
+            font-size: 24px;
+        }
+    </style>
+    <link data-trunk rel="copy-file" href="earth.jpg" />
+</head>
+<body>
+    <div class="loading" id="loading">Loading...</div>
+    <canvas id="canvas"></canvas>
+    <script>
+        document.getElementById('loading').style.display = 'none';
+    </script>
+    <link data-trunk rel="rust" data-wasm-opt="2" />
+</body>
+</html>

@@ -905,6 +905,7 @@ fn dim_color(color: egui::Color32) -> egui::Color32 {
     )
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]),
@@ -912,8 +913,25 @@ fn main() -> eframe::Result<()> {
     };
 
     eframe::run_native(
-        "Walker Constellations",
+        "LEO Viz",
         options,
         Box::new(|_cc| Ok(Box::new(App::default()))),
     )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    eframe::WebLogger::init(log::LevelFilter::Debug).ok();
+
+    wasm_bindgen_futures::spawn_local(async {
+        let web_options = eframe::WebOptions::default();
+        eframe::WebRunner::new()
+            .start(
+                "canvas",
+                web_options,
+                Box::new(|_cc| Ok(Box::new(App::default()))),
+            )
+            .await
+            .expect("Failed to start eframe");
+    });
 }
