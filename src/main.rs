@@ -212,6 +212,7 @@ struct App {
     show_links: bool,
     show_ground_track: bool,
     show_torus: bool,
+    hide_behind_earth: bool,
     walker_type: WalkerType,
     rotation: Matrix3<f64>,
     torus_rotation: Matrix3<f64>,
@@ -243,6 +244,7 @@ impl Default for App {
             show_links: true,
             show_ground_track: false,
             show_torus: false,
+            hide_behind_earth: true,
             walker_type: WalkerType::Delta,
             rotation: Matrix3::identity(),
             torus_rotation: torus_initial,
@@ -351,6 +353,7 @@ impl eframe::App for App {
             ui.checkbox(&mut self.show_links, "Show links");
             ui.checkbox(&mut self.show_ground_track, "Show ground track");
             ui.checkbox(&mut self.show_torus, "Show torus");
+            ui.checkbox(&mut self.hide_behind_earth, "Hide behind Earth");
 
             ui.horizontal(|ui| {
                 ui.label("Type:");
@@ -526,6 +529,7 @@ impl eframe::App for App {
                     self.zoom,
                     self.sat_radius,
                     show_links,
+                    self.hide_behind_earth,
                 );
 
                 if show_torus {
@@ -558,6 +562,7 @@ fn draw_3d_view(
     zoom: f64,
     sat_radius: f32,
     show_links: bool,
+    hide_behind_earth: bool,
 ) -> Matrix3<f64> {
     let orbit_radius = EARTH_RADIUS_KM + constellation.altitude_km;
     let axis_len = EARTH_RADIUS_KM * 1.5;
@@ -580,7 +585,10 @@ fn draw_3d_view(
             [margin, margin],
         ));
 
-        if show_orbits {
+        let visual_earth_r = EARTH_RADIUS_KM * 0.95;
+        let earth_r_sq = visual_earth_r * visual_earth_r;
+
+        if show_orbits && !hide_behind_earth {
             for plane in 0..constellation.num_planes {
                 let orbit_pts = constellation.orbit_points_3d(plane);
                 let color = plane_color(plane);
@@ -588,7 +596,8 @@ fn draw_3d_view(
                 let mut behind_segment: Vec<[f64; 2]> = Vec::new();
                 for &(x, y, z) in &orbit_pts {
                     let (rx, ry, rz) = rotate_point_matrix(x, y, z, &rotation);
-                    if rz < 0.0 {
+                    let occluded = rz < 0.0 && (rx * rx + ry * ry) < earth_r_sq;
+                    if occluded {
                         behind_segment.push([rx, ry]);
                     } else if !behind_segment.is_empty() {
                         plot_ui.line(
@@ -609,27 +618,29 @@ fn draw_3d_view(
             }
         }
 
-        for plane in 0..constellation.num_planes {
-            let pts: PlotPoints = positions
-                .iter()
-                .filter_map(|s| {
-                    if s.plane != plane {
-                        return None;
-                    }
-                    let (rx, ry, rz) = rotate_point_matrix(s.x, s.y, s.z, &rotation);
-                    if rz < 0.0 {
-                        Some([rx, ry])
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            plot_ui.points(
-                Points::new(pts)
-                    .color(dim_color(plane_color(plane)))
-                    .radius(sat_radius * 0.8)
-                    .filled(true),
-            );
+        if !hide_behind_earth {
+            for plane in 0..constellation.num_planes {
+                let pts: PlotPoints = positions
+                    .iter()
+                    .filter_map(|s| {
+                        if s.plane != plane {
+                            return None;
+                        }
+                        let (rx, ry, rz) = rotate_point_matrix(s.x, s.y, s.z, &rotation);
+                        if rz < 0.0 {
+                            Some([rx, ry])
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                plot_ui.points(
+                    Points::new(pts)
+                        .color(dim_color(plane_color(plane)))
+                        .radius(sat_radius * 0.8)
+                        .filled(true),
+                );
+            }
         }
 
         if let Some(tex) = earth_texture {
@@ -702,7 +713,8 @@ fn draw_3d_view(
                 let mut front_segment: Vec<[f64; 2]> = Vec::new();
                 for &(x, y, z) in &orbit_pts {
                     let (rx, ry, rz) = rotate_point_matrix(x, y, z, &rotation);
-                    if rz >= 0.0 {
+                    let visible = rz >= 0.0 || (rx * rx + ry * ry) >= earth_r_sq;
+                    if visible {
                         front_segment.push([rx, ry]);
                     } else if !front_segment.is_empty() {
                         plot_ui.line(
@@ -725,7 +737,7 @@ fn draw_3d_view(
 
         if show_links {
             let link_color = egui::Color32::from_rgb(200, 200, 200);
-            let link_dim = egui::Color32::from_rgba_unmultiplied(60, 60, 80, 60);
+            let link_dim = egui::Color32::from_rgba_unmultiplied(80, 80, 100, 100);
             let is_star = constellation.walker_type == WalkerType::Star;
             for sat in positions {
                 if is_star && sat.plane == constellation.num_planes - 1 {
@@ -737,8 +749,13 @@ fn draw_3d_view(
                 }) {
                     let (rx1, ry1, rz1) = rotate_point_matrix(sat.x, sat.y, sat.z, &rotation);
                     let (rx2, ry2, rz2) = rotate_point_matrix(neighbor.x, neighbor.y, neighbor.z, &rotation);
-                    let both_front = rz1 >= 0.0 && rz2 >= 0.0;
-                    let color = if both_front { link_color } else { link_dim };
+                    let visible1 = rz1 >= 0.0 || (rx1 * rx1 + ry1 * ry1) >= earth_r_sq;
+                    let visible2 = rz2 >= 0.0 || (rx2 * rx2 + ry2 * ry2) >= earth_r_sq;
+                    let both_visible = visible1 && visible2;
+                    if hide_behind_earth && !both_visible {
+                        continue;
+                    }
+                    let color = if both_visible { link_color } else { link_dim };
                     plot_ui.line(
                         Line::new(PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
                             .color(color)
@@ -748,11 +765,10 @@ fn draw_3d_view(
             }
         }
 
-        let earth_r_sq = EARTH_RADIUS_KM * EARTH_RADIUS_KM;
         for plane in 0..constellation.num_planes {
             let color = plane_color(plane);
             let dim_color = egui::Color32::from_rgba_unmultiplied(
-                color.r() / 3, color.g() / 3, color.b() / 3, 40,
+                color.r() / 2, color.g() / 2, color.b() / 2, 80,
             );
 
             let front_pts: PlotPoints = positions
@@ -765,22 +781,24 @@ fn draw_3d_view(
                 })
                 .collect();
 
-            let back_pts: PlotPoints = positions
-                .iter()
-                .filter(|s| s.plane == plane)
-                .filter_map(|s| {
-                    let (rx, ry, rz) = rotate_point_matrix(s.x, s.y, s.z, &rotation);
-                    let behind = rz < 0.0 && (rx * rx + ry * ry) < earth_r_sq;
-                    if behind { Some([rx, ry]) } else { None }
-                })
-                .collect();
+            if !hide_behind_earth {
+                let back_pts: PlotPoints = positions
+                    .iter()
+                    .filter(|s| s.plane == plane)
+                    .filter_map(|s| {
+                        let (rx, ry, rz) = rotate_point_matrix(s.x, s.y, s.z, &rotation);
+                        let behind = rz < 0.0 && (rx * rx + ry * ry) < earth_r_sq;
+                        if behind { Some([rx, ry]) } else { None }
+                    })
+                    .collect();
 
-            plot_ui.points(
-                Points::new(back_pts)
-                    .color(dim_color)
-                    .radius(sat_radius * 0.8)
-                    .filled(true),
-            );
+                plot_ui.points(
+                    Points::new(back_pts)
+                        .color(dim_color)
+                        .radius(sat_radius * 0.8)
+                        .filled(true),
+                );
+            }
             plot_ui.points(
                 Points::new(front_pts)
                     .color(color)
@@ -1021,10 +1039,10 @@ fn plane_color(plane: usize) -> egui::Color32 {
 
 fn dim_color(color: egui::Color32) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(
-        (color.r() as f32 * 0.3) as u8,
-        (color.g() as f32 * 0.3) as u8,
-        (color.b() as f32 * 0.3) as u8,
-        150,
+        (color.r() as f32 * 0.4) as u8,
+        (color.g() as f32 * 0.4) as u8,
+        (color.b() as f32 * 0.4) as u8,
+        200,
     )
 }
 
