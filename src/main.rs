@@ -534,58 +534,6 @@ fn draw_3d_view(
             [margin, margin],
         ));
 
-        if show_orbits {
-            for plane in 0..constellation.num_planes {
-                let orbit_pts = constellation.orbit_points_3d(plane);
-                let color = plane_color(plane);
-
-                let mut behind_segment: Vec<[f64; 2]> = Vec::new();
-                for &(x, y, z) in &orbit_pts {
-                    let (rx, ry, rz) = rotate_point_matrix(x, y, z, &rotation);
-                    if rz < 0.0 {
-                        behind_segment.push([rx, ry]);
-                    } else if !behind_segment.is_empty() {
-                        plot_ui.line(
-                            Line::new(PlotPoints::new(behind_segment.clone()))
-                                .color(dim_color(color))
-                                .width(1.0),
-                        );
-                        behind_segment.clear();
-                    }
-                }
-                if !behind_segment.is_empty() {
-                    plot_ui.line(
-                        Line::new(PlotPoints::new(behind_segment))
-                            .color(dim_color(color))
-                            .width(1.0),
-                    );
-                }
-            }
-        }
-
-        for plane in 0..constellation.num_planes {
-            let pts: PlotPoints = positions
-                .iter()
-                .filter_map(|s| {
-                    if s.plane != plane {
-                        return None;
-                    }
-                    let (rx, ry, rz) = rotate_point_matrix(s.x, s.y, s.z, &rotation);
-                    if rz < 0.0 {
-                        Some([rx, ry])
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            plot_ui.points(
-                Points::new(pts)
-                    .color(dim_color(plane_color(plane)))
-                    .radius(sat_radius * 0.8)
-                    .filled(true),
-            );
-        }
-
         if let Some(tex) = earth_texture {
             let size = egui::Vec2::splat(EARTH_RADIUS_KM as f32 * 2.0);
             plot_ui.image(PlotImage::new(
@@ -900,15 +848,6 @@ fn plane_color(plane: usize) -> egui::Color32 {
         egui::Color32::from_rgb(147, 112, 219),
     ];
     colors[plane % colors.len()]
-}
-
-fn dim_color(color: egui::Color32) -> egui::Color32 {
-    egui::Color32::from_rgba_unmultiplied(
-        (color.r() as f32 * 0.3) as u8,
-        (color.g() as f32 * 0.3) as u8,
-        (color.b() as f32 * 0.3) as u8,
-        150,
-    )
 }
 
 #[cfg(not(target_arch = "wasm32"))]
