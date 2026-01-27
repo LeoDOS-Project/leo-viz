@@ -324,6 +324,7 @@ struct App {
     show_torus: bool,
     hide_behind_earth: bool,
     single_color_per_constellation: bool,
+    menu_open: bool,
     zoom: f64,
     sat_radius: f32,
     rotation: Matrix3<f64>,
@@ -354,6 +355,7 @@ impl Default for App {
             show_torus: false,
             hide_behind_earth: true,
             single_color_per_constellation: false,
+            menu_open: false,
             zoom: 1.0,
             sat_radius: 5.0,
             rotation: Matrix3::identity(),
@@ -371,6 +373,69 @@ impl App {
     fn add_tab(&mut self) {
         self.tab_counter += 1;
         self.tabs.push(TabConfig::new(format!("Config {}", self.tab_counter)));
+    }
+
+    fn show_settings(&mut self, ui: &mut egui::Ui) {
+        ui.checkbox(&mut self.animate, "Animate");
+        ui.checkbox(&mut self.show_orbits, "Show orbits");
+        ui.checkbox(&mut self.show_links, "Show links");
+        ui.checkbox(&mut self.show_torus, "Show torus");
+        ui.checkbox(&mut self.show_ground_track, "Show ground");
+        ui.checkbox(&mut self.hide_behind_earth, "Hide behind Earth");
+        ui.checkbox(&mut self.single_color_per_constellation, "Single color per constellation");
+
+        ui.add_space(10.0);
+
+        ui.horizontal(|ui| {
+            ui.label("Speed:");
+            ui.add(egui::Slider::new(&mut self.speed, 0.1..=10.0).logarithmic(true));
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Zoom:");
+            ui.add(egui::Slider::new(&mut self.zoom, 0.5..=3.0).logarithmic(true));
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Sat size:");
+            ui.add(egui::Slider::new(&mut self.sat_radius, 1.0..=15.0));
+        });
+
+        ui.add_space(10.0);
+
+        ui.horizontal(|ui| {
+            if ui.button("N/S view").clicked() {
+                self.rotation = Matrix3::identity();
+            }
+            if ui.button("E/W view").clicked() {
+                self.rotation = Matrix3::new(
+                    1.0, 0.0, 0.0,
+                    0.0, 0.0, 1.0,
+                    0.0, -1.0, 0.0,
+                );
+            }
+        });
+
+        if ui.button("Reset view").clicked() {
+            self.rotation = Matrix3::identity();
+            self.torus_rotation = Matrix3::new(
+                1.0, 0.0, 0.0,
+                0.0, 0.0, -1.0,
+                0.0, 1.0, 0.0,
+            );
+            self.zoom = 1.0;
+        }
+
+        if ui.button("Reset time").clicked() {
+            self.time = 0.0;
+        }
+
+        ui.add_space(10.0);
+        ui.separator();
+        ui.label("Delta: RAAN spread 360°");
+        ui.label("Star: RAAN spread 180°");
+        ui.add_space(5.0);
+        ui.label("Drag 3D views to rotate");
     }
 }
 
@@ -394,74 +459,24 @@ impl eframe::App for App {
             self.last_resolution = self.earth_resolution;
         }
 
-        egui::SidePanel::left("global_controls").show(ctx, |ui| {
-            ui.heading("Display Settings");
-            ui.separator();
+        let is_mobile = ctx.screen_rect().width() < 600.0;
 
-            ui.checkbox(&mut self.animate, "Animate");
-            ui.checkbox(&mut self.show_orbits, "Show orbits");
-            ui.checkbox(&mut self.show_links, "Show links");
-            ui.checkbox(&mut self.show_torus, "Show torus");
-            ui.checkbox(&mut self.show_ground_track, "Show ground");
-            ui.checkbox(&mut self.hide_behind_earth, "Hide behind Earth");
-            ui.checkbox(&mut self.single_color_per_constellation, "Single color per constellation");
-
-            ui.add_space(10.0);
-
-            ui.horizontal(|ui| {
-                ui.label("Speed:");
-                ui.add(egui::Slider::new(&mut self.speed, 0.1..=10.0).logarithmic(true));
+        if !is_mobile {
+            egui::SidePanel::left("global_controls").show(ctx, |ui| {
+                ui.heading("Display Settings");
+                ui.separator();
+                self.show_settings(ui);
             });
-
-            ui.horizontal(|ui| {
-                ui.label("Zoom:");
-                ui.add(egui::Slider::new(&mut self.zoom, 0.5..=3.0).logarithmic(true));
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Sat size:");
-                ui.add(egui::Slider::new(&mut self.sat_radius, 1.0..=15.0));
-            });
-
-            ui.add_space(10.0);
-
-            ui.horizontal(|ui| {
-                if ui.button("N/S view").clicked() {
-                    self.rotation = Matrix3::identity();
-                }
-                if ui.button("E/W view").clicked() {
-                    self.rotation = Matrix3::new(
-                        1.0, 0.0, 0.0,
-                        0.0, 0.0, 1.0,
-                        0.0, -1.0, 0.0,
-                    );
-                }
-            });
-
-            if ui.button("Reset view").clicked() {
-                self.rotation = Matrix3::identity();
-                self.torus_rotation = Matrix3::new(
-                    1.0, 0.0, 0.0,
-                    0.0, 0.0, -1.0,
-                    0.0, 1.0, 0.0,
-                );
-                self.zoom = 1.0;
-            }
-
-            if ui.button("Reset time").clicked() {
-                self.time = 0.0;
-            }
-
-            ui.add_space(20.0);
-            ui.separator();
-            ui.label("Delta: RAAN spread 360°");
-            ui.label("Star: RAAN spread 180°");
-            ui.add_space(5.0);
-            ui.label("Drag 3D views to rotate");
-        });
+        }
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
+                if is_mobile {
+                    let menu_label = if self.menu_open { "Settings \u{25B2}" } else { "Settings \u{25BC}" };
+                    if ui.button(menu_label).clicked() {
+                        self.menu_open = !self.menu_open;
+                    }
+                }
                 ui.heading("LEO Viz");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("+ Add Config").clicked() {
@@ -469,6 +484,11 @@ impl eframe::App for App {
                     }
                 });
             });
+
+            if is_mobile && self.menu_open {
+                ui.separator();
+                self.show_settings(ui);
+            }
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -479,7 +499,7 @@ impl eframe::App for App {
             let show_ground = self.show_ground_track;
             let hide_behind_earth = self.hide_behind_earth;
             let single_color = self.single_color_per_constellation;
-            let zoom = self.zoom;
+            let mut zoom = self.zoom;
             let sat_radius = self.sat_radius;
             let earth_handle = self.earth_image_handle.clone();
 
@@ -648,7 +668,7 @@ impl eframe::App for App {
                             let viz_width = panel_width - 10.0;
                             let viz_height = viz_width * 0.8;
 
-                            let rot = draw_3d_view(
+                            let (rot, new_zoom) = draw_3d_view(
                                 ui,
                                 &format!("earth_3d_{}", idx),
                                 &constellations_data,
@@ -666,6 +686,7 @@ impl eframe::App for App {
                             if rot != new_rotation {
                                 new_rotation = rot;
                             }
+                            zoom = new_zoom;
 
                             if show_torus {
                                 ui.add_space(5.0);
@@ -712,6 +733,7 @@ impl eframe::App for App {
 
             self.rotation = new_rotation;
             self.torus_rotation = new_torus_rotation;
+            self.zoom = zoom;
         });
     }
 }
@@ -725,12 +747,12 @@ fn draw_3d_view(
     width: f32,
     height: f32,
     earth_texture: Option<&egui::TextureHandle>,
-    zoom: f64,
+    mut zoom: f64,
     sat_radius: f32,
     show_links: bool,
     hide_behind_earth: bool,
     single_color: bool,
-) -> Matrix3<f64> {
+) -> (Matrix3<f64>, f64) {
     let max_orbit_radius = constellations.iter()
         .map(|(c, _, _)| EARTH_RADIUS_KM + c.altitude_km)
         .fold(0.0_f64, |a, b| a.max(b));
@@ -987,7 +1009,15 @@ fn draw_3d_view(
         rotation = delta_rot * rotation;
     }
 
-    rotation
+    if response.response.hovered() {
+        let scroll = ui.input(|i| i.raw_scroll_delta.y);
+        if scroll != 0.0 {
+            let factor = 1.0 + scroll as f64 * 0.001;
+            zoom = (zoom * factor).clamp(0.5, 3.0);
+        }
+    }
+
+    (rotation, zoom)
 }
 
 fn draw_ground_track(
