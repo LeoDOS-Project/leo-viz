@@ -515,7 +515,7 @@ fn draw_3d_view(
     let axis_len = EARTH_RADIUS_KM * 1.5;
     let margin = (orbit_radius.max(axis_len) * 1.25) / zoom;
     let total_sats = constellation.total_sats as f32;
-    let sat_radius = ((width.min(height) / 100.0) / (total_sats / 100.0).sqrt()).clamp(2.0, 10.0);
+    let sat_radius = ((width.min(height) / 80.0) / (total_sats / 200.0).sqrt()).clamp(2.5, 12.0);
 
     let plot = Plot::new(id)
         .data_aspect(1.0)
@@ -682,7 +682,7 @@ fn draw_3d_view(
 
 fn draw_ground_track(ui: &mut egui::Ui, id: &str, positions: &[SatelliteState], num_planes: usize, width: f32, height: f32) {
     let total_sats = positions.len() as f32;
-    let sat_radius = ((width.min(height) / 100.0) / (total_sats / 100.0).sqrt()).clamp(2.0, 10.0);
+    let sat_radius = ((width.min(height) / 80.0) / (total_sats / 200.0).sqrt()).clamp(2.5, 12.0);
     let plot = Plot::new(id)
         .width(width)
         .height(height)
@@ -733,7 +733,7 @@ fn draw_torus(
     let major_radius = 2.0;
     let minor_radius = 0.8;
     let total_sats = constellation.total_sats as f32;
-    let sat_radius = ((width.min(height) / 100.0) / (total_sats / 100.0).sqrt()).clamp(2.0, 10.0);
+    let sat_radius = ((width.min(height) / 80.0) / (total_sats / 200.0).sqrt()).clamp(2.5, 12.0);
     let sats_per_plane = constellation.total_sats / constellation.num_planes;
     let orbit_radius = EARTH_RADIUS_KM + constellation.altitude_km;
     let period = 2.0 * PI * (orbit_radius.powi(3) / 398600.4418_f64).sqrt();
