@@ -1,8 +1,79 @@
 use eframe::egui;
-use egui_plot::{Line, Plot, PlotPoints, PlotPoint, Points, Polygon, Text};
+use egui_plot::{Line, Plot, PlotImage, PlotPoints, PlotPoint, Points, Polygon, Text};
+use nalgebra::{Matrix3, Vector3};
 use std::f64::consts::PI;
+use std::sync::Arc;
 
 const EARTH_RADIUS_KM: f64 = 6371.0;
+const EARTH_TEXTURE_BYTES: &[u8] = include_bytes!("../earth.jpg");
+
+struct EarthTexture {
+    width: u32,
+    height: u32,
+    pixels: Vec<[u8; 3]>,
+}
+
+impl EarthTexture {
+    fn load() -> Self {
+        let img = image::load_from_memory(EARTH_TEXTURE_BYTES)
+            .expect("Failed to load Earth texture")
+            .to_rgb8();
+        let width = img.width();
+        let height = img.height();
+        let pixels: Vec<[u8; 3]> = img.pixels().map(|p| p.0).collect();
+        Self { width, height, pixels }
+    }
+
+    fn sample(&self, u: f64, v: f64) -> [u8; 3] {
+        let x = ((u * self.width as f64) as u32).min(self.width - 1);
+        let y = ((v * self.height as f64) as u32).min(self.height - 1);
+        self.pixels[(y * self.width + x) as usize]
+    }
+
+    fn render_sphere(&self, size: usize, rot: &Matrix3<f64>) -> egui::ColorImage {
+        let mut pixels = vec![egui::Color32::TRANSPARENT; size * size];
+        let center = size as f64 / 2.0;
+        let radius = center * 0.95;
+        let inv_rot = rot.transpose();
+
+        for py in 0..size {
+            for px in 0..size {
+                let dx = px as f64 - center;
+                let dy = py as f64 - center;
+                let dist_sq = dx * dx + dy * dy;
+
+                if dist_sq < radius * radius {
+                    let z = (radius * radius - dist_sq).sqrt();
+                    let x = dx / radius;
+                    let y = -dy / radius;
+                    let z = z / radius;
+
+                    let v = inv_rot * Vector3::new(x, y, z);
+
+                    let lat = v.y.asin();
+                    let lon = v.z.atan2(v.x);
+
+                    let u = (lon + PI) / (2.0 * PI);
+                    let vt = (PI / 2.0 - lat) / PI;
+
+                    let [r, g, b] = self.sample(u, vt);
+
+                    let shade = (0.3 + 0.7 * z.max(0.0)) as f32;
+                    let r = (r as f32 * shade) as u8;
+                    let g = (g as f32 * shade) as u8;
+                    let b = (b as f32 * shade) as u8;
+
+                    pixels[py * size + px] = egui::Color32::from_rgb(r, g, b);
+                }
+            }
+        }
+
+        egui::ColorImage {
+            size: [size, size],
+            pixels,
+        }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum WalkerType {
@@ -107,17 +178,23 @@ struct SatelliteState {
     ascending: bool,
 }
 
-fn rotate_point(x: f64, y: f64, z: f64, rot_x: f64, rot_y: f64) -> (f64, f64, f64) {
-    let (sin_x, cos_x) = rot_x.sin_cos();
-    let (sin_y, cos_y) = rot_y.sin_cos();
+fn rotate_point_matrix(x: f64, y: f64, z: f64, rot: &Matrix3<f64>) -> (f64, f64, f64) {
+    let v = rot * Vector3::new(x, y, z);
+    (v.x, v.y, v.z)
+}
 
-    let y1 = y * cos_x - z * sin_x;
-    let z1 = y * sin_x + z * cos_x;
-
-    let x2 = x * cos_y + z1 * sin_y;
-    let z2 = -x * sin_y + z1 * cos_y;
-
-    (x2, y1, z2)
+fn rotation_from_drag(dx: f64, dy: f64) -> Matrix3<f64> {
+    let rot_y = Matrix3::new(
+        dx.cos(), 0.0, dx.sin(),
+        0.0, 1.0, 0.0,
+        -dx.sin(), 0.0, dx.cos(),
+    );
+    let rot_x = Matrix3::new(
+        1.0, 0.0, 0.0,
+        0.0, dy.cos(), -dy.sin(),
+        0.0, dy.sin(), dy.cos(),
+    );
+    rot_x * rot_y
 }
 
 struct App {
@@ -130,14 +207,26 @@ struct App {
     speed: f64,
     animate: bool,
     show_orbits: bool,
-    rot_x: f64,
-    rot_y: f64,
-    torus_rot_x: f64,
-    torus_rot_y: f64,
+    show_ground_track: bool,
+    show_torus: bool,
+    show_star: bool,
+    rotation: Matrix3<f64>,
+    torus_rotation: Matrix3<f64>,
+    earth_texture: Arc<EarthTexture>,
+    earth_image_handle: Option<egui::TextureHandle>,
+    last_rotation: Option<Matrix3<f64>>,
+    last_resolution: usize,
+    zoom: f64,
+    earth_resolution: usize,
 }
 
 impl Default for App {
     fn default() -> Self {
+        let torus_initial = Matrix3::new(
+            1.0, 0.0, 0.0,
+            0.0, 0.0, -1.0,
+            0.0, 1.0, 0.0,
+        );
         Self {
             sats_per_plane: 11,
             num_planes: 6,
@@ -148,10 +237,17 @@ impl Default for App {
             speed: 1.0,
             animate: true,
             show_orbits: true,
-            rot_x: 0.0,
-            rot_y: 0.0,
-            torus_rot_x: PI / 2.0,
-            torus_rot_y: 0.0,
+            show_ground_track: false,
+            show_torus: false,
+            show_star: false,
+            rotation: Matrix3::identity(),
+            torus_rotation: torus_initial,
+            earth_texture: Arc::new(EarthTexture::load()),
+            earth_image_handle: None,
+            last_rotation: None,
+            last_resolution: 0,
+            zoom: 1.0,
+            earth_resolution: 256,
         }
     }
 }
@@ -187,6 +283,19 @@ impl eframe::App for App {
         if self.animate {
             self.time += self.speed;
             ctx.request_repaint();
+        }
+
+        let rotation_changed = self.last_rotation.map_or(true, |r| r != self.rotation);
+        let resolution_changed = self.last_resolution != self.earth_resolution;
+        if self.earth_image_handle.is_none() || rotation_changed || resolution_changed {
+            let earth_image = self.earth_texture.render_sphere(self.earth_resolution, &self.rotation);
+            self.earth_image_handle = Some(ctx.load_texture(
+                "earth",
+                earth_image,
+                egui::TextureOptions::LINEAR,
+            ));
+            self.last_rotation = Some(self.rotation);
+            self.last_resolution = self.earth_resolution;
         }
 
         let delta = self.delta_constellation();
@@ -243,10 +352,26 @@ impl eframe::App for App {
 
             ui.checkbox(&mut self.animate, "Animate");
             ui.checkbox(&mut self.show_orbits, "Show orbits");
+            ui.checkbox(&mut self.show_ground_track, "Show ground track");
+            ui.checkbox(&mut self.show_torus, "Show torus");
+            ui.checkbox(&mut self.show_star, "Show Walker Star");
 
             ui.horizontal(|ui| {
                 ui.label("Speed:");
                 ui.add(egui::Slider::new(&mut self.speed, 0.1..=10.0).logarithmic(true));
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Zoom:");
+                ui.add(egui::Slider::new(&mut self.zoom, 0.5..=3.0).logarithmic(true));
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Earth res:");
+                let mut res = self.earth_resolution as i32;
+                if ui.add(egui::Slider::new(&mut res, 64..=512).step_by(64.0)).changed() {
+                    self.earth_resolution = res as usize;
+                }
             });
 
             if ui.button("Reset time").clicked() {
@@ -254,10 +379,13 @@ impl eframe::App for App {
             }
 
             if ui.button("Reset view").clicked() {
-                self.rot_x = 0.0;
-                self.rot_y = 0.0;
-                self.torus_rot_x = PI / 2.0;
-                self.torus_rot_y = 0.0;
+                self.rotation = Matrix3::identity();
+                self.torus_rotation = Matrix3::new(
+                    1.0, 0.0, 0.0,
+                    0.0, 0.0, -1.0,
+                    0.0, 1.0, 0.0,
+                );
+                self.zoom = 1.0;
             }
 
             ui.add_space(20.0);
@@ -273,73 +401,97 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let show_orbits = self.show_orbits;
+            let show_ground = self.show_ground_track;
+            let show_torus = self.show_torus;
+            let show_star = self.show_star;
 
             let available_width = ui.available_width();
             let available_height = ui.available_height();
-            let plot_width = (available_width - 30.0) / 2.0;
-            let plot_3d_height = (available_height - 80.0) * 0.4;
-            let plot_ground_height = (available_height - 80.0) * 0.25;
-            let plot_torus_height = (available_height - 80.0) * 0.35;
+            let plot_width = if show_star {
+                (available_width - 30.0) / 2.0
+            } else {
+                available_width - 20.0
+            };
+            let (plot_3d_height, plot_ground_height, plot_torus_height) = match (show_ground, show_torus) {
+                (true, true) => {
+                    let h = available_height - 80.0;
+                    (h * 0.4, h * 0.25, h * 0.35)
+                }
+                (true, false) => {
+                    let h = available_height - 60.0;
+                    (h * 0.6, h * 0.4, 0.0)
+                }
+                (false, true) => {
+                    let h = available_height - 60.0;
+                    (h * 0.5, 0.0, h * 0.5)
+                }
+                (false, false) => {
+                    let h = available_height - 40.0;
+                    (h, 0.0, 0.0)
+                }
+            };
 
-            let mut rot_x = self.rot_x;
-            let mut rot_y = self.rot_y;
-            let mut torus_rot_x = self.torus_rot_x;
-            let mut torus_rot_y = self.torus_rot_y;
+            let mut rotation = self.rotation;
+            let mut torus_rotation = self.torus_rotation;
+
+            let earth_handle = self.earth_image_handle.clone();
 
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.heading("Walker Delta");
-                    let (new_rot_x, new_rot_y) = draw_3d_view(
+                    rotation = draw_3d_view(
                         ui,
                         "delta_3d",
                         &delta,
                         &delta_positions,
                         show_orbits,
-                        rot_x,
-                        rot_y,
+                        rotation,
                         plot_width,
                         plot_3d_height,
+                        earth_handle.as_ref(),
+                        self.zoom,
                     );
-                    rot_x = new_rot_x;
-                    rot_y = new_rot_y;
-                    ui.add_space(5.0);
-                    draw_ground_track(ui, "delta_ground", &delta_positions, delta.num_planes, plot_width, plot_ground_height);
-                    ui.add_space(5.0);
-                    let (new_torus_rot_x, new_torus_rot_y) = draw_torus(ui, "delta_torus", &delta, &delta_positions, self.time, torus_rot_x, torus_rot_y, plot_width, plot_torus_height);
-                    torus_rot_x = new_torus_rot_x;
-                    torus_rot_y = new_torus_rot_y;
+                    if show_ground {
+                        ui.add_space(5.0);
+                        draw_ground_track(ui, "delta_ground", &delta_positions, delta.num_planes, plot_width, plot_ground_height);
+                    }
+                    if show_torus {
+                        ui.add_space(5.0);
+                        torus_rotation = draw_torus(ui, "delta_torus", &delta, &delta_positions, self.time, torus_rotation, plot_width, plot_torus_height);
+                    }
                 });
 
-                ui.add_space(20.0);
+                if show_star {
+                    ui.add_space(20.0);
 
-                ui.vertical(|ui| {
-                    ui.heading("Walker Star");
-                    let (new_rot_x, new_rot_y) = draw_3d_view(
-                        ui,
-                        "star_3d",
-                        &star,
-                        &star_positions,
-                        show_orbits,
-                        rot_x,
-                        rot_y,
-                        plot_width,
-                        plot_3d_height,
-                    );
-                    rot_x = new_rot_x;
-                    rot_y = new_rot_y;
-                    ui.add_space(5.0);
-                    draw_ground_track(ui, "star_ground", &star_positions, star.num_planes, plot_width, plot_ground_height);
-                    ui.add_space(5.0);
-                    let (new_torus_rot_x, new_torus_rot_y) = draw_torus(ui, "star_torus", &star, &star_positions, self.time, torus_rot_x, torus_rot_y, plot_width, plot_torus_height);
-                    torus_rot_x = new_torus_rot_x;
-                    torus_rot_y = new_torus_rot_y;
-                });
+                    ui.vertical(|ui| {
+                        ui.heading("Walker Star");
+                        rotation = draw_3d_view(
+                            ui,
+                            "star_3d",
+                            &star,
+                            &star_positions,
+                            show_orbits,
+                            rotation,
+                            plot_width,
+                            plot_3d_height,
+                            earth_handle.as_ref(),
+                            self.zoom,
+                        );
+                        if show_ground {
+                            ui.add_space(5.0);
+                            draw_ground_track(ui, "star_ground", &star_positions, star.num_planes, plot_width, plot_ground_height);
+                        }
+                        if show_torus {
+                            ui.add_space(5.0);
+                            torus_rotation = draw_torus(ui, "star_torus", &star, &star_positions, self.time, torus_rotation, plot_width, plot_torus_height);
+                        }
+                    });
+                }
             });
 
-            self.rot_x = rot_x;
-            self.rot_y = rot_y;
-            self.torus_rot_x = torus_rot_x;
-            self.torus_rot_y = torus_rot_y;
+            self.rotation = rotation;
+            self.torus_rotation = torus_rotation;
         });
     }
 }
@@ -350,14 +502,15 @@ fn draw_3d_view(
     constellation: &WalkerConstellation,
     positions: &[SatelliteState],
     show_orbits: bool,
-    mut rot_x: f64,
-    mut rot_y: f64,
+    mut rotation: Matrix3<f64>,
     width: f32,
     height: f32,
-) -> (f64, f64) {
+    earth_texture: Option<&egui::TextureHandle>,
+    zoom: f64,
+) -> Matrix3<f64> {
     let orbit_radius = EARTH_RADIUS_KM + constellation.altitude_km;
     let axis_len = EARTH_RADIUS_KM * 1.5;
-    let margin = orbit_radius.max(axis_len) * 1.25;
+    let margin = (orbit_radius.max(axis_len) * 1.25) / zoom;
     let sat_radius = (width.min(height) / 80.0).max(2.0);
 
     let plot = Plot::new(id)
@@ -383,7 +536,7 @@ fn draw_3d_view(
 
                 let mut behind_segment: Vec<[f64; 2]> = Vec::new();
                 for &(x, y, z) in &orbit_pts {
-                    let (rx, ry, rz) = rotate_point(x, y, z, rot_x, rot_y);
+                    let (rx, ry, rz) = rotate_point_matrix(x, y, z, &rotation);
                     if rz < 0.0 {
                         behind_segment.push([rx, ry]);
                     } else if !behind_segment.is_empty() {
@@ -412,7 +565,7 @@ fn draw_3d_view(
                     if s.plane != plane {
                         return None;
                     }
-                    let (rx, ry, rz) = rotate_point(s.x, s.y, s.z, rot_x, rot_y);
+                    let (rx, ry, rz) = rotate_point_matrix(s.x, s.y, s.z, &rotation);
                     if rz < 0.0 {
                         Some([rx, ry])
                     } else {
@@ -428,39 +581,62 @@ fn draw_3d_view(
             );
         }
 
-        let earth_pts: PlotPoints = (0..=100)
-            .map(|i| {
-                let theta = 2.0 * PI * i as f64 / 100.0;
-                [EARTH_RADIUS_KM * theta.cos(), EARTH_RADIUS_KM * theta.sin()]
-            })
-            .collect();
-        plot_ui.polygon(
-            Polygon::new(earth_pts)
-                .fill_color(egui::Color32::from_rgb(30, 60, 120))
-                .stroke(egui::Stroke::new(2.0, egui::Color32::from_rgb(70, 130, 180))),
-        );
+        if let Some(tex) = earth_texture {
+            let size = egui::Vec2::splat(EARTH_RADIUS_KM as f32 * 2.0);
+            plot_ui.image(PlotImage::new(
+                tex,
+                PlotPoint::new(0.0, 0.0),
+                size,
+            ));
+        } else {
+            let earth_pts: PlotPoints = (0..=100)
+                .map(|i| {
+                    let theta = 2.0 * PI * i as f64 / 100.0;
+                    [EARTH_RADIUS_KM * theta.cos(), EARTH_RADIUS_KM * theta.sin()]
+                })
+                .collect();
+            plot_ui.polygon(
+                Polygon::new(earth_pts)
+                    .fill_color(egui::Color32::from_rgb(30, 60, 120))
+                    .stroke(egui::Stroke::new(2.0, egui::Color32::from_rgb(70, 130, 180))),
+            );
+        }
 
-        let (x1, y1, _) = rotate_point(axis_len, 0.0, 0.0, rot_x, rot_y);
-        let (x2, y2, _) = rotate_point(-axis_len, 0.0, 0.0, rot_x, rot_y);
+        let (ep_x, ep_y, _) = rotate_point_matrix(axis_len, 0.0, 0.0, &rotation);
+        let (ei_x, ei_y, _) = rotate_point_matrix(EARTH_RADIUS_KM, 0.0, 0.0, &rotation);
         plot_ui.line(
-            Line::new(PlotPoints::new(vec![[x2, y2], [x1, y1]]))
+            Line::new(PlotPoints::new(vec![[ei_x, ei_y], [ep_x, ep_y]]))
+                .color(egui::Color32::from_rgb(255, 100, 100))
+                .width(1.5),
+        );
+        let (wn_x, wn_y, _) = rotate_point_matrix(-axis_len, 0.0, 0.0, &rotation);
+        let (wi_x, wi_y, _) = rotate_point_matrix(-EARTH_RADIUS_KM, 0.0, 0.0, &rotation);
+        plot_ui.line(
+            Line::new(PlotPoints::new(vec![[wn_x, wn_y], [wi_x, wi_y]]))
                 .color(egui::Color32::from_rgb(255, 100, 100))
                 .width(1.5),
         );
 
-        let (yp_x, yp_y, _) = rotate_point(0.0, axis_len, 0.0, rot_x, rot_y);
-        let (yn_x, yn_y, _) = rotate_point(0.0, -axis_len, 0.0, rot_x, rot_y);
+        let (np_x, np_y, _) = rotate_point_matrix(0.0, axis_len, 0.0, &rotation);
+        let (ni_x, ni_y, _) = rotate_point_matrix(0.0, EARTH_RADIUS_KM, 0.0, &rotation);
         plot_ui.line(
-            Line::new(PlotPoints::new(vec![[yn_x, yn_y], [yp_x, yp_y]]))
+            Line::new(PlotPoints::new(vec![[ni_x, ni_y], [np_x, np_y]]))
+                .color(egui::Color32::from_rgb(100, 100, 255))
+                .width(1.5),
+        );
+        let (sn_x, sn_y, _) = rotate_point_matrix(0.0, -axis_len, 0.0, &rotation);
+        let (si_x, si_y, _) = rotate_point_matrix(0.0, -EARTH_RADIUS_KM, 0.0, &rotation);
+        plot_ui.line(
+            Line::new(PlotPoints::new(vec![[sn_x, sn_y], [si_x, si_y]]))
                 .color(egui::Color32::from_rgb(100, 100, 255))
                 .width(1.5),
         );
 
         let label_offset = axis_len * 1.15;
-        let (n_x, n_y, _) = rotate_point(0.0, label_offset, 0.0, rot_x, rot_y);
-        let (s_x, s_y, _) = rotate_point(0.0, -label_offset, 0.0, rot_x, rot_y);
-        let (e_x, e_y, _) = rotate_point(label_offset, 0.0, 0.0, rot_x, rot_y);
-        let (w_x, w_y, _) = rotate_point(-label_offset, 0.0, 0.0, rot_x, rot_y);
+        let (n_x, n_y, _) = rotate_point_matrix(0.0, label_offset, 0.0, &rotation);
+        let (s_x, s_y, _) = rotate_point_matrix(0.0, -label_offset, 0.0, &rotation);
+        let (e_x, e_y, _) = rotate_point_matrix(label_offset, 0.0, 0.0, &rotation);
+        let (w_x, w_y, _) = rotate_point_matrix(-label_offset, 0.0, 0.0, &rotation);
 
         plot_ui.text(Text::new(PlotPoint::new(n_x, n_y), "N").color(egui::Color32::BLACK));
         plot_ui.text(Text::new(PlotPoint::new(s_x, s_y), "S").color(egui::Color32::BLACK));
@@ -474,7 +650,7 @@ fn draw_3d_view(
 
                 let mut front_segment: Vec<[f64; 2]> = Vec::new();
                 for &(x, y, z) in &orbit_pts {
-                    let (rx, ry, rz) = rotate_point(x, y, z, rot_x, rot_y);
+                    let (rx, ry, rz) = rotate_point_matrix(x, y, z, &rotation);
                     if rz >= 0.0 {
                         front_segment.push([rx, ry]);
                     } else if !front_segment.is_empty() {
@@ -506,8 +682,8 @@ fn draw_3d_view(
             if let Some(neighbor) = positions.iter().find(|s| {
                 s.plane == next_plane && s.sat_index == sat.sat_index && s.ascending == sat.ascending
             }) {
-                let (rx1, ry1, rz1) = rotate_point(sat.x, sat.y, sat.z, rot_x, rot_y);
-                let (rx2, ry2, rz2) = rotate_point(neighbor.x, neighbor.y, neighbor.z, rot_x, rot_y);
+                let (rx1, ry1, rz1) = rotate_point_matrix(sat.x, sat.y, sat.z, &rotation);
+                let (rx2, ry2, rz2) = rotate_point_matrix(neighbor.x, neighbor.y, neighbor.z, &rotation);
                 if rz1 >= 0.0 && rz2 >= 0.0 {
                     plot_ui.line(
                         Line::new(PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
@@ -525,7 +701,7 @@ fn draw_3d_view(
                     if s.plane != plane {
                         return None;
                     }
-                    let (rx, ry, rz) = rotate_point(s.x, s.y, s.z, rot_x, rot_y);
+                    let (rx, ry, rz) = rotate_point_matrix(s.x, s.y, s.z, &rotation);
                     if rz >= 0.0 {
                         Some([rx, ry])
                     } else {
@@ -544,11 +720,11 @@ fn draw_3d_view(
 
     if response.response.dragged() {
         let drag = response.response.drag_delta();
-        rot_y += drag.x as f64 * 0.01;
-        rot_x += drag.y as f64 * 0.01;
+        let delta_rot = rotation_from_drag(drag.x as f64 * 0.01, drag.y as f64 * 0.01);
+        rotation = delta_rot * rotation;
     }
 
-    (rot_x, rot_y)
+    rotation
 }
 
 fn draw_ground_track(ui: &mut egui::Ui, id: &str, positions: &[SatelliteState], num_planes: usize, width: f32, height: f32) {
@@ -596,11 +772,10 @@ fn draw_torus(
     constellation: &WalkerConstellation,
     positions: &[SatelliteState],
     time: f64,
-    mut rot_x: f64,
-    mut rot_y: f64,
+    mut rotation: Matrix3<f64>,
     width: f32,
     height: f32,
-) -> (f64, f64) {
+) -> Matrix3<f64> {
     let major_radius = 2.0;
     let minor_radius = 0.8;
     let sat_radius = (width.min(height) / 80.0).max(2.0);
@@ -617,7 +792,7 @@ fn draw_torus(
         let y = minor_radius * phase.sin();
         let x = r * angle.cos();
         let z = r * angle.sin();
-        rotate_point(x, y, z, rot_x, rot_y)
+        rotate_point_matrix(x, y, z, &rotation)
     };
 
     let margin = (major_radius + minor_radius) * 1.3;
@@ -648,7 +823,7 @@ fn draw_torus(
                     let y = minor_radius * phase.sin();
                     let x = r * angle.cos();
                     let z = r * angle.sin();
-                    let (rx, ry, _) = rotate_point(x, y, z, rot_x, rot_y);
+                    let (rx, ry, _) = rotate_point_matrix(x, y, z, &rotation);
                     [rx, ry]
                 })
                 .collect();
@@ -698,11 +873,11 @@ fn draw_torus(
 
     if response.response.dragged() {
         let drag = response.response.drag_delta();
-        rot_y += drag.x as f64 * 0.01;
-        rot_x += drag.y as f64 * 0.01;
+        let delta_rot = rotation_from_drag(drag.x as f64 * 0.01, drag.y as f64 * 0.01);
+        rotation = delta_rot * rotation;
     }
 
-    (rot_x, rot_y)
+    rotation
 }
 
 fn plane_color(plane: usize) -> egui::Color32 {
