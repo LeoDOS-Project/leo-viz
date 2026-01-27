@@ -4,6 +4,9 @@ use nalgebra::{Matrix3, Vector3};
 use std::f64::consts::PI;
 use std::sync::Arc;
 
+#[cfg(target_arch = "wasm32")]
+use eframe::wasm_bindgen::JsCast;
+
 const EARTH_RADIUS_KM: f64 = 6371.0;
 const EARTH_TEXTURE_BYTES: &[u8] = include_bytes!("../earth.jpg");
 
@@ -924,10 +927,21 @@ fn main() {
     eframe::WebLogger::init(log::LevelFilter::Debug).ok();
 
     wasm_bindgen_futures::spawn_local(async {
+        let document = web_sys::window()
+            .expect("No window")
+            .document()
+            .expect("No document");
+
+        let canvas = document
+            .get_element_by_id("canvas")
+            .expect("No canvas element")
+            .dyn_into::<web_sys::HtmlCanvasElement>()
+            .expect("Not a canvas");
+
         let web_options = eframe::WebOptions::default();
         eframe::WebRunner::new()
             .start(
-                "canvas",
+                canvas,
                 web_options,
                 Box::new(|_cc| Ok(Box::new(App::default()))),
             )
