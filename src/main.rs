@@ -423,6 +423,9 @@ struct App {
     pending_body: Option<CelestialBody>,
     dark_mode: bool,
     pending_cameras: Vec<SatelliteCamera>,
+    show_routing_paths: bool,
+    show_manhattan_path: bool,
+    show_shortest_path: bool,
 }
 
 impl Default for App {
@@ -467,6 +470,9 @@ impl Default for App {
             pending_body: Some(CelestialBody::Earth),
             dark_mode: true,
             pending_cameras: Vec::new(),
+            show_routing_paths: false,
+            show_manhattan_path: true,
+            show_shortest_path: true,
         }
     }
 }
@@ -487,6 +493,9 @@ struct ConstellationTabViewer<'a> {
     pending_cameras: &'a mut Vec<SatelliteCamera>,
     camera_id_counter: &'a mut usize,
     satellite_cameras: &'a mut Vec<SatelliteCamera>,
+    show_routing_paths: bool,
+    show_manhattan_path: bool,
+    show_shortest_path: bool,
     zoom: &'a mut f64,
     torus_zoom: &'a mut f64,
     vertical_split: &'a mut f32,
@@ -701,6 +710,9 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                         self.pending_cameras,
                         self.camera_id_counter,
                         self.satellite_cameras,
+                        self.show_routing_paths,
+                        self.show_manhattan_path,
+                        self.show_shortest_path,
                     );
                     *self.rotation = rot;
                     *self.zoom = new_zoom;
@@ -766,6 +778,9 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                 self.pending_cameras,
                 self.camera_id_counter,
                 self.satellite_cameras,
+                self.show_routing_paths,
+                self.show_manhattan_path,
+                self.show_shortest_path,
             );
             *self.rotation = rot;
             *self.zoom = new_zoom;
@@ -900,6 +915,13 @@ impl App {
         ui.checkbox(&mut self.animate, "Animate");
         ui.checkbox(&mut self.show_orbits, "Show orbits");
         ui.checkbox(&mut self.show_links, "Show links");
+        ui.checkbox(&mut self.show_routing_paths, "Show routing paths");
+        if self.show_routing_paths {
+            ui.indent("routing_opts", |ui| {
+                ui.checkbox(&mut self.show_manhattan_path, "Manhattan");
+                ui.checkbox(&mut self.show_shortest_path, "Shortest distance");
+            });
+        }
         ui.checkbox(&mut self.show_axes, "Show axes");
         ui.checkbox(&mut self.show_coverage, "Show coverage");
         if self.show_coverage {
@@ -1183,6 +1205,9 @@ impl eframe::App for App {
                 pending_cameras: &mut self.pending_cameras,
                 camera_id_counter: &mut self.camera_id_counter,
                 satellite_cameras: &mut self.satellite_cameras,
+                show_routing_paths: self.show_routing_paths,
+                show_manhattan_path: self.show_manhattan_path,
+                show_shortest_path: self.show_shortest_path,
             };
 
             DockArea::new(&mut self.dock_state)
@@ -1318,6 +1343,131 @@ fn draw_satellite_camera(
     ui.label(format!("Alt: {:.0} km", altitude_km));
 }
 
+fn compute_manhattan_path(
+    src_plane: usize, src_sat: usize,
+    dst_plane: usize, dst_sat: usize,
+    num_planes: usize, sats_per_plane: usize,
+) -> Vec<(usize, usize)> {
+    let mut path = vec![(src_plane, src_sat)];
+
+    let plane_diff_fwd = (dst_plane + num_planes - src_plane) % num_planes;
+    let plane_diff_bwd = (src_plane + num_planes - dst_plane) % num_planes;
+    let (plane_dir, plane_steps) = if plane_diff_fwd <= plane_diff_bwd {
+        (1i32, plane_diff_fwd)
+    } else {
+        (-1i32, plane_diff_bwd)
+    };
+
+    let sat_diff_fwd = (dst_sat + sats_per_plane - src_sat) % sats_per_plane;
+    let sat_diff_bwd = (src_sat + sats_per_plane - dst_sat) % sats_per_plane;
+    let (sat_dir, sat_steps) = if sat_diff_fwd <= sat_diff_bwd {
+        (1i32, sat_diff_fwd)
+    } else {
+        (-1i32, sat_diff_bwd)
+    };
+
+    let mut cur_plane = src_plane;
+    for _ in 0..plane_steps {
+        cur_plane = ((cur_plane as i32 + plane_dir + num_planes as i32) % num_planes as i32) as usize;
+        path.push((cur_plane, src_sat));
+    }
+
+    let mut cur_sat = src_sat;
+    for _ in 0..sat_steps {
+        cur_sat = ((cur_sat as i32 + sat_dir + sats_per_plane as i32) % sats_per_plane as i32) as usize;
+        path.push((dst_plane, cur_sat));
+    }
+
+    path
+}
+
+fn compute_shortest_path(
+    src_plane: usize, src_sat: usize,
+    dst_plane: usize, dst_sat: usize,
+    num_planes: usize, sats_per_plane: usize,
+) -> Vec<(usize, usize)> {
+    let mut path = vec![(src_plane, src_sat)];
+
+    let plane_diff_fwd = (dst_plane + num_planes - src_plane) % num_planes;
+    let plane_diff_bwd = (src_plane + num_planes - dst_plane) % num_planes;
+    let (plane_dir, plane_steps) = if plane_diff_fwd <= plane_diff_bwd {
+        (1i32, plane_diff_fwd)
+    } else {
+        (-1i32, plane_diff_bwd)
+    };
+
+    let sat_diff_fwd = (dst_sat + sats_per_plane - src_sat) % sats_per_plane;
+    let sat_diff_bwd = (src_sat + sats_per_plane - dst_sat) % sats_per_plane;
+    let (sat_dir, sat_steps) = if sat_diff_fwd <= sat_diff_bwd {
+        (1i32, sat_diff_fwd)
+    } else {
+        (-1i32, sat_diff_bwd)
+    };
+
+    let mut cur_plane = src_plane;
+    let mut cur_sat = src_sat;
+    for _ in 0..sat_steps {
+        cur_sat = ((cur_sat as i32 + sat_dir + sats_per_plane as i32) % sats_per_plane as i32) as usize;
+        path.push((cur_plane, cur_sat));
+    }
+
+    for _ in 0..plane_steps {
+        cur_plane = ((cur_plane as i32 + plane_dir + num_planes as i32) % num_planes as i32) as usize;
+        path.push((cur_plane, dst_sat));
+    }
+
+    path
+}
+
+fn draw_routing_path(
+    plot_ui: &mut egui_plot::PlotUi,
+    path: &[(usize, usize)],
+    positions: &[SatelliteState],
+    rotation: &Matrix3<f64>,
+    color: egui::Color32,
+    width: f32,
+    hide_behind_earth: bool,
+    earth_r_sq: f64,
+) {
+    if path.len() < 2 {
+        return;
+    }
+
+    for i in 0..(path.len() - 1) {
+        let (plane1, sat1) = path[i];
+        let (plane2, sat2) = path[i + 1];
+
+        let pos1 = positions.iter().find(|s| s.plane == plane1 && s.sat_index == sat1);
+        let pos2 = positions.iter().find(|s| s.plane == plane2 && s.sat_index == sat2);
+
+        if let (Some(p1), Some(p2)) = (pos1, pos2) {
+            let (rx1, ry1, rz1) = rotate_point_matrix(p1.x, p1.y, p1.z, rotation);
+            let (rx2, ry2, rz2) = rotate_point_matrix(p2.x, p2.y, p2.z, rotation);
+
+            let visible1 = rz1 >= 0.0 || (rx1 * rx1 + ry1 * ry1) >= earth_r_sq;
+            let visible2 = rz2 >= 0.0 || (rx2 * rx2 + ry2 * ry2) >= earth_r_sq;
+
+            if hide_behind_earth && !visible1 && !visible2 {
+                continue;
+            }
+
+            let line_color = if visible1 && visible2 {
+                color
+            } else {
+                egui::Color32::from_rgba_unmultiplied(
+                    color.r() / 2, color.g() / 2, color.b() / 2, 150,
+                )
+            };
+
+            plot_ui.line(
+                Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
+                    .color(line_color)
+                    .width(width),
+            );
+        }
+    }
+}
+
 fn draw_3d_view(
     ui: &mut egui::Ui,
     id: &str,
@@ -1339,6 +1489,9 @@ fn draw_3d_view(
     pending_cameras: &mut Vec<SatelliteCamera>,
     camera_id_counter: &mut usize,
     satellite_cameras: &mut [SatelliteCamera],
+    show_routing_paths: bool,
+    show_manhattan_path: bool,
+    show_shortest_path: bool,
 ) -> (Matrix3<f64>, f64) {
     let max_orbit_radius = constellations.iter()
         .map(|(c, _, _)| EARTH_RADIUS_KM + c.altitude_km)
@@ -1574,8 +1727,12 @@ fn draw_3d_view(
         }
 
         if show_links {
-            let link_color = egui::Color32::from_rgb(200, 200, 200);
-            let link_dim = egui::Color32::from_rgba_unmultiplied(80, 80, 100, 100);
+            let base_link_color = if show_routing_paths {
+                egui::Color32::from_rgb(80, 80, 80)
+            } else {
+                egui::Color32::from_rgb(200, 200, 200)
+            };
+            let link_dim = egui::Color32::from_rgba_unmultiplied(50, 50, 60, 80);
             for (_, positions, _) in constellations {
                 for sat in positions {
                     if let Some(neighbor_idx) = sat.neighbor_idx {
@@ -1588,12 +1745,61 @@ fn draw_3d_view(
                         if hide_behind_earth && !both_visible {
                             continue;
                         }
-                        let color = if both_visible { link_color } else { link_dim };
+                        let color = if both_visible { base_link_color } else { link_dim };
                         plot_ui.line(
                             Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
                                 .color(color)
                                 .width(1.0),
                         );
+                    }
+                }
+            }
+        }
+
+        if show_routing_paths && !satellite_cameras.is_empty() {
+            let manhattan_color = egui::Color32::from_rgb(255, 100, 100);
+            let shortest_color = egui::Color32::from_rgb(100, 255, 100);
+
+            for (cidx, (constellation, positions, _)) in constellations.iter().enumerate() {
+                let tracked: Vec<_> = satellite_cameras.iter()
+                    .filter(|c| c.constellation_idx == cidx)
+                    .collect();
+
+                if tracked.len() < 2 {
+                    continue;
+                }
+
+                let num_planes = constellation.num_planes;
+                let sats_per_plane = constellation.sats_per_plane();
+
+                for i in 0..tracked.len() {
+                    for j in (i + 1)..tracked.len() {
+                        let src = tracked[i];
+                        let dst = tracked[j];
+
+                        if show_manhattan_path {
+                            let path = compute_manhattan_path(
+                                src.plane, src.sat_index,
+                                dst.plane, dst.sat_index,
+                                num_planes, sats_per_plane,
+                            );
+                            draw_routing_path(
+                                plot_ui, &path, positions, &rotation,
+                                manhattan_color, 2.5, hide_behind_earth, earth_r_sq,
+                            );
+                        }
+
+                        if show_shortest_path {
+                            let path = compute_shortest_path(
+                                src.plane, src.sat_index,
+                                dst.plane, dst.sat_index,
+                                num_planes, sats_per_plane,
+                            );
+                            draw_routing_path(
+                                plot_ui, &path, positions, &rotation,
+                                shortest_color, 2.0, hide_behind_earth, earth_r_sq,
+                            );
+                        }
                     }
                 }
             }
