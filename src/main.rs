@@ -388,6 +388,9 @@ struct App {
     show_links: bool,
     show_ground_track: bool,
     show_torus: bool,
+    show_axes: bool,
+    show_coverage: bool,
+    coverage_angle: f64,
     hide_behind_earth: bool,
     single_color_per_constellation: bool,
     menu_open: bool,
@@ -405,6 +408,7 @@ struct App {
     celestial_body: CelestialBody,
     texture_load_state: TextureLoadState,
     pending_body: Option<CelestialBody>,
+    dark_mode: bool,
 }
 
 impl Default for App {
@@ -425,6 +429,9 @@ impl Default for App {
             show_links: true,
             show_ground_track: false,
             show_torus: false,
+            show_axes: true,
+            show_coverage: false,
+            coverage_angle: 25.0,
             hide_behind_earth: true,
             single_color_per_constellation: false,
             menu_open: false,
@@ -442,6 +449,7 @@ impl Default for App {
             celestial_body: CelestialBody::Earth,
             texture_load_state: TextureLoadState::Loading,
             pending_body: Some(CelestialBody::Earth),
+            dark_mode: true,
         }
     }
 }
@@ -450,10 +458,15 @@ struct ConstellationTabViewer<'a> {
     time: f64,
     show_orbits: bool,
     show_links: bool,
+    show_axes: bool,
+    show_coverage: bool,
+    coverage_angle: f64,
     show_torus: bool,
     show_ground: bool,
     hide_behind_earth: bool,
     single_color: bool,
+    single_tab: bool,
+    dark_mode: bool,
     zoom: &'a mut f64,
     torus_zoom: &'a mut f64,
     vertical_split: &'a mut f32,
@@ -509,10 +522,28 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
 
                     ui.horizontal(|ui| {
                         ui.label("Alt:");
-                        let alt_resp = ui.add(egui::DragValue::new(&mut cons.altitude_km).range(200.0..=36000.0).suffix(" km"));
+                        let alt_resp = ui.add(egui::DragValue::new(&mut cons.altitude_km).range(100.0..=40000.0).suffix(" km"));
+                        if ui.small_button("LEO").clicked() {
+                            cons.altitude_km = 160.0;
+                            cons.preset = Preset::None;
+                        }
+                        if ui.small_button("MEO").clicked() {
+                            cons.altitude_km = 2000.0;
+                            cons.preset = Preset::None;
+                        }
+                        if ui.small_button("GEO").clicked() {
+                            cons.altitude_km = 36000.0;
+                            cons.preset = Preset::None;
+                        }
+                        if alt_resp.changed() {
+                            cons.preset = Preset::None;
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
                         ui.label("Inc:");
                         let inc_resp = ui.add(egui::DragValue::new(&mut cons.inclination).range(0.0..=180.0).suffix("°"));
-                        if alt_resp.changed() || inc_resp.changed() {
+                        if inc_resp.changed() {
                             cons.preset = Preset::None;
                         }
                     });
@@ -603,129 +634,187 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
             .collect();
 
         let available = ui.available_size();
-        let viz_width = available.x - 10.0;
-        let available_for_views = available.y - 20.0;
+        let use_horizontal = self.single_tab && self.show_torus && !self.show_ground;
 
-        let has_secondary = self.show_torus || self.show_ground;
-        let separator_height = if has_secondary { 8.0 } else { 0.0 };
+        if use_horizontal {
+            let half_width = (available.x - 15.0) / 2.0;
+            let view_height = available.y - 20.0;
+            let view_size = half_width.min(view_height);
 
-        let earth_height = if has_secondary {
-            (available_for_views - separator_height) * *self.vertical_split
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    let (rot, new_zoom) = draw_3d_view(
+                        ui,
+                        &tab.name,
+                        &constellations_data,
+                        self.show_orbits,
+                        self.show_axes,
+                        self.show_coverage,
+                        self.coverage_angle,
+                        *self.rotation,
+                        half_width,
+                        view_size,
+                        self.earth_handle,
+                        *self.zoom,
+                        self.sat_radius,
+                        self.show_links,
+                        self.hide_behind_earth,
+                        self.single_color,
+                        self.dark_mode,
+                    );
+                    *self.rotation = rot;
+                    *self.zoom = new_zoom;
+                });
+
+                ui.add_space(5.0);
+
+                ui.vertical(|ui| {
+                    let (trot, tzoom) = draw_torus(
+                        ui,
+                        &format!("torus_{}", tab.name),
+                        &constellations_data,
+                        self.time,
+                        *self.torus_rotation,
+                        half_width,
+                        view_size,
+                        self.sat_radius,
+                        self.show_links,
+                        self.single_color,
+                        *self.torus_zoom,
+                    );
+                    *self.torus_rotation = trot;
+                    *self.torus_zoom = tzoom;
+                });
+            });
         } else {
-            available_for_views
-        }.min(viz_width);
+            let viz_width = available.x - 10.0;
+            let available_for_views = available.y - 20.0;
 
-        let secondary_height = if has_secondary {
-            (available_for_views - separator_height) * (1.0 - *self.vertical_split)
-        } else {
-            0.0
-        };
+            let has_secondary = self.show_torus || self.show_ground;
+            let separator_height = if has_secondary { 8.0 } else { 0.0 };
 
-        let (rot, new_zoom) = draw_3d_view(
-            ui,
-            &tab.name,
-            &constellations_data,
-            self.show_orbits,
-            *self.rotation,
-            viz_width,
-            earth_height,
-            self.earth_handle,
-            *self.zoom,
-            self.sat_radius,
-            self.show_links,
-            self.hide_behind_earth,
-            self.single_color,
-        );
-        *self.rotation = rot;
-        *self.zoom = new_zoom;
+            let earth_height = if has_secondary {
+                (available_for_views - separator_height) * *self.vertical_split
+            } else {
+                available_for_views
+            }.min(viz_width);
 
-        if has_secondary {
-            let separator_rect = ui.available_rect_before_wrap();
-            let separator_rect = egui::Rect::from_min_size(
-                separator_rect.min,
-                egui::vec2(viz_width, separator_height),
-            );
-            let response = ui.allocate_rect(separator_rect, egui::Sense::drag());
+            let secondary_height = if has_secondary {
+                (available_for_views - separator_height) * (1.0 - *self.vertical_split)
+            } else {
+                0.0
+            };
 
-            ui.painter().rect_filled(
-                separator_rect,
-                0.0,
-                if response.hovered() || response.dragged() {
-                    egui::Color32::WHITE
-                } else {
-                    egui::Color32::from_rgb(200, 200, 200)
-                },
-            );
-            ui.painter().line_segment(
-                [separator_rect.center() - egui::vec2(20.0, 0.0),
-                 separator_rect.center() + egui::vec2(20.0, 0.0)],
-                egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 100, 100)),
-            );
-
-            if response.dragged() {
-                let delta = response.drag_delta().y / available_for_views;
-                *self.vertical_split = (*self.vertical_split + delta).clamp(0.2, 0.9);
-            }
-
-            if response.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
-            }
-        }
-
-        if self.show_torus && self.show_ground {
-            let torus_height = secondary_height * 0.6;
-            let (trot, tzoom) = draw_torus(
+            let (rot, new_zoom) = draw_3d_view(
                 ui,
-                &format!("torus_{}", tab.name),
+                &tab.name,
                 &constellations_data,
-                self.time,
-                *self.torus_rotation,
+                self.show_orbits,
+                self.show_axes,
+                self.show_coverage,
+                self.coverage_angle,
+                *self.rotation,
                 viz_width,
-                torus_height,
+                earth_height,
+                self.earth_handle,
+                *self.zoom,
                 self.sat_radius,
                 self.show_links,
+                self.hide_behind_earth,
                 self.single_color,
-                *self.torus_zoom,
+                self.dark_mode,
             );
-            *self.torus_rotation = trot;
-            *self.torus_zoom = tzoom;
+            *self.rotation = rot;
+            *self.zoom = new_zoom;
 
-            let ground_height = secondary_height * 0.4;
-            draw_ground_track(
-                ui,
-                &format!("ground_{}", tab.name),
-                &constellations_data,
-                viz_width,
-                ground_height,
-                self.sat_radius,
-                self.single_color,
-            );
-        } else if self.show_torus {
-            let (trot, tzoom) = draw_torus(
-                ui,
-                &format!("torus_{}", tab.name),
-                &constellations_data,
-                self.time,
-                *self.torus_rotation,
-                viz_width,
-                secondary_height,
-                self.sat_radius,
-                self.show_links,
-                self.single_color,
-                *self.torus_zoom,
-            );
-            *self.torus_rotation = trot;
-            *self.torus_zoom = tzoom;
-        } else if self.show_ground {
-            draw_ground_track(
-                ui,
-                &format!("ground_{}", tab.name),
-                &constellations_data,
-                viz_width,
-                secondary_height,
-                self.sat_radius,
-                self.single_color,
-            );
+            if has_secondary {
+                let separator_rect = ui.available_rect_before_wrap();
+                let separator_rect = egui::Rect::from_min_size(
+                    separator_rect.min,
+                    egui::vec2(viz_width, separator_height),
+                );
+                let response = ui.allocate_rect(separator_rect, egui::Sense::drag());
+
+                ui.painter().rect_filled(
+                    separator_rect,
+                    0.0,
+                    if response.hovered() || response.dragged() {
+                        egui::Color32::WHITE
+                    } else {
+                        egui::Color32::from_rgb(200, 200, 200)
+                    },
+                );
+                ui.painter().line_segment(
+                    [separator_rect.center() - egui::vec2(20.0, 0.0),
+                     separator_rect.center() + egui::vec2(20.0, 0.0)],
+                    egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 100, 100)),
+                );
+
+                if response.dragged() {
+                    let delta = response.drag_delta().y / available_for_views;
+                    *self.vertical_split = (*self.vertical_split + delta).clamp(0.2, 0.9);
+                }
+
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                }
+            }
+
+            if self.show_torus && self.show_ground {
+                let torus_height = secondary_height * 0.6;
+                let (trot, tzoom) = draw_torus(
+                    ui,
+                    &format!("torus_{}", tab.name),
+                    &constellations_data,
+                    self.time,
+                    *self.torus_rotation,
+                    viz_width,
+                    torus_height,
+                    self.sat_radius,
+                    self.show_links,
+                    self.single_color,
+                    *self.torus_zoom,
+                );
+                *self.torus_rotation = trot;
+                *self.torus_zoom = tzoom;
+
+                let ground_height = secondary_height * 0.4;
+                draw_ground_track(
+                    ui,
+                    &format!("ground_{}", tab.name),
+                    &constellations_data,
+                    viz_width,
+                    ground_height,
+                    self.sat_radius,
+                    self.single_color,
+                );
+            } else if self.show_torus {
+                let (trot, tzoom) = draw_torus(
+                    ui,
+                    &format!("torus_{}", tab.name),
+                    &constellations_data,
+                    self.time,
+                    *self.torus_rotation,
+                    viz_width,
+                    secondary_height,
+                    self.sat_radius,
+                    self.show_links,
+                    self.single_color,
+                    *self.torus_zoom,
+                );
+                *self.torus_rotation = trot;
+                *self.torus_zoom = tzoom;
+            } else if self.show_ground {
+                draw_ground_track(
+                    ui,
+                    &format!("ground_{}", tab.name),
+                    &constellations_data,
+                    viz_width,
+                    secondary_height,
+                    self.sat_radius,
+                    self.single_color,
+                );
+            }
         }
     }
 
@@ -764,9 +853,22 @@ impl App {
     }
 
     fn show_settings(&mut self, ui: &mut egui::Ui) {
+        ui.checkbox(&mut self.dark_mode, "Dark mode");
         ui.checkbox(&mut self.animate, "Animate");
         ui.checkbox(&mut self.show_orbits, "Show orbits");
         ui.checkbox(&mut self.show_links, "Show links");
+        ui.checkbox(&mut self.show_axes, "Show axes");
+        ui.checkbox(&mut self.show_coverage, "Show coverage");
+        if self.show_coverage {
+            ui.horizontal(|ui| {
+                ui.label("Angle:");
+                ui.add(egui::DragValue::new(&mut self.coverage_angle)
+                    .range(0.5..=70.0)
+                    .speed(0.1)
+                    .max_decimals(1)
+                    .suffix("°"));
+            });
+        }
         ui.checkbox(&mut self.show_torus, "Show torus");
         ui.checkbox(&mut self.show_ground_track, "Show ground");
         ui.checkbox(&mut self.hide_behind_earth, "Hide behind Earth");
@@ -933,6 +1035,12 @@ async fn fetch_texture(url: &str) -> Result<EarthTexture, String> {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        ctx.set_visuals(if self.dark_mode {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        });
+
         if let Some(body) = self.pending_body.take() {
             self.switch_texture(body, ctx);
         }
@@ -1008,14 +1116,19 @@ impl eframe::App for App {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            let single_tab = self.dock_state.main_surface().num_tabs() == 1;
             let mut tab_viewer = ConstellationTabViewer {
                 time: self.time,
                 show_orbits: self.show_orbits,
                 show_links: self.show_links,
+                show_axes: self.show_axes,
+                show_coverage: self.show_coverage,
+                coverage_angle: self.coverage_angle,
                 show_torus: self.show_torus,
                 show_ground: self.show_ground_track,
                 hide_behind_earth: self.hide_behind_earth,
                 single_color: self.single_color_per_constellation,
+                single_tab,
                 zoom: &mut self.zoom,
                 torus_zoom: &mut self.torus_zoom,
                 vertical_split: &mut self.vertical_split,
@@ -1023,6 +1136,7 @@ impl eframe::App for App {
                 rotation: &mut self.rotation,
                 torus_rotation: &mut self.torus_rotation,
                 earth_handle: self.earth_image_handle.as_ref(),
+                dark_mode: self.dark_mode,
             };
 
             DockArea::new(&mut self.dock_state)
@@ -1038,6 +1152,9 @@ fn draw_3d_view(
     id: &str,
     constellations: &[(WalkerConstellation, Vec<SatelliteState>, usize)],
     show_orbits: bool,
+    show_axes: bool,
+    show_coverage: bool,
+    coverage_angle: f64,
     mut rotation: Matrix3<f64>,
     width: f32,
     height: f32,
@@ -1047,12 +1164,13 @@ fn draw_3d_view(
     show_links: bool,
     hide_behind_earth: bool,
     single_color: bool,
+    dark_mode: bool,
 ) -> (Matrix3<f64>, f64) {
     let max_orbit_radius = constellations.iter()
         .map(|(c, _, _)| EARTH_RADIUS_KM + c.altitude_km)
-        .fold(0.0_f64, |a, b| a.max(b));
-    let axis_len = EARTH_RADIUS_KM * 1.1;
-    let label_offset = axis_len * 1.15;
+        .fold(EARTH_RADIUS_KM, |a, b| a.max(b));
+    let axis_len = max_orbit_radius * 1.05;
+    let label_offset = axis_len * 1.1;
     let margin = (max_orbit_radius.max(label_offset) * 1.08) / zoom;
 
     let plot = Plot::new(id)
@@ -1061,6 +1179,8 @@ fn draw_3d_view(
         .height(height)
         .show_axes(false)
         .show_grid(false)
+        .show_x(false)
+        .show_y(false)
         .allow_drag(false)
         .allow_zoom(false)
         .allow_scroll(false)
@@ -1155,46 +1275,96 @@ fn draw_3d_view(
             );
         }
 
-        let (ep_x, ep_y, _) = rotate_point_matrix(axis_len, 0.0, 0.0, &rotation);
-        let (ei_x, ei_y, _) = rotate_point_matrix(EARTH_RADIUS_KM, 0.0, 0.0, &rotation);
-        plot_ui.line(
-            Line::new(PlotPoints::new(vec![[ei_x, ei_y], [ep_x, ep_y]]))
-                .color(egui::Color32::from_rgb(255, 100, 100))
-                .width(1.5),
-        );
-        let (wn_x, wn_y, _) = rotate_point_matrix(-axis_len, 0.0, 0.0, &rotation);
-        let (wi_x, wi_y, _) = rotate_point_matrix(-EARTH_RADIUS_KM, 0.0, 0.0, &rotation);
-        plot_ui.line(
-            Line::new(PlotPoints::new(vec![[wn_x, wn_y], [wi_x, wi_y]]))
-                .color(egui::Color32::from_rgb(255, 100, 100))
-                .width(1.5),
-        );
+        if dark_mode {
+            let border_radius = EARTH_RADIUS_KM * 0.95;
+            let border_pts: PlotPoints = (0..=100)
+                .map(|i| {
+                    let theta = 2.0 * PI * i as f64 / 100.0;
+                    [border_radius * theta.cos(), border_radius * theta.sin()]
+                })
+                .collect();
+            plot_ui.line(Line::new(border_pts).color(egui::Color32::WHITE).width(1.0));
+        }
 
-        let (np_x, np_y, _) = rotate_point_matrix(0.0, axis_len, 0.0, &rotation);
-        let (ni_x, ni_y, _) = rotate_point_matrix(0.0, EARTH_RADIUS_KM, 0.0, &rotation);
-        plot_ui.line(
-            Line::new(PlotPoints::new(vec![[ni_x, ni_y], [np_x, np_y]]))
-                .color(egui::Color32::from_rgb(100, 100, 255))
-                .width(1.5),
-        );
-        let (sn_x, sn_y, _) = rotate_point_matrix(0.0, -axis_len, 0.0, &rotation);
-        let (si_x, si_y, _) = rotate_point_matrix(0.0, -EARTH_RADIUS_KM, 0.0, &rotation);
-        plot_ui.line(
-            Line::new(PlotPoints::new(vec![[sn_x, sn_y], [si_x, si_y]]))
-                .color(egui::Color32::from_rgb(100, 100, 255))
-                .width(1.5),
-        );
+        if show_coverage {
+            for (constellation, positions, color_offset) in constellations {
+                let orbit_radius = EARTH_RADIUS_KM + constellation.altitude_km;
+                let cone_half_angle = coverage_angle.to_radians();
+                let max_earth_angle = (EARTH_RADIUS_KM / orbit_radius).acos();
+                let earth_central_angle = (orbit_radius * cone_half_angle.sin() / EARTH_RADIUS_KM).asin();
+                let angular_radius = earth_central_angle.min(max_earth_angle);
+                for sat in positions {
+                    let lat = sat.lat.to_radians();
+                    let lon = sat.lon.to_radians();
 
-        let label_offset = axis_len * 1.15;
-        let (n_x, n_y, _) = rotate_point_matrix(0.0, label_offset, 0.0, &rotation);
-        let (s_x, s_y, _) = rotate_point_matrix(0.0, -label_offset, 0.0, &rotation);
-        let (e_x, e_y, _) = rotate_point_matrix(label_offset, 0.0, 0.0, &rotation);
-        let (w_x, w_y, _) = rotate_point_matrix(-label_offset, 0.0, 0.0, &rotation);
+                    let coverage_pts: Vec<[f64; 2]> = (0..=32)
+                        .filter_map(|i| {
+                            let angle = 2.0 * PI * i as f64 / 32.0;
 
-        plot_ui.text(Text::new(PlotPoint::new(n_x, n_y), "N").color(egui::Color32::BLACK));
-        plot_ui.text(Text::new(PlotPoint::new(s_x, s_y), "S").color(egui::Color32::BLACK));
-        plot_ui.text(Text::new(PlotPoint::new(e_x, e_y), "E").color(egui::Color32::BLACK));
-        plot_ui.text(Text::new(PlotPoint::new(w_x, w_y), "W").color(egui::Color32::BLACK));
+                            let clat = (lat.sin() * angular_radius.cos()
+                                + lat.cos() * angular_radius.sin() * angle.cos())
+                            .asin();
+                            let clon = lon
+                                + (angular_radius.sin() * angle.sin())
+                                    .atan2(lat.cos() * angular_radius.cos()
+                                        - lat.sin() * angular_radius.sin() * angle.cos());
+
+                            let x = EARTH_RADIUS_KM * clat.cos() * clon.cos();
+                            let y = EARTH_RADIUS_KM * clat.sin();
+                            let z = EARTH_RADIUS_KM * clat.cos() * clon.sin();
+
+                            let (rx, ry, rz) = rotate_point_matrix(x, y, z, &rotation);
+                            if rz >= 0.0 {
+                                Some([rx, ry])
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    if coverage_pts.len() >= 3 {
+                        let color = plane_color(sat.plane + color_offset);
+                        let fill = egui::Color32::from_rgba_unmultiplied(
+                            color.r(), color.g(), color.b(), 60
+                        );
+                        plot_ui.polygon(
+                            Polygon::new(PlotPoints::new(coverage_pts))
+                                .fill_color(fill)
+                                .stroke(egui::Stroke::new(1.0, color)),
+                        );
+                    }
+                }
+            }
+        }
+
+        if show_axes {
+            let (ep_x, ep_y, _) = rotate_point_matrix(axis_len, 0.0, 0.0, &rotation);
+            let (wn_x, wn_y, _) = rotate_point_matrix(-axis_len, 0.0, 0.0, &rotation);
+            plot_ui.line(
+                Line::new(PlotPoints::new(vec![[wn_x, wn_y], [ep_x, ep_y]]))
+                    .color(egui::Color32::from_rgb(255, 100, 100))
+                    .width(1.5),
+            );
+
+            let (np_x, np_y, _) = rotate_point_matrix(0.0, axis_len, 0.0, &rotation);
+            let (sn_x, sn_y, _) = rotate_point_matrix(0.0, -axis_len, 0.0, &rotation);
+            plot_ui.line(
+                Line::new(PlotPoints::new(vec![[sn_x, sn_y], [np_x, np_y]]))
+                    .color(egui::Color32::from_rgb(100, 100, 255))
+                    .width(1.5),
+            );
+
+            let label_offset = axis_len * 1.15;
+            let (n_x, n_y, _) = rotate_point_matrix(0.0, label_offset, 0.0, &rotation);
+            let (s_x, s_y, _) = rotate_point_matrix(0.0, -label_offset, 0.0, &rotation);
+            let (e_x, e_y, _) = rotate_point_matrix(label_offset, 0.0, 0.0, &rotation);
+            let (w_x, w_y, _) = rotate_point_matrix(-label_offset, 0.0, 0.0, &rotation);
+
+            plot_ui.text(Text::new(PlotPoint::new(n_x, n_y), "N").color(egui::Color32::WHITE));
+            plot_ui.text(Text::new(PlotPoint::new(s_x, s_y), "S").color(egui::Color32::WHITE));
+            plot_ui.text(Text::new(PlotPoint::new(e_x, e_y), "E").color(egui::Color32::WHITE));
+            plot_ui.text(Text::new(PlotPoint::new(w_x, w_y), "W").color(egui::Color32::WHITE));
+        }
 
         if show_orbits {
             for (constellation, _, color_offset) in constellations {
@@ -1310,6 +1480,10 @@ fn draw_3d_view(
             let factor = 1.0 + scroll as f64 * 0.001;
             zoom = (zoom * factor).clamp(0.5, 3.0);
         }
+        if let Some(touch) = ui.input(|i| i.multi_touch()) {
+            let factor = touch.zoom_delta as f64;
+            zoom = (zoom * factor).clamp(0.5, 3.0);
+        }
     }
 
     (rotation, zoom)
@@ -1403,8 +1577,14 @@ fn draw_torus(
         };
 
         let ratio = avg_inter_plane_dist / intra_plane_dist;
-        let minor = 1.0;
-        let major = minor * ratio * (sats_per_plane as f64 / constellation.num_planes as f64);
+
+        let inclination_rad = constellation.inclination_deg.to_radians();
+        let inclination_factor = inclination_rad.sin().abs().max(0.1);
+
+        let altitude_factor = orbit_radius / (EARTH_RADIUS_KM + 500.0);
+        let major = altitude_factor * ratio * (sats_per_plane as f64 / constellation.num_planes as f64);
+        let minor_base = altitude_factor * inclination_factor;
+        let minor = minor_base.max(major * inclination_factor);
 
         let scale = 2.0 / (major + minor).max(1.0);
         (major * scale, minor * scale)
@@ -1419,6 +1599,8 @@ fn draw_torus(
         .height(height)
         .show_axes(false)
         .show_grid(false)
+        .show_x(false)
+        .show_y(false)
         .allow_drag(false)
         .allow_zoom(false)
         .allow_scroll(false)
@@ -1560,6 +1742,10 @@ fn draw_torus(
         let scroll = ui.input(|i| i.raw_scroll_delta.y);
         if scroll != 0.0 {
             let factor = 1.0 + scroll as f64 * 0.001;
+            zoom = (zoom * factor).clamp(0.5, 3.0);
+        }
+        if let Some(touch) = ui.input(|i| i.multi_touch()) {
+            let factor = touch.zoom_delta as f64;
             zoom = (zoom * factor).clamp(0.5, 3.0);
         }
     }
