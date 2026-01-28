@@ -469,6 +469,7 @@ struct App {
     earth_rotation_speed: f64,
     earth_rotation_angle: f64,
     last_earth_rotation_angle: f64,
+    last_max_planet_radius: f64,
 }
 
 impl Default for App {
@@ -524,6 +525,7 @@ impl Default for App {
             earth_rotation_speed: 5.0,
             earth_rotation_angle: 0.0,
             last_earth_rotation_angle: 0.0,
+            last_max_planet_radius: CelestialBody::Earth.radius_km(),
         }
     }
 }
@@ -1083,7 +1085,7 @@ impl App {
 
         ui.horizontal(|ui| {
             ui.label("Zoom:");
-            ui.add(egui::Slider::new(&mut self.zoom, 0.5..=3.0).logarithmic(true));
+            ui.add(egui::Slider::new(&mut self.zoom, 0.05..=3.0).logarithmic(true));
         });
 
         ui.horizontal(|ui| {
@@ -1223,8 +1225,20 @@ impl eframe::App for App {
         let bodies_needed: Vec<CelestialBody> = self.dock_state.main_surface().tabs()
             .map(|tab| tab.celestial_body)
             .collect();
-        for body in bodies_needed {
-            self.load_texture_for_body(body, ctx);
+        for body in &bodies_needed {
+            self.load_texture_for_body(*body, ctx);
+        }
+
+        let earth_radius = CelestialBody::Earth.radius_km();
+        let max_planet_radius = bodies_needed.iter()
+            .map(|b| b.radius_km())
+            .fold(earth_radius, |a, b| a.max(b));
+        if max_planet_radius > self.last_max_planet_radius {
+            let ideal_zoom = earth_radius / max_planet_radius;
+            self.zoom = ideal_zoom.clamp(0.05, 1.0);
+            self.last_max_planet_radius = max_planet_radius;
+        } else if max_planet_radius < self.last_max_planet_radius {
+            self.last_max_planet_radius = max_planet_radius;
         }
 
         if self.animate {
@@ -1268,14 +1282,16 @@ impl eframe::App for App {
             );
             let combined = self.rotation * earth_rot;
 
-            for (body, texture) in &self.planet_textures {
-                let image = texture.render_sphere(self.earth_resolution, &combined);
-                let handle = ctx.load_texture(
-                    &format!("planet_{:?}", body),
-                    image,
-                    egui::TextureOptions::LINEAR,
-                );
-                self.planet_image_handles.insert(*body, handle);
+            for body in &bodies_needed {
+                if let Some(texture) = self.planet_textures.get(body) {
+                    let image = texture.render_sphere(self.earth_resolution, &combined);
+                    let handle = ctx.load_texture(
+                        &format!("planet_{:?}", body),
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    self.planet_image_handles.insert(*body, handle);
+                }
             }
             self.last_rotation = Some(self.rotation);
             self.last_resolution = self.earth_resolution;
@@ -1706,12 +1722,14 @@ fn draw_3d_view(
     show_shortest_path: bool,
     planet_radius: f64,
 ) -> (Matrix3<f64>, f64) {
-    let max_orbit_radius = constellations.iter()
-        .map(|(c, _, _)| planet_radius + c.altitude_km)
-        .fold(planet_radius, |a, b| a.max(b));
-    let axis_len = max_orbit_radius * 1.05;
+    let earth_radius = CelestialBody::Earth.radius_km();
+    let max_altitude = constellations.iter()
+        .map(|(c, _, _)| c.altitude_km)
+        .fold(550.0_f64, |a, b| a.max(b));
+    let earth_reference = earth_radius + max_altitude;
+    let axis_len = earth_reference * 1.05;
     let label_offset = axis_len * 1.1;
-    let margin = (max_orbit_radius.max(label_offset) * 1.08) / zoom;
+    let margin = (earth_reference.max(label_offset) * 1.08) / zoom;
 
     let plot = Plot::new(id)
         .data_aspect(1.0)
@@ -2204,11 +2222,11 @@ fn draw_3d_view(
         let scroll = ui.input(|i| i.raw_scroll_delta.y);
         if scroll != 0.0 {
             let factor = 1.0 + scroll as f64 * 0.001;
-            zoom = (zoom * factor).clamp(0.5, 3.0);
+            zoom = (zoom * factor).clamp(0.05, 3.0);
         }
         if let Some(touch) = ui.input(|i| i.multi_touch()) {
             let factor = touch.zoom_delta as f64;
-            zoom = (zoom * factor).clamp(0.5, 3.0);
+            zoom = (zoom * factor).clamp(0.05, 3.0);
         }
     }
 
@@ -2592,11 +2610,11 @@ fn draw_torus(
         let scroll = ui.input(|i| i.raw_scroll_delta.y);
         if scroll != 0.0 {
             let factor = 1.0 + scroll as f64 * 0.001;
-            zoom = (zoom * factor).clamp(0.5, 3.0);
+            zoom = (zoom * factor).clamp(0.05, 3.0);
         }
         if let Some(touch) = ui.input(|i| i.multi_touch()) {
             let factor = touch.zoom_delta as f64;
-            zoom = (zoom * factor).clamp(0.5, 3.0);
+            zoom = (zoom * factor).clamp(0.05, 3.0);
         }
     }
 
