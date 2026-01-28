@@ -71,6 +71,9 @@ const EARTH_RADIUS_KM: f64 = 6371.0;
 const MU_EARTH: f64 = 398600.4418;
 const EARTH_TEXTURE_BYTES: &[u8] = include_bytes!("../earth.jpg");
 
+const COLOR_ASCENDING: egui::Color32 = egui::Color32::from_rgb(200, 120, 50);
+const COLOR_DESCENDING: egui::Color32 = egui::Color32::from_rgb(50, 100, 180);
+
 fn orbital_period(altitude_km: f64) -> f64 {
     let orbit_radius = EARTH_RADIUS_KM + altitude_km;
     2.0 * PI * (orbit_radius.powi(3) / MU_EARTH).sqrt()
@@ -196,8 +199,7 @@ impl WalkerConstellation {
 
             for sat in 0..sats_per_plane {
                 let true_anomaly = sat_step * sat as f64 + mean_motion * time;
-                let normalized_anomaly = true_anomaly.rem_euclid(2.0 * PI);
-                let ascending = normalized_anomaly < PI;
+                let ascending = true_anomaly.cos() > 0.0;
 
                 let x_orbital = orbit_radius * true_anomaly.cos();
                 let y_orbital = orbit_radius * true_anomaly.sin();
@@ -1401,15 +1403,24 @@ fn compute_manhattan_path(
     src_plane: usize, src_sat: usize,
     dst_plane: usize, dst_sat: usize,
     num_planes: usize, sats_per_plane: usize,
+    is_star: bool,
 ) -> Vec<(usize, usize)> {
     let mut path = vec![(src_plane, src_sat)];
 
-    let plane_diff_fwd = (dst_plane + num_planes - src_plane) % num_planes;
-    let plane_diff_bwd = (src_plane + num_planes - dst_plane) % num_planes;
-    let (plane_dir, plane_steps) = if plane_diff_fwd <= plane_diff_bwd {
-        (1i32, plane_diff_fwd)
+    let (plane_dir, plane_steps) = if is_star {
+        if dst_plane >= src_plane {
+            (1i32, dst_plane - src_plane)
+        } else {
+            (-1i32, src_plane - dst_plane)
+        }
     } else {
-        (-1i32, plane_diff_bwd)
+        let plane_diff_fwd = (dst_plane + num_planes - src_plane) % num_planes;
+        let plane_diff_bwd = (src_plane + num_planes - dst_plane) % num_planes;
+        if plane_diff_fwd <= plane_diff_bwd {
+            (1i32, plane_diff_fwd)
+        } else {
+            (-1i32, plane_diff_bwd)
+        }
     };
 
     let sat_diff_fwd = (dst_sat + sats_per_plane - src_sat) % sats_per_plane;
@@ -1440,15 +1451,24 @@ fn compute_shortest_path(
     dst_plane: usize, dst_sat: usize,
     num_planes: usize, sats_per_plane: usize,
     positions: &[SatelliteState],
+    is_star: bool,
 ) -> Vec<(usize, usize)> {
     let mut path = vec![(src_plane, src_sat)];
 
-    let plane_diff_fwd = (dst_plane + num_planes - src_plane) % num_planes;
-    let plane_diff_bwd = (src_plane + num_planes - dst_plane) % num_planes;
-    let (plane_dir, mut plane_steps_remaining) = if plane_diff_fwd <= plane_diff_bwd {
-        (1i32, plane_diff_fwd)
+    let (plane_dir, mut plane_steps_remaining) = if is_star {
+        if dst_plane >= src_plane {
+            (1i32, dst_plane - src_plane)
+        } else {
+            (-1i32, src_plane - dst_plane)
+        }
     } else {
-        (-1i32, plane_diff_bwd)
+        let plane_diff_fwd = (dst_plane + num_planes - src_plane) % num_planes;
+        let plane_diff_bwd = (src_plane + num_planes - dst_plane) % num_planes;
+        if plane_diff_fwd <= plane_diff_bwd {
+            (1i32, plane_diff_fwd)
+        } else {
+            (-1i32, plane_diff_bwd)
+        }
     };
 
     let sat_diff_fwd = (dst_sat + sats_per_plane - src_sat) % sats_per_plane;
@@ -1879,16 +1899,42 @@ fn draw_3d_view(
                 let num_planes = constellation.num_planes;
                 let sats_per_plane = constellation.sats_per_plane();
 
+                let is_star = constellation.walker_type == WalkerType::Star;
+
                 for i in 0..tracked.len() {
                     for j in (i + 1)..tracked.len() {
                         let src = tracked[i];
                         let dst = tracked[j];
+
+                        let src_sat = positions.iter().find(|s| s.plane == src.plane && s.sat_index == src.sat_index);
+                        let dst_sat = positions.iter().find(|s| s.plane == dst.plane && s.sat_index == dst.sat_index);
+
+                        let can_route = match (src_sat, dst_sat) {
+                            (Some(s), Some(d)) => {
+                                if s.ascending != d.ascending {
+                                    false
+                                } else if is_star {
+                                    let plane_diff_fwd = (dst.plane + num_planes - src.plane) % num_planes;
+                                    let plane_diff_bwd = (src.plane + num_planes - dst.plane) % num_planes;
+                                    let crosses_seam = plane_diff_fwd > num_planes / 2 && plane_diff_bwd > num_planes / 2;
+                                    !crosses_seam
+                                } else {
+                                    true
+                                }
+                            }
+                            _ => false,
+                        };
+
+                        if !can_route {
+                            continue;
+                        }
 
                         if show_manhattan_path {
                             let path = compute_manhattan_path(
                                 src.plane, src.sat_index,
                                 dst.plane, dst.sat_index,
                                 num_planes, sats_per_plane,
+                                is_star,
                             );
                             draw_routing_path(
                                 plot_ui, &path, positions, &rotation,
@@ -1902,6 +1948,7 @@ fn draw_3d_view(
                                 dst.plane, dst.sat_index,
                                 num_planes, sats_per_plane,
                                 positions,
+                                is_star,
                             );
                             draw_routing_path(
                                 plot_ui, &path, positions, &rotation,
@@ -1921,8 +1968,16 @@ fn draw_3d_view(
                     let is_tracked = satellite_cameras.iter().any(|c|
                         c.constellation_idx == cidx && c.plane == sat.plane && c.sat_index == sat.sat_index
                     );
-                    let color = if show_routing_paths && !is_tracked {
-                        egui::Color32::from_rgb(100, 100, 100)
+                    let color = if show_routing_paths {
+                        if is_tracked {
+                            if sat.ascending { COLOR_ASCENDING } else { COLOR_DESCENDING }
+                        } else {
+                            if sat.ascending {
+                                egui::Color32::from_rgb(120, 80, 40)
+                            } else {
+                                egui::Color32::from_rgb(40, 60, 100)
+                            }
+                        }
                     } else {
                         base_color
                     };
@@ -2311,8 +2366,16 @@ fn draw_torus(
                     let is_tracked = satellite_cameras.iter().any(|c|
                         c.constellation_idx == cidx && c.plane == sat.plane && c.sat_index == sat.sat_index
                     );
-                    let color = if show_routing_paths && !is_tracked {
-                        egui::Color32::from_rgb(100, 100, 100)
+                    let color = if show_routing_paths {
+                        if is_tracked {
+                            if sat.ascending { COLOR_ASCENDING } else { COLOR_DESCENDING }
+                        } else {
+                            if sat.ascending {
+                                egui::Color32::from_rgb(120, 80, 40)
+                            } else {
+                                egui::Color32::from_rgb(40, 60, 100)
+                            }
+                        }
                     } else {
                         base_color
                     };
@@ -2350,17 +2413,43 @@ fn draw_torus(
                 if tracked.len() >= 2 {
                     let manhattan_color = egui::Color32::from_rgb(255, 100, 100);
                     let shortest_color = egui::Color32::from_rgb(100, 255, 100);
+                    let is_star = constellation.walker_type == WalkerType::Star;
+                    let num_planes = constellation.num_planes;
 
                     for i in 0..tracked.len() {
                         for j in (i + 1)..tracked.len() {
                             let src = tracked[i];
                             let dst = tracked[j];
 
+                            let src_sat = positions.iter().find(|s| s.plane == src.plane && s.sat_index == src.sat_index);
+                            let dst_sat = positions.iter().find(|s| s.plane == dst.plane && s.sat_index == dst.sat_index);
+
+                            let can_route = match (src_sat, dst_sat) {
+                                (Some(s), Some(d)) => {
+                                    if s.ascending != d.ascending {
+                                        false
+                                    } else if is_star {
+                                        let plane_diff_fwd = (dst.plane + num_planes - src.plane) % num_planes;
+                                        let plane_diff_bwd = (src.plane + num_planes - dst.plane) % num_planes;
+                                        let crosses_seam = plane_diff_fwd > num_planes / 2 && plane_diff_bwd > num_planes / 2;
+                                        !crosses_seam
+                                    } else {
+                                        true
+                                    }
+                                }
+                                _ => false,
+                            };
+
+                            if !can_route {
+                                continue;
+                            }
+
                             if show_manhattan_path {
                                 let path = compute_manhattan_path(
                                     src.plane, src.sat_index,
                                     dst.plane, dst.sat_index,
-                                    constellation.num_planes, sats_per_plane,
+                                    num_planes, sats_per_plane,
+                                    is_star,
                                 );
                                 for k in 0..(path.len() - 1) {
                                     let (p1, s1) = path[k];
@@ -2379,8 +2468,9 @@ fn draw_torus(
                                 let path = compute_shortest_path(
                                     src.plane, src.sat_index,
                                     dst.plane, dst.sat_index,
-                                    constellation.num_planes, sats_per_plane,
+                                    num_planes, sats_per_plane,
                                     positions,
+                                    is_star,
                                 );
                                 for k in 0..(path.len() - 1) {
                                     let (p1, s1) = path[k];
