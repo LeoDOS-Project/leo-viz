@@ -68,7 +68,13 @@ enum TextureLoadState {
 }
 
 const EARTH_RADIUS_KM: f64 = 6371.0;
+const MU_EARTH: f64 = 398600.4418;
 const EARTH_TEXTURE_BYTES: &[u8] = include_bytes!("../earth.jpg");
+
+fn orbital_period(altitude_km: f64) -> f64 {
+    let orbit_radius = EARTH_RADIUS_KM + altitude_km;
+    2.0 * PI * (orbit_radius.powi(3) / MU_EARTH).sqrt()
+}
 
 struct EarthTexture {
     width: u32,
@@ -443,7 +449,7 @@ impl Default for App {
             camera_id_counter: 0,
             tab_counter: 1,
             time: 0.0,
-            speed: 1.0,
+            speed: 0.5,
             animate: true,
             show_orbits: true,
             show_links: true,
@@ -930,6 +936,33 @@ impl App {
     fn show_settings(&mut self, ui: &mut egui::Ui) {
         ui.checkbox(&mut self.dark_mode, "Dark mode");
         ui.checkbox(&mut self.animate, "Animate");
+
+        let altitude = self.dock_state.main_surface().tabs()
+            .next()
+            .and_then(|tab| tab.constellations.first())
+            .map(|c| c.altitude_km)
+            .unwrap_or(550.0);
+        let period = orbital_period(altitude);
+
+        let current_in_orbit = self.time % period;
+        let total_minutes = (period / 60.0) as i32;
+
+        ui.horizontal(|ui| {
+            ui.label("Time:");
+            let mut current_minutes = current_in_orbit / 60.0;
+            let response = ui.add(
+                egui::DragValue::new(&mut current_minutes)
+                    .range(0.0..=(period / 60.0))
+                    .speed(0.05)
+                    .max_decimals(1)
+            );
+            if response.changed() {
+                let new_time = current_minutes * 60.0;
+                self.time = self.time - current_in_orbit + new_time;
+            }
+            ui.label(format!("({} min)", total_minutes));
+        });
+
         ui.checkbox(&mut self.show_orbits, "Show orbits");
         ui.checkbox(&mut self.show_links, "Show links");
         ui.checkbox(&mut self.show_routing_paths, "Show routing paths");
