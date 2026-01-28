@@ -138,6 +138,7 @@ impl EarthTexture {
         egui::ColorImage {
             size: [size, size],
             pixels,
+            source_size: egui::Vec2::ZERO,
         }
     }
 }
@@ -1122,7 +1123,7 @@ impl eframe::App for App {
             self.last_resolution = self.earth_resolution;
         }
 
-        let is_mobile = ctx.screen_rect().width() < 600.0;
+        let is_mobile = ctx.input(|i| i.viewport().inner_rect.map_or(600.0, |r| r.width())) < 600.0;
 
         if !is_mobile {
             egui::SidePanel::left("global_controls").show(ctx, |ui| {
@@ -1301,6 +1302,7 @@ fn draw_satellite_camera(
     let image = egui::ColorImage {
         size: [img_size, img_size],
         pixels,
+        source_size: egui::Vec2::ZERO,
     };
     let texture = ui.ctx().load_texture(
         format!("sat_cam_tex_{}", camera_id),
@@ -1382,7 +1384,7 @@ fn draw_3d_view(
                             behind_segment.push([rx, ry]);
                         } else if !behind_segment.is_empty() {
                             plot_ui.line(
-                                Line::new(PlotPoints::new(std::mem::take(&mut behind_segment)))
+                                Line::new("", PlotPoints::new(std::mem::take(&mut behind_segment)))
                                     .color(dim_color(color))
                                     .width(1.0),
                             );
@@ -1390,7 +1392,7 @@ fn draw_3d_view(
                     }
                     if !behind_segment.is_empty() {
                         plot_ui.line(
-                            Line::new(PlotPoints::new(behind_segment))
+                            Line::new("", PlotPoints::new(behind_segment))
                                 .color(dim_color(color))
                                 .width(1.0),
                         );
@@ -1418,7 +1420,7 @@ fn draw_3d_view(
                         })
                         .collect();
                     plot_ui.points(
-                        Points::new(pts)
+                        Points::new("", pts)
                             .color(dim_color(color))
                             .radius(sat_radius * 0.8)
                             .filled(true),
@@ -1430,6 +1432,7 @@ fn draw_3d_view(
         if let Some(tex) = earth_texture {
             let size = egui::Vec2::splat(EARTH_RADIUS_KM as f32 * 2.0);
             plot_ui.image(PlotImage::new(
+                "",
                 tex,
                 PlotPoint::new(0.0, 0.0),
                 size,
@@ -1442,7 +1445,7 @@ fn draw_3d_view(
                 })
                 .collect();
             plot_ui.polygon(
-                Polygon::new(earth_pts)
+                Polygon::new("", earth_pts)
                     .fill_color(egui::Color32::from_rgb(30, 60, 120))
                     .stroke(egui::Stroke::new(2.0, egui::Color32::from_rgb(70, 130, 180))),
             );
@@ -1456,7 +1459,7 @@ fn draw_3d_view(
                     [border_radius * theta.cos(), border_radius * theta.sin()]
                 })
                 .collect();
-            plot_ui.line(Line::new(border_pts).color(egui::Color32::WHITE).width(1.0));
+            plot_ui.line(Line::new("", border_pts).color(egui::Color32::WHITE).width(1.0));
         }
 
         if show_coverage {
@@ -1501,7 +1504,7 @@ fn draw_3d_view(
                             color.r(), color.g(), color.b(), 60
                         );
                         plot_ui.polygon(
-                            Polygon::new(PlotPoints::new(coverage_pts))
+                            Polygon::new("", PlotPoints::new(coverage_pts))
                                 .fill_color(fill)
                                 .stroke(egui::Stroke::new(1.0, color)),
                         );
@@ -1514,7 +1517,7 @@ fn draw_3d_view(
             let (ep_x, ep_y, _) = rotate_point_matrix(axis_len, 0.0, 0.0, &rotation);
             let (wn_x, wn_y, _) = rotate_point_matrix(-axis_len, 0.0, 0.0, &rotation);
             plot_ui.line(
-                Line::new(PlotPoints::new(vec![[wn_x, wn_y], [ep_x, ep_y]]))
+                Line::new("", PlotPoints::new(vec![[wn_x, wn_y], [ep_x, ep_y]]))
                     .color(egui::Color32::from_rgb(255, 100, 100))
                     .width(1.5),
             );
@@ -1522,7 +1525,7 @@ fn draw_3d_view(
             let (np_x, np_y, _) = rotate_point_matrix(0.0, axis_len, 0.0, &rotation);
             let (sn_x, sn_y, _) = rotate_point_matrix(0.0, -axis_len, 0.0, &rotation);
             plot_ui.line(
-                Line::new(PlotPoints::new(vec![[sn_x, sn_y], [np_x, np_y]]))
+                Line::new("", PlotPoints::new(vec![[sn_x, sn_y], [np_x, np_y]]))
                     .color(egui::Color32::from_rgb(100, 100, 255))
                     .width(1.5),
             );
@@ -1533,10 +1536,10 @@ fn draw_3d_view(
             let (e_x, e_y, _) = rotate_point_matrix(label_offset, 0.0, 0.0, &rotation);
             let (w_x, w_y, _) = rotate_point_matrix(-label_offset, 0.0, 0.0, &rotation);
 
-            plot_ui.text(Text::new(PlotPoint::new(n_x, n_y), "N").color(egui::Color32::WHITE));
-            plot_ui.text(Text::new(PlotPoint::new(s_x, s_y), "S").color(egui::Color32::WHITE));
-            plot_ui.text(Text::new(PlotPoint::new(e_x, e_y), "E").color(egui::Color32::WHITE));
-            plot_ui.text(Text::new(PlotPoint::new(w_x, w_y), "W").color(egui::Color32::WHITE));
+            plot_ui.text(Text::new("", PlotPoint::new(n_x, n_y), "N").color(egui::Color32::WHITE));
+            plot_ui.text(Text::new("", PlotPoint::new(s_x, s_y), "S").color(egui::Color32::WHITE));
+            plot_ui.text(Text::new("", PlotPoint::new(e_x, e_y), "E").color(egui::Color32::WHITE));
+            plot_ui.text(Text::new("", PlotPoint::new(w_x, w_y), "W").color(egui::Color32::WHITE));
         }
 
         if show_orbits {
@@ -1553,7 +1556,7 @@ fn draw_3d_view(
                             front_segment.push([rx, ry]);
                         } else if !front_segment.is_empty() {
                             plot_ui.line(
-                                Line::new(PlotPoints::new(std::mem::take(&mut front_segment)))
+                                Line::new("", PlotPoints::new(std::mem::take(&mut front_segment)))
                                     .color(color)
                                     .width(1.5),
                             );
@@ -1561,7 +1564,7 @@ fn draw_3d_view(
                     }
                     if !front_segment.is_empty() {
                         plot_ui.line(
-                            Line::new(PlotPoints::new(front_segment))
+                            Line::new("", PlotPoints::new(front_segment))
                                 .color(color)
                                 .width(1.5),
                         );
@@ -1587,7 +1590,7 @@ fn draw_3d_view(
                         }
                         let color = if both_visible { link_color } else { link_dim };
                         plot_ui.line(
-                            Line::new(PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
+                            Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
                                 .color(color)
                                 .width(1.0),
                         );
@@ -1625,14 +1628,14 @@ fn draw_3d_view(
                         .collect();
 
                     plot_ui.points(
-                        Points::new(back_pts)
+                        Points::new("", back_pts)
                             .color(dim_col)
                             .radius(sat_radius * 0.8)
                             .filled(true),
                     );
                 }
                 plot_ui.points(
-                    Points::new(front_pts)
+                    Points::new("", front_pts)
                         .color(color)
                         .radius(sat_radius)
                         .filled(true),
@@ -1773,7 +1776,7 @@ fn draw_ground_track(
                     .map(|s| [s.lon, s.lat])
                     .collect();
                 plot_ui.points(
-                    Points::new(pts)
+                    Points::new("", pts)
                         .color(color)
                         .radius(sat_radius)
                         .filled(true),
@@ -1782,12 +1785,12 @@ fn draw_ground_track(
         }
 
         plot_ui.line(
-            Line::new(PlotPoints::new(vec![[-180.0, 0.0], [180.0, 0.0]]))
+            Line::new("", PlotPoints::new(vec![[-180.0, 0.0], [180.0, 0.0]]))
                 .color(egui::Color32::DARK_GRAY)
                 .width(0.5),
         );
         plot_ui.line(
-            Line::new(PlotPoints::new(vec![[0.0, -90.0], [0.0, 90.0]]))
+            Line::new("", PlotPoints::new(vec![[0.0, -90.0], [0.0, 90.0]]))
                 .color(egui::Color32::DARK_GRAY)
                 .width(0.5),
         );
@@ -1917,7 +1920,7 @@ fn draw_torus(
                         front_segment.push([rx, ry]);
                         if !back_segment.is_empty() {
                             plot_ui.line(
-                                Line::new(PlotPoints::new(std::mem::take(&mut back_segment)))
+                                Line::new("", PlotPoints::new(std::mem::take(&mut back_segment)))
                                     .color(dim_col)
                                     .width(1.0),
                             );
@@ -1926,7 +1929,7 @@ fn draw_torus(
                         back_segment.push([rx, ry]);
                         if !front_segment.is_empty() {
                             plot_ui.line(
-                                Line::new(PlotPoints::new(std::mem::take(&mut front_segment)))
+                                Line::new("", PlotPoints::new(std::mem::take(&mut front_segment)))
                                     .color(color)
                                     .width(1.5),
                             );
@@ -1934,10 +1937,10 @@ fn draw_torus(
                     }
                 }
                 if !front_segment.is_empty() {
-                    plot_ui.line(Line::new(PlotPoints::new(front_segment)).color(color).width(1.5));
+                    plot_ui.line(Line::new("", PlotPoints::new(front_segment)).color(color).width(1.5));
                 }
                 if !back_segment.is_empty() {
-                    plot_ui.line(Line::new(PlotPoints::new(back_segment)).color(dim_col).width(1.0));
+                    plot_ui.line(Line::new("", PlotPoints::new(back_segment)).color(dim_col).width(1.0));
                 }
             }
 
@@ -1958,7 +1961,7 @@ fn draw_torus(
                         let facing2 = is_facing_camera(angle2, phase2);
                         let color = if facing1 && facing2 { link_color } else { link_dim };
                         plot_ui.line(
-                            Line::new(PlotPoints::new(vec![[x1, y1], [x2, y2]]))
+                            Line::new("", PlotPoints::new(vec![[x1, y1], [x2, y2]]))
                                 .color(color)
                                 .width(1.0),
                         );
@@ -1979,7 +1982,7 @@ fn draw_torus(
                     let facing = is_facing_camera(angle, phase);
                     let (c, r) = if facing { (color, sat_radius) } else { (dim_col, sat_radius * 0.8) };
                     plot_ui.points(
-                        Points::new(PlotPoints::new(vec![[x, y]]))
+                        Points::new("", PlotPoints::new(vec![[x, y]]))
                             .color(c)
                             .radius(r)
                             .filled(true),
