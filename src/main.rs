@@ -1377,8 +1377,40 @@ fn draw_torus(
     single_color: bool,
     mut zoom: f64,
 ) -> (Matrix3<f64>, f64) {
-    let major_radius = 2.0;
-    let minor_radius = 0.8;
+    let (major_radius, minor_radius) = if let Some((constellation, positions, _)) = constellations.first() {
+        let sats_per_plane = constellation.sats_per_plane();
+        let orbit_radius = EARTH_RADIUS_KM + constellation.altitude_km;
+
+        let intra_plane_dist = 2.0 * orbit_radius * (PI / sats_per_plane as f64).sin();
+
+        let mut total_link_dist = 0.0;
+        let mut link_count = 0;
+        for sat in positions {
+            if let Some(neighbor_idx) = sat.neighbor_idx {
+                let neighbor = &positions[neighbor_idx];
+                let dx = sat.x - neighbor.x;
+                let dy = sat.y - neighbor.y;
+                let dz = sat.z - neighbor.z;
+                total_link_dist += (dx*dx + dy*dy + dz*dz).sqrt();
+                link_count += 1;
+            }
+        }
+
+        let avg_inter_plane_dist = if link_count > 0 {
+            total_link_dist / link_count as f64
+        } else {
+            intra_plane_dist
+        };
+
+        let ratio = avg_inter_plane_dist / intra_plane_dist;
+        let minor = 1.0;
+        let major = minor * ratio * (sats_per_plane as f64 / constellation.num_planes as f64);
+
+        let scale = 2.0 / (major + minor).max(1.0);
+        (major * scale, minor * scale)
+    } else {
+        (2.0, 0.8)
+    };
 
     let margin = (major_radius + minor_radius) * 1.3 / zoom;
     let plot = Plot::new(id)
