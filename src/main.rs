@@ -2,13 +2,14 @@ use eframe::egui;
 use egui_dock::{DockArea, DockState, TabViewer};
 use egui_plot::{Line, Plot, PlotImage, PlotPoints, PlotPoint, Points, Polygon, Text};
 use nalgebra::{Matrix3, Vector3};
+use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::sync::Arc;
 
 #[cfg(target_arch = "wasm32")]
 use eframe::wasm_bindgen::JsCast;
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum CelestialBody {
     Earth,
     Moon,
@@ -57,6 +58,32 @@ impl CelestialBody {
         CelestialBody::Saturn,
         CelestialBody::Sun,
     ];
+
+    fn radius_km(&self) -> f64 {
+        match self {
+            CelestialBody::Earth => 6371.0,
+            CelestialBody::Moon => 1737.4,
+            CelestialBody::Mars => 3389.5,
+            CelestialBody::Mercury => 2439.7,
+            CelestialBody::Venus => 6051.8,
+            CelestialBody::Jupiter => 69911.0,
+            CelestialBody::Saturn => 58232.0,
+            CelestialBody::Sun => 696340.0,
+        }
+    }
+
+    fn mu(&self) -> f64 {
+        match self {
+            CelestialBody::Earth => 398600.4418,
+            CelestialBody::Moon => 4902.8,
+            CelestialBody::Mars => 42828.37,
+            CelestialBody::Mercury => 22032.0,
+            CelestialBody::Venus => 324859.0,
+            CelestialBody::Jupiter => 126686534.0,
+            CelestialBody::Saturn => 37931187.0,
+            CelestialBody::Sun => 132712440018.0,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -67,16 +94,14 @@ enum TextureLoadState {
     Failed(String),
 }
 
-const EARTH_RADIUS_KM: f64 = 6371.0;
-const MU_EARTH: f64 = 398600.4418;
 const EARTH_TEXTURE_BYTES: &[u8] = include_bytes!("../earth.jpg");
 
 const COLOR_ASCENDING: egui::Color32 = egui::Color32::from_rgb(200, 120, 50);
 const COLOR_DESCENDING: egui::Color32 = egui::Color32::from_rgb(50, 100, 180);
 
-fn orbital_period(altitude_km: f64) -> f64 {
-    let orbit_radius = EARTH_RADIUS_KM + altitude_km;
-    2.0 * PI * (orbit_radius.powi(3) / MU_EARTH).sqrt()
+fn orbital_period(altitude_km: f64, planet_radius: f64, planet_mu: f64) -> f64 {
+    let orbit_radius = planet_radius + altitude_km;
+    2.0 * PI * (orbit_radius.powi(3) / planet_mu).sqrt()
 }
 
 struct EarthTexture {
@@ -164,6 +189,8 @@ struct WalkerConstellation {
     num_planes: usize,
     altitude_km: f64,
     inclination_deg: f64,
+    planet_radius: f64,
+    planet_mu: f64,
 }
 
 impl WalkerConstellation {
@@ -181,8 +208,8 @@ impl WalkerConstellation {
     fn satellite_positions(&self, time: f64) -> Vec<SatelliteState> {
         let mut positions = Vec::with_capacity(self.total_sats);
         let sats_per_plane = self.sats_per_plane();
-        let orbit_radius = EARTH_RADIUS_KM + self.altitude_km;
-        let period = 2.0 * PI * (orbit_radius.powi(3) / 398600.4418_f64).sqrt();
+        let orbit_radius = self.planet_radius + self.altitude_km;
+        let period = 2.0 * PI * (orbit_radius.powi(3) / self.planet_mu).sqrt();
         let mean_motion = 2.0 * PI / period;
         let raan_spread = self.raan_spread();
         let inc = self.inclination_deg.to_radians();
@@ -248,7 +275,7 @@ impl WalkerConstellation {
     }
 
     fn orbit_points_3d(&self, plane: usize) -> Vec<(f64, f64, f64)> {
-        let orbit_radius = EARTH_RADIUS_KM + self.altitude_km;
+        let orbit_radius = self.planet_radius + self.altitude_km;
         let raan = (self.raan_spread() / self.num_planes as f64) * plane as f64;
         let inc = self.inclination_deg.to_radians();
         let inc_cos = inc.cos();
@@ -342,13 +369,15 @@ impl ConstellationConfig {
         self.sats_per_plane * self.num_planes
     }
 
-    fn constellation(&self) -> WalkerConstellation {
+    fn constellation(&self, planet_radius: f64, planet_mu: f64) -> WalkerConstellation {
         WalkerConstellation {
             walker_type: self.walker_type,
             total_sats: self.total_sats(),
             num_planes: self.num_planes,
             altitude_km: self.altitude_km,
             inclination_deg: self.inclination,
+            planet_radius,
+            planet_mu,
         }
     }
 
@@ -370,6 +399,7 @@ struct TabConfig {
     name: String,
     constellations: Vec<ConstellationConfig>,
     constellation_counter: usize,
+    celestial_body: CelestialBody,
 }
 
 impl TabConfig {
@@ -378,6 +408,7 @@ impl TabConfig {
             name,
             constellations: vec![ConstellationConfig::new(0)],
             constellation_counter: 1,
+            celestial_body: CelestialBody::Earth,
         }
     }
 
@@ -421,12 +452,11 @@ struct App {
     sat_radius: f32,
     rotation: Matrix3<f64>,
     torus_rotation: Matrix3<f64>,
-    earth_texture: Arc<EarthTexture>,
-    earth_image_handle: Option<egui::TextureHandle>,
+    planet_textures: HashMap<CelestialBody, Arc<EarthTexture>>,
+    planet_image_handles: HashMap<CelestialBody, egui::TextureHandle>,
     last_rotation: Option<Matrix3<f64>>,
     earth_resolution: usize,
     last_resolution: usize,
-    celestial_body: CelestialBody,
     texture_load_state: TextureLoadState,
     pending_body: Option<CelestialBody>,
     dark_mode: bool,
@@ -473,14 +503,17 @@ impl Default for App {
             sat_radius: 5.0,
             rotation: Matrix3::identity(),
             torus_rotation: torus_initial,
-            earth_texture: builtin_texture.clone(),
-            earth_image_handle: None,
+            planet_textures: {
+                let mut map = HashMap::new();
+                map.insert(CelestialBody::Earth, builtin_texture.clone());
+                map
+            },
+            planet_image_handles: HashMap::new(),
             last_rotation: None,
             earth_resolution: 512,
             last_resolution: 0,
-            celestial_body: CelestialBody::Earth,
-            texture_load_state: TextureLoadState::Loading,
-            pending_body: Some(CelestialBody::Earth),
+            texture_load_state: TextureLoadState::Loaded(builtin_texture),
+            pending_body: None,
             dark_mode: true,
             pending_cameras: Vec::new(),
             show_routing_paths: false,
@@ -521,7 +554,7 @@ struct ConstellationTabViewer<'a> {
     sat_radius: f32,
     rotation: &'a mut Matrix3<f64>,
     torus_rotation: &'a mut Matrix3<f64>,
-    earth_handle: Option<&'a egui::TextureHandle>,
+    planet_handles: &'a HashMap<CelestialBody, egui::TextureHandle>,
 }
 
 impl<'a> TabViewer for ConstellationTabViewer<'a> {
@@ -576,7 +609,7 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                             cons.preset = Preset::None;
                         }
                         if ui.small_button("MEO").clicked() {
-                            cons.altitude_km = 2000.0;
+                            cons.altitude_km = 20000.0;
                             cons.preset = Preset::None;
                         }
                         if ui.small_button("GEO").clicked() {
@@ -655,7 +688,7 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                         }
                     });
 
-                    let orbit_radius = EARTH_RADIUS_KM + cons.altitude_km;
+                    let orbit_radius = tab.celestial_body.radius_km() + cons.altitude_km;
                     let intra_plane_dist = orbit_radius * (2.0 * (1.0 - (2.0 * PI / cons.sats_per_plane as f64).cos())).sqrt();
                     let inc_rad = cons.inclination.to_radians();
                     let base_inter = orbit_radius * (2.0 * (1.0 - (2.0 * PI / cons.num_planes as f64).cos())).sqrt();
@@ -688,11 +721,33 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
             }
         }
 
+        ui.horizontal(|ui| {
+            ui.label("Planet:");
+            egui::ComboBox::from_id_salt(format!("planet_{}", tab.name))
+                .selected_text(tab.celestial_body.label())
+                .show_ui(ui, |ui| {
+                    for body in CelestialBody::ALL {
+                        ui.selectable_value(&mut tab.celestial_body, body, body.label());
+                    }
+                });
+
+            let planet_radius = tab.celestial_body.radius_km();
+            let mu = tab.celestial_body.mu();
+            for cons in &tab.constellations {
+                let orbit_radius_m = (planet_radius + cons.altitude_km) * 1000.0;
+                let velocity_ms = (mu * 1e9 / orbit_radius_m).sqrt();
+                let velocity_kmh = velocity_ms * 3.6;
+                ui.label(format!("{}: {:.0} km/h", cons.preset_name(), velocity_kmh));
+            }
+        });
+
         ui.separator();
 
+        let planet_radius = tab.celestial_body.radius_km();
+        let planet_mu = tab.celestial_body.mu();
         let constellations_data: Vec<_> = tab.constellations.iter()
             .map(|c| {
-                let wc = c.constellation();
+                let wc = c.constellation(planet_radius, planet_mu);
                 let pos = wc.satellite_positions(self.time);
                 (wc, pos, c.color_offset)
             })
@@ -719,7 +774,7 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                         *self.rotation,
                         half_width,
                         view_size,
-                        self.earth_handle,
+                        self.planet_handles.get(&tab.celestial_body),
                         *self.zoom,
                         self.sat_radius,
                         self.show_links,
@@ -733,6 +788,7 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                         self.show_routing_paths,
                         self.show_manhattan_path,
                         self.show_shortest_path,
+                        tab.celestial_body.radius_km(),
                     );
                     *self.rotation = rot;
                     *self.zoom = new_zoom;
@@ -757,6 +813,7 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                         self.show_routing_paths,
                         self.show_manhattan_path,
                         self.show_shortest_path,
+                        planet_radius,
                     );
                     *self.torus_rotation = trot;
                     *self.torus_zoom = tzoom;
@@ -792,7 +849,7 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                 *self.rotation,
                 viz_width,
                 earth_height,
-                self.earth_handle,
+                self.planet_handles.get(&tab.celestial_body),
                 *self.zoom,
                 self.sat_radius,
                 self.show_links,
@@ -806,6 +863,7 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                 self.show_routing_paths,
                 self.show_manhattan_path,
                 self.show_shortest_path,
+                tab.celestial_body.radius_km(),
             );
             *self.rotation = rot;
             *self.zoom = new_zoom;
@@ -861,6 +919,7 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                     self.show_routing_paths,
                     self.show_manhattan_path,
                     self.show_shortest_path,
+                    planet_radius,
                 );
                 *self.torus_rotation = trot;
                 *self.torus_zoom = tzoom;
@@ -892,6 +951,7 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                     self.show_routing_paths,
                     self.show_manhattan_path,
                     self.show_shortest_path,
+                    planet_radius,
                 );
                 *self.torus_rotation = trot;
                 *self.torus_zoom = tzoom;
@@ -947,12 +1007,15 @@ impl App {
         ui.checkbox(&mut self.dark_mode, "Dark mode");
         ui.checkbox(&mut self.animate, "Animate");
 
-        let altitude = self.dock_state.main_surface().tabs()
-            .next()
+        let first_tab = self.dock_state.main_surface().tabs().next();
+        let altitude = first_tab
             .and_then(|tab| tab.constellations.first())
             .map(|c| c.altitude_km)
             .unwrap_or(550.0);
-        let period = orbital_period(altitude);
+        let (planet_radius, planet_mu) = first_tab
+            .map(|tab| (tab.celestial_body.radius_km(), tab.celestial_body.mu()))
+            .unwrap_or((CelestialBody::Earth.radius_km(), CelestialBody::Earth.mu()));
+        let period = orbital_period(altitude, planet_radius, planet_mu);
 
         let current_in_orbit = self.time % period;
         let total_minutes = (period / 60.0) as i32;
@@ -1013,15 +1076,10 @@ impl App {
 
         ui.add_space(10.0);
 
-        let orbit_radius_m = (EARTH_RADIUS_KM + altitude) * 1000.0;
-        let velocity_ms = (MU_EARTH / orbit_radius_m).sqrt();
-        let velocity_kmh = velocity_ms * 3.6;
-
         ui.horizontal(|ui| {
             ui.label("Speed:");
             ui.add(egui::Slider::new(&mut self.speed, 0.1..=10.0).logarithmic(true));
         });
-        ui.label(format!("Satellite velocity: {:.0} km/h", velocity_kmh));
 
         ui.horizontal(|ui| {
             ui.label("Zoom:");
@@ -1032,31 +1090,6 @@ impl App {
             ui.label("Sat size:");
             ui.add(egui::Slider::new(&mut self.sat_radius, 1.0..=15.0));
         });
-
-        ui.add_space(10.0);
-
-        ui.horizontal(|ui| {
-            ui.label("Body:");
-            let current_label = match &self.texture_load_state {
-                TextureLoadState::Loading => format!("{} (loading...)", self.celestial_body.label()),
-                TextureLoadState::Failed(_) => format!("{} (failed)", self.celestial_body.label()),
-                _ => self.celestial_body.label().to_string(),
-            };
-            egui::ComboBox::from_id_salt("celestial_body")
-                .selected_text(current_label)
-                .show_ui(ui, |ui| {
-                    for body in CelestialBody::ALL {
-                        let is_selected = self.celestial_body == body;
-                        if ui.selectable_label(is_selected, body.label()).clicked() && !is_selected {
-                            self.pending_body = Some(body);
-                        }
-                    }
-                });
-        });
-
-        if let TextureLoadState::Failed(err) = &self.texture_load_state {
-            ui.colored_label(egui::Color32::RED, format!("Error: {}", err));
-        }
 
         ui.add_space(10.0);
 
@@ -1098,10 +1131,14 @@ impl App {
     }
 
     #[allow(unused_variables)]
-    fn switch_texture(&mut self, body: CelestialBody, ctx: &egui::Context) {
-        self.celestial_body = body;
+    fn load_texture_for_body(&mut self, body: CelestialBody, ctx: &egui::Context) {
+        if self.planet_textures.contains_key(&body) {
+            return;
+        }
+
         let filename = body.filename();
         self.texture_load_state = TextureLoadState::Loading;
+        self.pending_body = Some(body);
 
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -1109,9 +1146,9 @@ impl App {
                 Ok(bytes) => match EarthTexture::from_bytes(&bytes) {
                     Ok(texture) => {
                         let texture = Arc::new(texture);
-                        self.earth_texture = texture.clone();
+                        self.planet_textures.insert(body, texture.clone());
                         self.texture_load_state = TextureLoadState::Loaded(texture);
-                        self.last_rotation = None;
+                        self.planet_image_handles.remove(&body);
                     }
                     Err(e) => self.texture_load_state = TextureLoadState::Failed(e),
                 },
@@ -1183,8 +1220,11 @@ impl eframe::App for App {
             egui::Visuals::light()
         });
 
-        if let Some(body) = self.pending_body.take() {
-            self.switch_texture(body, ctx);
+        let bodies_needed: Vec<CelestialBody> = self.dock_state.main_surface().tabs()
+            .map(|tab| tab.celestial_body)
+            .collect();
+        for body in bodies_needed {
+            self.load_texture_for_body(body, ctx);
         }
 
         if self.animate {
@@ -1199,15 +1239,17 @@ impl eframe::App for App {
         #[cfg(target_arch = "wasm32")]
         TEXTURE_RESULT.with(|cell| {
             if let Some(result) = cell.borrow_mut().take() {
-                match result {
-                    Ok(texture) => {
-                        let texture = Arc::new(texture);
-                        self.earth_texture = texture.clone();
-                        self.texture_load_state = TextureLoadState::Loaded(texture);
-                        self.last_rotation = None;
-                    }
-                    Err(e) => {
-                        self.texture_load_state = TextureLoadState::Failed(e);
+                if let Some(body) = self.pending_body {
+                    match result {
+                        Ok(texture) => {
+                            let texture = Arc::new(texture);
+                            self.planet_textures.insert(body, texture.clone());
+                            self.texture_load_state = TextureLoadState::Loaded(texture);
+                            self.planet_image_handles.remove(&body);
+                        }
+                        Err(e) => {
+                            self.texture_load_state = TextureLoadState::Failed(e);
+                        }
                     }
                 }
             }
@@ -1216,19 +1258,25 @@ impl eframe::App for App {
         let rotation_changed = self.last_rotation.map_or(true, |r| r != self.rotation);
         let resolution_changed = self.last_resolution != self.earth_resolution;
         let earth_angle_changed = self.last_earth_rotation_angle != self.earth_rotation_angle;
-        if self.earth_image_handle.is_none() || rotation_changed || resolution_changed || earth_angle_changed {
+        let need_rerender = rotation_changed || resolution_changed || earth_angle_changed;
+
+        if need_rerender {
             let earth_rot = Matrix3::new(
                 self.earth_rotation_angle.cos(), 0.0, self.earth_rotation_angle.sin(),
                 0.0, 1.0, 0.0,
                 -self.earth_rotation_angle.sin(), 0.0, self.earth_rotation_angle.cos(),
             );
             let combined = self.rotation * earth_rot;
-            let earth_image = self.earth_texture.render_sphere(self.earth_resolution, &combined);
-            self.earth_image_handle = Some(ctx.load_texture(
-                "earth",
-                earth_image,
-                egui::TextureOptions::LINEAR,
-            ));
+
+            for (body, texture) in &self.planet_textures {
+                let image = texture.render_sphere(self.earth_resolution, &combined);
+                let handle = ctx.load_texture(
+                    &format!("planet_{:?}", body),
+                    image,
+                    egui::TextureOptions::LINEAR,
+                );
+                self.planet_image_handles.insert(*body, handle);
+            }
             self.last_rotation = Some(self.rotation);
             self.last_resolution = self.earth_resolution;
             self.last_earth_rotation_angle = self.earth_rotation_angle;
@@ -1291,7 +1339,7 @@ impl eframe::App for App {
                 sat_radius: self.sat_radius,
                 rotation: &mut self.rotation,
                 torus_rotation: &mut self.torus_rotation,
-                earth_handle: self.earth_image_handle.as_ref(),
+                planet_handles: &self.planet_image_handles,
                 dark_mode: self.dark_mode,
                 pending_cameras: &mut self.pending_cameras,
                 camera_id_counter: &mut self.camera_id_counter,
@@ -1318,30 +1366,35 @@ impl eframe::App for App {
                 let mut open = true;
 
                 let sat_data = all_tabs.first().and_then(|tab| {
+                    let pr = tab.celestial_body.radius_km();
+                    let pm = tab.celestial_body.mu();
+                    let texture = self.planet_textures.get(&tab.celestial_body);
                     tab.constellations.get(camera.constellation_idx).map(|cons| {
-                        let wc = cons.constellation();
+                        let wc = cons.constellation(pr, pm);
                         let positions = wc.satellite_positions(self.time);
                         positions.iter()
                             .find(|s| s.plane == camera.plane && s.sat_index == camera.sat_index)
-                            .map(|s| (s.lat, s.lon, cons.altitude_km))
+                            .map(|s| (s.lat, s.lon, cons.altitude_km, texture))
                     })
                 }).flatten();
 
-                if let Some((lat, lon, altitude_km)) = sat_data {
+                if let Some((lat, lon, altitude_km, texture)) = sat_data {
                     let win_response = egui::Window::new(&camera.label)
                         .id(egui::Id::new(format!("sat_cam_{}", camera.id)))
                         .open(&mut open)
                         .default_size([200.0, 220.0])
                         .show(ctx, |ui| {
-                            draw_satellite_camera(
-                                ui,
-                                camera.id,
-                                lat,
-                                lon,
-                                altitude_km,
-                                self.coverage_angle,
-                                &self.earth_texture,
-                            );
+                            if let Some(tex) = texture {
+                                draw_satellite_camera(
+                                    ui,
+                                    camera.id,
+                                    lat,
+                                    lon,
+                                    altitude_km,
+                                    self.coverage_angle,
+                                    tex,
+                                );
+                            }
                         });
 
                     if let (Some(screen_pos), Some(win_resp)) = (camera.screen_pos, win_response) {
@@ -1651,10 +1704,11 @@ fn draw_3d_view(
     show_routing_paths: bool,
     show_manhattan_path: bool,
     show_shortest_path: bool,
+    planet_radius: f64,
 ) -> (Matrix3<f64>, f64) {
     let max_orbit_radius = constellations.iter()
-        .map(|(c, _, _)| EARTH_RADIUS_KM + c.altitude_km)
-        .fold(EARTH_RADIUS_KM, |a, b| a.max(b));
+        .map(|(c, _, _)| planet_radius + c.altitude_km)
+        .fold(planet_radius, |a, b| a.max(b));
     let axis_len = max_orbit_radius * 1.05;
     let label_offset = axis_len * 1.1;
     let margin = (max_orbit_radius.max(label_offset) * 1.08) / zoom;
@@ -1679,7 +1733,7 @@ fn draw_3d_view(
             [margin, margin],
         ));
 
-        let visual_earth_r = EARTH_RADIUS_KM * 0.95;
+        let visual_earth_r = planet_radius * 0.95;
         let earth_r_sq = visual_earth_r * visual_earth_r;
 
         if show_orbits && !hide_behind_earth {
@@ -1742,7 +1796,7 @@ fn draw_3d_view(
         }
 
         if let Some(tex) = earth_texture {
-            let size = egui::Vec2::splat(EARTH_RADIUS_KM as f32 * 2.0);
+            let size = egui::Vec2::splat(planet_radius as f32 * 2.0);
             plot_ui.image(PlotImage::new(
                 "",
                 tex,
@@ -1753,7 +1807,7 @@ fn draw_3d_view(
             let earth_pts: PlotPoints = (0..=100)
                 .map(|i| {
                     let theta = 2.0 * PI * i as f64 / 100.0;
-                    [EARTH_RADIUS_KM * theta.cos(), EARTH_RADIUS_KM * theta.sin()]
+                    [planet_radius * theta.cos(), planet_radius * theta.sin()]
                 })
                 .collect();
             plot_ui.polygon(
@@ -1764,7 +1818,7 @@ fn draw_3d_view(
         }
 
         if dark_mode {
-            let border_radius = EARTH_RADIUS_KM * 0.95;
+            let border_radius = planet_radius * 0.95;
             let border_pts: PlotPoints = (0..=100)
                 .map(|i| {
                     let theta = 2.0 * PI * i as f64 / 100.0;
@@ -1776,10 +1830,10 @@ fn draw_3d_view(
 
         if show_coverage {
             for (constellation, positions, color_offset) in constellations {
-                let orbit_radius = EARTH_RADIUS_KM + constellation.altitude_km;
+                let orbit_radius = planet_radius + constellation.altitude_km;
                 let cone_half_angle = coverage_angle.to_radians();
-                let max_earth_angle = (EARTH_RADIUS_KM / orbit_radius).acos();
-                let earth_central_angle = (orbit_radius * cone_half_angle.sin() / EARTH_RADIUS_KM).asin();
+                let max_earth_angle = (planet_radius / orbit_radius).acos();
+                let earth_central_angle = (orbit_radius * cone_half_angle.sin() / planet_radius).asin();
                 let angular_radius = earth_central_angle.min(max_earth_angle);
                 for sat in positions {
                     let lat = sat.lat.to_radians();
@@ -1797,9 +1851,9 @@ fn draw_3d_view(
                                     .atan2(lat.cos() * angular_radius.cos()
                                         - lat.sin() * angular_radius.sin() * angle.cos());
 
-                            let x = EARTH_RADIUS_KM * clat.cos() * clon.cos();
-                            let y = EARTH_RADIUS_KM * clat.sin();
-                            let z = EARTH_RADIUS_KM * clat.cos() * clon.sin();
+                            let x = planet_radius * clat.cos() * clon.cos();
+                            let y = planet_radius * clat.sin();
+                            let z = planet_radius * clat.cos() * clon.sin();
 
                             let (rx, ry, rz) = rotate_point_matrix(x, y, z, &rotation);
                             if rz >= 0.0 {
@@ -2072,7 +2126,7 @@ fn draw_3d_view(
         'hover: for (_constellation, positions, color_offset) in constellations {
             for sat in positions {
                 let (rx, ry, rz) = rotate_point_matrix(sat.x, sat.y, sat.z, &rotation);
-                let earth_r_sq = (EARTH_RADIUS_KM * 0.95).powi(2) as f64;
+                let earth_r_sq = (planet_radius * 0.95).powi(2) as f64;
                 let visible = rz >= 0.0 || (rx * rx + ry * ry) >= earth_r_sq;
                 if !visible && hide_behind_earth {
                     continue;
@@ -2110,7 +2164,7 @@ fn draw_3d_view(
             'outer: for (cidx, (_constellation, positions, _color_offset)) in constellations.iter().enumerate() {
                 for sat in positions {
                     let (rx, ry, rz) = rotate_point_matrix(sat.x, sat.y, sat.z, &rotation);
-                    let earth_r_sq = (EARTH_RADIUS_KM * 0.95).powi(2) as f64;
+                    let earth_r_sq = (planet_radius * 0.95).powi(2) as f64;
                     let visible = rz >= 0.0 || (rx * rx + ry * ry) >= earth_r_sq;
                     if !visible && hide_behind_earth {
                         continue;
@@ -2226,10 +2280,11 @@ fn draw_torus(
     show_routing_paths: bool,
     show_manhattan_path: bool,
     show_shortest_path: bool,
+    planet_radius: f64,
 ) -> (Matrix3<f64>, f64) {
     let (major_radius, minor_radius) = if let Some((constellation, positions, _)) = constellations.first() {
         let sats_per_plane = constellation.sats_per_plane();
-        let orbit_radius = EARTH_RADIUS_KM + constellation.altitude_km;
+        let orbit_radius = planet_radius + constellation.altitude_km;
 
         let intra_plane_dist = 2.0 * orbit_radius * (PI / sats_per_plane as f64).sin();
 
@@ -2257,7 +2312,7 @@ fn draw_torus(
         let inclination_rad = constellation.inclination_deg.to_radians();
         let inclination_factor = inclination_rad.sin().abs().max(0.1);
 
-        let altitude_factor = orbit_radius / (EARTH_RADIUS_KM + 500.0);
+        let altitude_factor = orbit_radius / (planet_radius + 500.0);
         let major = altitude_factor * ratio * (sats_per_plane as f64 / constellation.num_planes as f64);
         let minor_base = altitude_factor * inclination_factor;
         let minor = minor_base.max(major * inclination_factor);
@@ -2307,8 +2362,8 @@ fn draw_torus(
 
         for (cidx, (constellation, positions, color_offset)) in constellations.iter().enumerate() {
             let sats_per_plane = constellation.total_sats / constellation.num_planes;
-            let orbit_radius = EARTH_RADIUS_KM + constellation.altitude_km;
-            let period = 2.0 * PI * (orbit_radius.powi(3) / 398600.4418_f64).sqrt();
+            let orbit_radius = constellation.planet_radius + constellation.altitude_km;
+            let period = 2.0 * PI * (orbit_radius.powi(3) / constellation.planet_mu).sqrt();
             let mean_motion = 2.0 * PI / period;
 
             let torus_pos = |plane: usize, sat_idx: usize| -> (f64, f64, f64) {
