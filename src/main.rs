@@ -1,4 +1,5 @@
 use eframe::egui;
+use egui_dock::{DockArea, DockState, TabViewer};
 use egui_plot::{Line, Plot, PlotImage, PlotPoints, PlotPoint, Points, Polygon, Text};
 use nalgebra::{Matrix3, Vector3};
 use std::f64::consts::PI;
@@ -6,6 +7,65 @@ use std::sync::Arc;
 
 #[cfg(target_arch = "wasm32")]
 use eframe::wasm_bindgen::JsCast;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum CelestialBody {
+    Earth,
+    Moon,
+    Mars,
+    Mercury,
+    Venus,
+    Jupiter,
+    Saturn,
+    Sun,
+}
+
+impl CelestialBody {
+    fn label(&self) -> &'static str {
+        match self {
+            CelestialBody::Earth => "Earth",
+            CelestialBody::Moon => "Moon",
+            CelestialBody::Mars => "Mars",
+            CelestialBody::Mercury => "Mercury",
+            CelestialBody::Venus => "Venus",
+            CelestialBody::Jupiter => "Jupiter",
+            CelestialBody::Saturn => "Saturn",
+            CelestialBody::Sun => "Sun",
+        }
+    }
+
+    fn filename(&self) -> &'static str {
+        match self {
+            CelestialBody::Earth => "textures/earth_2k.jpg",
+            CelestialBody::Moon => "textures/moon_2k.jpg",
+            CelestialBody::Mars => "textures/mars_2k.jpg",
+            CelestialBody::Mercury => "textures/mercury_2k.jpg",
+            CelestialBody::Venus => "textures/venus_2k.jpg",
+            CelestialBody::Jupiter => "textures/jupiter_2k.jpg",
+            CelestialBody::Saturn => "textures/saturn_2k.jpg",
+            CelestialBody::Sun => "textures/sun_2k.jpg",
+        }
+    }
+
+    const ALL: [CelestialBody; 8] = [
+        CelestialBody::Earth,
+        CelestialBody::Moon,
+        CelestialBody::Mars,
+        CelestialBody::Mercury,
+        CelestialBody::Venus,
+        CelestialBody::Jupiter,
+        CelestialBody::Saturn,
+        CelestialBody::Sun,
+    ];
+}
+
+#[derive(Clone)]
+#[allow(dead_code)]
+enum TextureLoadState {
+    Loading,
+    Loaded(Arc<EarthTexture>),
+    Failed(String),
+}
 
 const EARTH_RADIUS_KM: f64 = 6371.0;
 const EARTH_TEXTURE_BYTES: &[u8] = include_bytes!("../earth.jpg");
@@ -18,13 +78,17 @@ struct EarthTexture {
 
 impl EarthTexture {
     fn load() -> Self {
-        let img = image::load_from_memory(EARTH_TEXTURE_BYTES)
-            .expect("Failed to load Earth texture")
+        Self::from_bytes(EARTH_TEXTURE_BYTES).expect("Failed to load built-in Earth texture")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let img = image::load_from_memory(bytes)
+            .map_err(|e| format!("Failed to decode image: {}", e))?
             .to_rgb8();
         let width = img.width();
         let height = img.height();
         let pixels: Vec<[u8; 3]> = img.pixels().map(|p| p.0).collect();
-        Self { width, height, pixels }
+        Ok(Self { width, height, pixels })
     }
 
     fn sample(&self, u: f64, v: f64) -> [u8; 3] {
@@ -241,6 +305,7 @@ enum Preset {
     Telesat,
 }
 
+#[derive(Clone)]
 struct ConstellationConfig {
     sats_per_plane: usize,
     num_planes: usize,
@@ -291,6 +356,7 @@ impl ConstellationConfig {
     }
 }
 
+#[derive(Clone)]
 struct TabConfig {
     name: String,
     constellations: Vec<ConstellationConfig>,
@@ -313,7 +379,7 @@ impl TabConfig {
 }
 
 struct App {
-    tabs: Vec<TabConfig>,
+    dock_state: DockState<TabConfig>,
     tab_counter: usize,
     time: f64,
     speed: f64,
@@ -326,6 +392,8 @@ struct App {
     single_color_per_constellation: bool,
     menu_open: bool,
     zoom: f64,
+    torus_zoom: f64,
+    vertical_split: f32,
     sat_radius: f32,
     rotation: Matrix3<f64>,
     torus_rotation: Matrix3<f64>,
@@ -334,6 +402,9 @@ struct App {
     last_rotation: Option<Matrix3<f64>>,
     earth_resolution: usize,
     last_resolution: usize,
+    celestial_body: CelestialBody,
+    texture_load_state: TextureLoadState,
+    pending_body: Option<CelestialBody>,
 }
 
 impl Default for App {
@@ -343,8 +414,9 @@ impl Default for App {
             0.0, 0.0, -1.0,
             0.0, 1.0, 0.0,
         );
+        let builtin_texture = Arc::new(EarthTexture::load());
         Self {
-            tabs: vec![TabConfig::new("Config 1".to_string())],
+            dock_state: DockState::new(vec![TabConfig::new("Config 1".to_string())]),
             tab_counter: 1,
             time: 0.0,
             speed: 1.0,
@@ -357,22 +429,338 @@ impl Default for App {
             single_color_per_constellation: false,
             menu_open: false,
             zoom: 1.0,
+            torus_zoom: 1.0,
+            vertical_split: 0.6,
             sat_radius: 5.0,
             rotation: Matrix3::identity(),
             torus_rotation: torus_initial,
-            earth_texture: Arc::new(EarthTexture::load()),
+            earth_texture: builtin_texture.clone(),
             earth_image_handle: None,
             last_rotation: None,
             earth_resolution: 512,
             last_resolution: 0,
+            celestial_body: CelestialBody::Earth,
+            texture_load_state: TextureLoadState::Loading,
+            pending_body: Some(CelestialBody::Earth),
         }
     }
+}
+
+struct ConstellationTabViewer<'a> {
+    time: f64,
+    show_orbits: bool,
+    show_links: bool,
+    show_torus: bool,
+    show_ground: bool,
+    hide_behind_earth: bool,
+    single_color: bool,
+    zoom: &'a mut f64,
+    torus_zoom: &'a mut f64,
+    vertical_split: &'a mut f32,
+    sat_radius: f32,
+    rotation: &'a mut Matrix3<f64>,
+    torus_rotation: &'a mut Matrix3<f64>,
+    earth_handle: Option<&'a egui::TextureHandle>,
+}
+
+impl<'a> TabViewer for ConstellationTabViewer<'a> {
+    type Tab = TabConfig;
+
+    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
+        tab.name.as_str().into()
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        let mut const_to_remove: Option<usize> = None;
+        let num_constellations = tab.constellations.len();
+
+        ui.horizontal(|ui| {
+            for (cidx, cons) in tab.constellations.iter_mut().enumerate() {
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        let label = if self.single_color {
+                            format!("{} ({}):", cons.preset_name(), color_name(cons.color_offset))
+                        } else {
+                            format!("{}:", cons.preset_name())
+                        };
+                        ui.label(label);
+                        if num_constellations > 1 {
+                            if ui.small_button("x").clicked() {
+                                const_to_remove = Some(cidx);
+                            }
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        let mut sats = cons.sats_per_plane as i32;
+                        let mut planes = cons.num_planes as i32;
+                        ui.label("Sats:");
+                        let sats_resp = ui.add(egui::DragValue::new(&mut sats).range(1..=100));
+                        ui.label("Orbits:");
+                        let planes_resp = ui.add(egui::DragValue::new(&mut planes).range(1..=100));
+                        if sats > 0 && planes > 0 {
+                            cons.sats_per_plane = sats as usize;
+                            cons.num_planes = planes as usize;
+                        }
+                        if sats_resp.changed() || planes_resp.changed() {
+                            cons.preset = Preset::None;
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("Alt:");
+                        let alt_resp = ui.add(egui::DragValue::new(&mut cons.altitude_km).range(200.0..=36000.0).suffix(" km"));
+                        ui.label("Inc:");
+                        let inc_resp = ui.add(egui::DragValue::new(&mut cons.inclination).range(0.0..=180.0).suffix("°"));
+                        if alt_resp.changed() || inc_resp.changed() {
+                            cons.preset = Preset::None;
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        let old_type = cons.walker_type;
+                        ui.selectable_value(&mut cons.walker_type, WalkerType::Delta, "Delta");
+                        ui.selectable_value(&mut cons.walker_type, WalkerType::Star, "Star");
+                        ui.label(format!("({} sats)", cons.total_sats()));
+                        if cons.walker_type != old_type {
+                            cons.preset = Preset::None;
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        // Note: Do not delete these comments
+                        // https://en.wikipedia.org/wiki/Starlink
+                        if ui.selectable_label(cons.preset == Preset::Starlink, "Starlink").clicked() {
+                            cons.sats_per_plane = 22; cons.num_planes = 72;
+                            cons.altitude_km = 550.0; cons.inclination = 53.0;
+                            cons.walker_type = WalkerType::Delta;
+                            cons.preset = Preset::Starlink;
+                        }
+                        // https://www.eoportal.org/satellite-missions/oneweb
+                        if ui.selectable_label(cons.preset == Preset::OneWeb, "OneWeb").clicked() {
+                            cons.sats_per_plane = 54; cons.num_planes = 12;
+                            cons.altitude_km = 1200.0; cons.inclination = 87.9;
+                            cons.walker_type = WalkerType::Star;
+                            cons.preset = Preset::OneWeb;
+                        }
+                        // https://en.wikipedia.org/wiki/Iridium_satellite_constellation
+                        if ui.selectable_label(cons.preset == Preset::Iridium, "Iridium").clicked() {
+                            cons.sats_per_plane = 11; cons.num_planes = 6;
+                            cons.altitude_km = 780.0; cons.inclination = 86.4;
+                            cons.walker_type = WalkerType::Star;
+                            cons.preset = Preset::Iridium;
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        // https://www.eoportal.org/satellite-missions/projectkuiper
+                        if ui.selectable_label(cons.preset == Preset::Kuiper, "Kuiper").clicked() {
+                            cons.sats_per_plane = 34; cons.num_planes = 34;
+                            cons.altitude_km = 630.0; cons.inclination = 51.9;
+                            cons.walker_type = WalkerType::Delta;
+                            cons.preset = Preset::Kuiper;
+                        }
+                        // https://en.wikipedia.org/wiki/IRIS%C2%B2
+                        if ui.selectable_label(cons.preset == Preset::Iris2, "Iris²").clicked() {
+                            cons.sats_per_plane = 22; cons.num_planes = 12;
+                            cons.altitude_km = 1200.0; cons.inclination = 87.0;
+                            cons.walker_type = WalkerType::Star;
+                            cons.preset = Preset::Iris2;
+                        }
+                        // https://www.eoportal.org/satellite-missions/telesat-lightspeed
+                        if ui.selectable_label(cons.preset == Preset::Telesat, "Telesat").clicked() {
+                            cons.sats_per_plane = 13; cons.num_planes = 6;
+                            cons.altitude_km = 1015.0; cons.inclination = 98.98;
+                            cons.walker_type = WalkerType::Star;
+                            cons.preset = Preset::Telesat;
+                        }
+                    });
+                });
+                ui.separator();
+            }
+
+            if ui.small_button("+").clicked() {
+                const_to_remove = Some(usize::MAX);
+            }
+        });
+
+        if let Some(cidx) = const_to_remove {
+            if cidx == usize::MAX {
+                tab.add_constellation();
+            } else {
+                tab.constellations.remove(cidx);
+            }
+        }
+
+        ui.separator();
+
+        let constellations_data: Vec<_> = tab.constellations.iter()
+            .map(|c| {
+                let wc = c.constellation();
+                let pos = wc.satellite_positions(self.time);
+                (wc, pos, c.color_offset)
+            })
+            .collect();
+
+        let available = ui.available_size();
+        let viz_width = available.x - 10.0;
+        let available_for_views = available.y - 20.0;
+
+        let has_secondary = self.show_torus || self.show_ground;
+        let separator_height = if has_secondary { 8.0 } else { 0.0 };
+
+        let earth_height = if has_secondary {
+            (available_for_views - separator_height) * *self.vertical_split
+        } else {
+            available_for_views
+        }.min(viz_width);
+
+        let secondary_height = if has_secondary {
+            (available_for_views - separator_height) * (1.0 - *self.vertical_split)
+        } else {
+            0.0
+        };
+
+        let (rot, new_zoom) = draw_3d_view(
+            ui,
+            &tab.name,
+            &constellations_data,
+            self.show_orbits,
+            *self.rotation,
+            viz_width,
+            earth_height,
+            self.earth_handle,
+            *self.zoom,
+            self.sat_radius,
+            self.show_links,
+            self.hide_behind_earth,
+            self.single_color,
+        );
+        *self.rotation = rot;
+        *self.zoom = new_zoom;
+
+        if has_secondary {
+            let separator_rect = ui.available_rect_before_wrap();
+            let separator_rect = egui::Rect::from_min_size(
+                separator_rect.min,
+                egui::vec2(viz_width, separator_height),
+            );
+            let response = ui.allocate_rect(separator_rect, egui::Sense::drag());
+
+            ui.painter().rect_filled(
+                separator_rect,
+                0.0,
+                if response.hovered() || response.dragged() {
+                    egui::Color32::WHITE
+                } else {
+                    egui::Color32::from_rgb(200, 200, 200)
+                },
+            );
+            ui.painter().line_segment(
+                [separator_rect.center() - egui::vec2(20.0, 0.0),
+                 separator_rect.center() + egui::vec2(20.0, 0.0)],
+                egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 100, 100)),
+            );
+
+            if response.dragged() {
+                let delta = response.drag_delta().y / available_for_views;
+                *self.vertical_split = (*self.vertical_split + delta).clamp(0.2, 0.9);
+            }
+
+            if response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+            }
+        }
+
+        if self.show_torus && self.show_ground {
+            let torus_height = secondary_height * 0.6;
+            let (trot, tzoom) = draw_torus(
+                ui,
+                &format!("torus_{}", tab.name),
+                &constellations_data,
+                self.time,
+                *self.torus_rotation,
+                viz_width,
+                torus_height,
+                self.sat_radius,
+                self.show_links,
+                self.single_color,
+                *self.torus_zoom,
+            );
+            *self.torus_rotation = trot;
+            *self.torus_zoom = tzoom;
+
+            let ground_height = secondary_height * 0.4;
+            draw_ground_track(
+                ui,
+                &format!("ground_{}", tab.name),
+                &constellations_data,
+                viz_width,
+                ground_height,
+                self.sat_radius,
+                self.single_color,
+            );
+        } else if self.show_torus {
+            let (trot, tzoom) = draw_torus(
+                ui,
+                &format!("torus_{}", tab.name),
+                &constellations_data,
+                self.time,
+                *self.torus_rotation,
+                viz_width,
+                secondary_height,
+                self.sat_radius,
+                self.show_links,
+                self.single_color,
+                *self.torus_zoom,
+            );
+            *self.torus_rotation = trot;
+            *self.torus_zoom = tzoom;
+        } else if self.show_ground {
+            draw_ground_track(
+                ui,
+                &format!("ground_{}", tab.name),
+                &constellations_data,
+                viz_width,
+                secondary_height,
+                self.sat_radius,
+                self.single_color,
+            );
+        }
+    }
+
 }
 
 impl App {
     fn add_tab(&mut self) {
         self.tab_counter += 1;
-        self.tabs.push(TabConfig::new(format!("Config {}", self.tab_counter)));
+        let tab = TabConfig::new(format!("Config {}", self.tab_counter));
+        let tree = self.dock_state.main_surface_mut();
+        let n = tree.num_tabs();
+        let fraction = n as f32 / (n + 1) as f32;
+        tree.split_right(egui_dock::NodeIndex::root(), fraction, vec![tab]);
+    }
+
+    fn balance_tabs(&mut self) {
+        let tabs: Vec<TabConfig> = self.dock_state
+            .main_surface_mut()
+            .tabs()
+            .cloned()
+            .collect();
+
+        if tabs.is_empty() {
+            return;
+        }
+
+        let first = tabs[0].clone();
+        self.dock_state = DockState::new(vec![first]);
+
+        for tab in tabs.into_iter().skip(1) {
+            let tree = self.dock_state.main_surface_mut();
+            let n = tree.num_tabs();
+            let fraction = n as f32 / (n + 1) as f32;
+            tree.split_right(egui_dock::NodeIndex::root(), fraction, vec![tab]);
+        }
     }
 
     fn show_settings(&mut self, ui: &mut egui::Ui) {
@@ -400,6 +788,31 @@ impl App {
             ui.label("Sat size:");
             ui.add(egui::Slider::new(&mut self.sat_radius, 1.0..=15.0));
         });
+
+        ui.add_space(10.0);
+
+        ui.horizontal(|ui| {
+            ui.label("Body:");
+            let current_label = match &self.texture_load_state {
+                TextureLoadState::Loading => format!("{} (loading...)", self.celestial_body.label()),
+                TextureLoadState::Failed(_) => format!("{} (failed)", self.celestial_body.label()),
+                _ => self.celestial_body.label().to_string(),
+            };
+            egui::ComboBox::from_id_salt("celestial_body")
+                .selected_text(current_label)
+                .show_ui(ui, |ui| {
+                    for body in CelestialBody::ALL {
+                        let is_selected = self.celestial_body == body;
+                        if ui.selectable_label(is_selected, body.label()).clicked() && !is_selected {
+                            self.pending_body = Some(body);
+                        }
+                    }
+                });
+        });
+
+        if let TextureLoadState::Failed(err) = &self.texture_load_state {
+            ui.colored_label(egui::Color32::RED, format!("Error: {}", err));
+        }
 
         ui.add_space(10.0);
 
@@ -436,15 +849,115 @@ impl App {
         ui.label("Star: RAAN spread 180°");
         ui.add_space(5.0);
         ui.label("Drag 3D views to rotate");
+        ui.add_space(5.0);
+        ui.label("Earth textures: Solar System Scope (CC-BY)");
     }
+
+    #[allow(unused_variables)]
+    fn switch_texture(&mut self, body: CelestialBody, ctx: &egui::Context) {
+        self.celestial_body = body;
+        let filename = body.filename();
+        self.texture_load_state = TextureLoadState::Loading;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            match std::fs::read(filename) {
+                Ok(bytes) => match EarthTexture::from_bytes(&bytes) {
+                    Ok(texture) => {
+                        let texture = Arc::new(texture);
+                        self.earth_texture = texture.clone();
+                        self.texture_load_state = TextureLoadState::Loaded(texture);
+                        self.last_rotation = None;
+                    }
+                    Err(e) => self.texture_load_state = TextureLoadState::Failed(e),
+                },
+                Err(e) => self.texture_load_state = TextureLoadState::Failed(e.to_string()),
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let ctx = ctx.clone();
+            let filename = filename.to_string();
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = fetch_texture(&filename).await;
+                TEXTURE_RESULT.with(|cell| {
+                    *cell.borrow_mut() = Some(result);
+                });
+                ctx.request_repaint();
+            });
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static TEXTURE_RESULT: std::cell::RefCell<Option<Result<EarthTexture, String>>> = std::cell::RefCell::new(None);
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn fetch_texture(url: &str) -> Result<EarthTexture, String> {
+    use wasm_bindgen::JsCast as _;
+    use web_sys::{Request, RequestInit, RequestMode, Response};
+
+    let opts = RequestInit::new();
+    opts.set_method("GET");
+    opts.set_mode(RequestMode::Cors);
+
+    let request = Request::new_with_str_and_init(url, &opts)
+        .map_err(|e| format!("Failed to create request: {:?}", e))?;
+
+    let window = web_sys::window().ok_or("No window")?;
+    let resp_value = wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| format!("Fetch failed: {:?}", e))?;
+
+    let resp: Response = resp_value.dyn_into()
+        .map_err(|_| "Response is not a Response")?;
+
+    if !resp.ok() {
+        return Err(format!("HTTP error: {}", resp.status()));
+    }
+
+    let array_buffer = wasm_bindgen_futures::JsFuture::from(
+        resp.array_buffer().map_err(|e| format!("Failed to get array buffer: {:?}", e))?
+    )
+    .await
+    .map_err(|e| format!("Failed to read response: {:?}", e))?;
+
+    let uint8_array = js_sys::Uint8Array::new(&array_buffer);
+    let bytes: Vec<u8> = uint8_array.to_vec();
+
+    EarthTexture::from_bytes(&bytes)
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(body) = self.pending_body.take() {
+            self.switch_texture(body, ctx);
+        }
+
         if self.animate {
             self.time += self.speed;
             ctx.request_repaint();
         }
+
+        #[cfg(target_arch = "wasm32")]
+        TEXTURE_RESULT.with(|cell| {
+            if let Some(result) = cell.borrow_mut().take() {
+                match result {
+                    Ok(texture) => {
+                        let texture = Arc::new(texture);
+                        self.earth_texture = texture.clone();
+                        self.texture_load_state = TextureLoadState::Loaded(texture);
+                        self.last_rotation = None;
+                    }
+                    Err(e) => {
+                        self.texture_load_state = TextureLoadState::Failed(e);
+                    }
+                }
+            }
+        });
 
         let rotation_changed = self.last_rotation.map_or(true, |r| r != self.rotation);
         let resolution_changed = self.last_resolution != self.earth_resolution;
@@ -482,6 +995,9 @@ impl eframe::App for App {
                     if ui.button("+ Add Config").clicked() {
                         self.add_tab();
                     }
+                    if ui.button("Balance").clicked() {
+                        self.balance_tabs();
+                    }
                 });
             });
 
@@ -492,248 +1008,27 @@ impl eframe::App for App {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let time = self.time;
-            let show_orbits = self.show_orbits;
-            let show_links = self.show_links;
-            let show_torus = self.show_torus;
-            let show_ground = self.show_ground_track;
-            let hide_behind_earth = self.hide_behind_earth;
-            let single_color = self.single_color_per_constellation;
-            let mut zoom = self.zoom;
-            let sat_radius = self.sat_radius;
-            let earth_handle = self.earth_image_handle.clone();
+            let mut tab_viewer = ConstellationTabViewer {
+                time: self.time,
+                show_orbits: self.show_orbits,
+                show_links: self.show_links,
+                show_torus: self.show_torus,
+                show_ground: self.show_ground_track,
+                hide_behind_earth: self.hide_behind_earth,
+                single_color: self.single_color_per_constellation,
+                zoom: &mut self.zoom,
+                torus_zoom: &mut self.torus_zoom,
+                vertical_split: &mut self.vertical_split,
+                sat_radius: self.sat_radius,
+                rotation: &mut self.rotation,
+                torus_rotation: &mut self.torus_rotation,
+                earth_handle: self.earth_image_handle.as_ref(),
+            };
 
-            let mut new_rotation = self.rotation;
-            let mut new_torus_rotation = self.torus_rotation;
-
-            let available_width = ui.available_width();
-            let available_height = ui.available_height();
-            let num_tabs = self.tabs.len().max(1) as f32;
-            let separator_space = (num_tabs - 1.0).max(0.0) * 10.0;
-
-            let controls_height = 120.0;
-            let height_ratio = 0.8
-                + if show_torus { 0.5 } else { 0.0 }
-                + if show_ground { 0.35 } else { 0.0 };
-            let max_width_from_height = (available_height - controls_height) / height_ratio;
-
-            let width_based = (available_width - separator_space) / num_tabs;
-            let panel_width = width_based.min(max_width_from_height).max(200.0);
-
-            let mut tab_to_remove: Option<usize> = None;
-
-            ui.horizontal(|ui| {
-                for (idx, tab) in self.tabs.iter_mut().enumerate() {
-                    ui.vertical(|ui| {
-                        ui.set_min_width(panel_width);
-                        ui.set_max_width(panel_width);
-
-                            ui.horizontal(|ui| {
-                                ui.strong(&tab.name);
-                                if ui.small_button("X").clicked() {
-                                    tab_to_remove = Some(idx);
-                                }
-                            });
-
-                            let mut const_to_remove: Option<usize> = None;
-                            let num_constellations = tab.constellations.len();
-
-                            ui.horizontal(|ui| {
-                                for (cidx, cons) in tab.constellations.iter_mut().enumerate() {
-                                    ui.vertical(|ui| {
-                                        ui.horizontal(|ui| {
-                                            let label = if single_color {
-                                                format!("{} ({}):", cons.preset_name(), color_name(cons.color_offset))
-                                            } else {
-                                                format!("{}:", cons.preset_name())
-                                            };
-                                            ui.label(label);
-                                            if num_constellations > 1 {
-                                                if ui.small_button("x").clicked() {
-                                                    const_to_remove = Some(cidx);
-                                                }
-                                            }
-                                        });
-
-                                        ui.horizontal(|ui| {
-                                            let mut sats = cons.sats_per_plane as i32;
-                                            let mut planes = cons.num_planes as i32;
-                                            ui.label("Sats:");
-                                            let sats_resp = ui.add(egui::DragValue::new(&mut sats).range(1..=100));
-                                            ui.label("Orbits:");
-                                            let planes_resp = ui.add(egui::DragValue::new(&mut planes).range(1..=100));
-                                            if sats > 0 && planes > 0 {
-                                                cons.sats_per_plane = sats as usize;
-                                                cons.num_planes = planes as usize;
-                                            }
-                                            if sats_resp.changed() || planes_resp.changed() {
-                                                cons.preset = Preset::None;
-                                            }
-                                        });
-
-                                        ui.horizontal(|ui| {
-                                            ui.label("Alt:");
-                                            let alt_resp = ui.add(egui::DragValue::new(&mut cons.altitude_km).range(200.0..=36000.0).suffix(" km"));
-                                            ui.label("Inc:");
-                                            let inc_resp = ui.add(egui::DragValue::new(&mut cons.inclination).range(0.0..=180.0).suffix("°"));
-                                            if alt_resp.changed() || inc_resp.changed() {
-                                                cons.preset = Preset::None;
-                                            }
-                                        });
-
-                                        ui.horizontal(|ui| {
-                                            let old_type = cons.walker_type;
-                                            ui.selectable_value(&mut cons.walker_type, WalkerType::Delta, "Delta");
-                                            ui.selectable_value(&mut cons.walker_type, WalkerType::Star, "Star");
-                                            ui.label(format!("({} sats)", cons.total_sats()));
-                                            if cons.walker_type != old_type {
-                                                cons.preset = Preset::None;
-                                            }
-                                        });
-
-                                        ui.horizontal(|ui| {
-                                            // https://en.wikipedia.org/wiki/Starlink
-                                            if ui.selectable_label(cons.preset == Preset::Starlink, "Starlink").clicked() {
-                                                cons.sats_per_plane = 22; cons.num_planes = 72;
-                                                cons.altitude_km = 550.0; cons.inclination = 53.0;
-                                                cons.walker_type = WalkerType::Delta;
-                                                cons.preset = Preset::Starlink;
-                                            }
-                                            // https://www.eoportal.org/satellite-missions/oneweb
-                                            if ui.selectable_label(cons.preset == Preset::OneWeb, "OneWeb").clicked() {
-                                                cons.sats_per_plane = 54; cons.num_planes = 12;
-                                                cons.altitude_km = 1200.0; cons.inclination = 87.9;
-                                                cons.walker_type = WalkerType::Star;
-                                                cons.preset = Preset::OneWeb;
-                                            }
-                                            // https://en.wikipedia.org/wiki/Iridium_satellite_constellation
-                                            if ui.selectable_label(cons.preset == Preset::Iridium, "Iridium").clicked() {
-                                                cons.sats_per_plane = 11; cons.num_planes = 6;
-                                                cons.altitude_km = 780.0; cons.inclination = 86.4;
-                                                cons.walker_type = WalkerType::Star;
-                                                cons.preset = Preset::Iridium;
-                                            }
-                                        });
-
-                                        ui.horizontal(|ui| {
-                                            // https://www.eoportal.org/satellite-missions/projectkuiper
-                                            if ui.selectable_label(cons.preset == Preset::Kuiper, "Kuiper").clicked() {
-                                                cons.sats_per_plane = 34; cons.num_planes = 34;
-                                                cons.altitude_km = 630.0; cons.inclination = 51.9;
-                                                cons.walker_type = WalkerType::Delta;
-                                                cons.preset = Preset::Kuiper;
-                                            }
-                                            // https://en.wikipedia.org/wiki/IRIS%C2%B2
-                                            if ui.selectable_label(cons.preset == Preset::Iris2, "Iris²").clicked() {
-                                                cons.sats_per_plane = 22; cons.num_planes = 12;
-                                                cons.altitude_km = 1200.0; cons.inclination = 87.0;
-                                                cons.walker_type = WalkerType::Star;
-                                                cons.preset = Preset::Iris2;
-                                            }
-                                            // https://www.eoportal.org/satellite-missions/telesat-lightspeed
-                                            if ui.selectable_label(cons.preset == Preset::Telesat, "Telesat").clicked() {
-                                                cons.sats_per_plane = 13; cons.num_planes = 6;
-                                                cons.altitude_km = 1015.0; cons.inclination = 98.98;
-                                                cons.walker_type = WalkerType::Star;
-                                                cons.preset = Preset::Telesat;
-                                            }
-                                        });
-                                    });
-                                    ui.separator();
-                                }
-
-                                if ui.small_button("+").clicked() {
-                                    const_to_remove = Some(usize::MAX);
-                                }
-                            });
-
-                            if let Some(cidx) = const_to_remove {
-                                if cidx == usize::MAX {
-                                    tab.add_constellation();
-                                } else {
-                                    tab.constellations.remove(cidx);
-                                }
-                            }
-
-                            ui.separator();
-
-                            let constellations_data: Vec<_> = tab.constellations.iter()
-                                .map(|c| {
-                                    let wc = c.constellation();
-                                    let pos = wc.satellite_positions(time);
-                                    (wc, pos, c.color_offset)
-                                })
-                                .collect();
-
-                            let viz_width = panel_width - 10.0;
-                            let viz_height = viz_width * 0.8;
-
-                            let (rot, new_zoom) = draw_3d_view(
-                                ui,
-                                &format!("earth_3d_{}", idx),
-                                &constellations_data,
-                                show_orbits,
-                                new_rotation,
-                                viz_width,
-                                viz_height,
-                                earth_handle.as_ref(),
-                                zoom,
-                                sat_radius,
-                                show_links,
-                                hide_behind_earth,
-                                single_color,
-                            );
-                            if rot != new_rotation {
-                                new_rotation = rot;
-                            }
-                            zoom = new_zoom;
-
-                            if show_torus {
-                                ui.add_space(5.0);
-                                let trot = draw_torus(
-                                    ui,
-                                    &format!("torus_{}", idx),
-                                    &constellations_data,
-                                    time,
-                                    new_torus_rotation,
-                                    viz_width,
-                                    viz_width * 0.5,
-                                    sat_radius,
-                                    show_links,
-                                    single_color,
-                                );
-                                if trot != new_torus_rotation {
-                                    new_torus_rotation = trot;
-                                }
-                            }
-
-                            if show_ground {
-                                ui.add_space(5.0);
-                                draw_ground_track(
-                                    ui,
-                                    &format!("ground_{}", idx),
-                                    &constellations_data,
-                                    viz_width,
-                                    viz_width * 0.35,
-                                    sat_radius,
-                                    single_color,
-                                );
-                            }
-                        });
-
-                    ui.separator();
-                }
-            });
-
-            if let Some(idx) = tab_to_remove {
-                if self.tabs.len() > 1 {
-                    self.tabs.remove(idx);
-                }
-            }
-
-            self.rotation = new_rotation;
-            self.torus_rotation = new_torus_rotation;
-            self.zoom = zoom;
+            DockArea::new(&mut self.dock_state)
+                .style(egui_dock::Style::from_egui(ui.style().as_ref()))
+                .show_close_buttons(true)
+                .show_inside(ui, &mut tab_viewer);
         });
     }
 }
@@ -1080,11 +1375,12 @@ fn draw_torus(
     sat_radius: f32,
     show_links: bool,
     single_color: bool,
-) -> Matrix3<f64> {
+    mut zoom: f64,
+) -> (Matrix3<f64>, f64) {
     let major_radius = 2.0;
     let minor_radius = 0.8;
 
-    let margin = (major_radius + minor_radius) * 1.3;
+    let margin = (major_radius + minor_radius) * 1.3 / zoom;
     let plot = Plot::new(id)
         .data_aspect(1.0)
         .width(width)
@@ -1228,7 +1524,15 @@ fn draw_torus(
         rotation = delta_rot * rotation;
     }
 
-    rotation
+    if response.response.hovered() {
+        let scroll = ui.input(|i| i.raw_scroll_delta.y);
+        if scroll != 0.0 {
+            let factor = 1.0 + scroll as f64 * 0.001;
+            zoom = (zoom * factor).clamp(0.5, 3.0);
+        }
+    }
+
+    (rotation, zoom)
 }
 
 fn plane_color(plane: usize) -> egui::Color32 {
