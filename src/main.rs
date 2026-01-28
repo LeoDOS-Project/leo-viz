@@ -378,8 +378,20 @@ impl TabConfig {
     }
 }
 
+#[derive(Clone)]
+struct SatelliteCamera {
+    id: usize,
+    label: String,
+    constellation_idx: usize,
+    plane: usize,
+    sat_index: usize,
+    screen_pos: Option<egui::Pos2>,
+}
+
 struct App {
     dock_state: DockState<TabConfig>,
+    satellite_cameras: Vec<SatelliteCamera>,
+    camera_id_counter: usize,
     tab_counter: usize,
     time: f64,
     speed: f64,
@@ -409,6 +421,7 @@ struct App {
     texture_load_state: TextureLoadState,
     pending_body: Option<CelestialBody>,
     dark_mode: bool,
+    pending_cameras: Vec<SatelliteCamera>,
 }
 
 impl Default for App {
@@ -421,6 +434,8 @@ impl Default for App {
         let builtin_texture = Arc::new(EarthTexture::load());
         Self {
             dock_state: DockState::new(vec![TabConfig::new("Config 1".to_string())]),
+            satellite_cameras: Vec::new(),
+            camera_id_counter: 0,
             tab_counter: 1,
             time: 0.0,
             speed: 1.0,
@@ -450,6 +465,7 @@ impl Default for App {
             texture_load_state: TextureLoadState::Loading,
             pending_body: Some(CelestialBody::Earth),
             dark_mode: true,
+            pending_cameras: Vec::new(),
         }
     }
 }
@@ -467,6 +483,9 @@ struct ConstellationTabViewer<'a> {
     single_color: bool,
     single_tab: bool,
     dark_mode: bool,
+    pending_cameras: &'a mut Vec<SatelliteCamera>,
+    camera_id_counter: &'a mut usize,
+    satellite_cameras: &'a mut Vec<SatelliteCamera>,
     zoom: &'a mut f64,
     torus_zoom: &'a mut f64,
     vertical_split: &'a mut f32,
@@ -606,6 +625,23 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                             cons.preset = Preset::Telesat;
                         }
                     });
+
+                    let orbit_radius = EARTH_RADIUS_KM + cons.altitude_km;
+                    let intra_plane_dist = orbit_radius * (2.0 * (1.0 - (2.0 * PI / cons.sats_per_plane as f64).cos())).sqrt();
+                    let inc_rad = cons.inclination.to_radians();
+                    let base_inter = orbit_radius * (2.0 * (1.0 - (2.0 * PI / cons.num_planes as f64).cos())).sqrt();
+                    let inter_plane_dist = base_inter * inc_rad.sin().abs().max(0.1);
+                    let ground_dist = cons.altitude_km;
+
+                    const SPEED_OF_LIGHT_KM_S: f64 = 299792.0;
+                    let intra_latency_ms = intra_plane_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
+                    let inter_latency_ms = inter_plane_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
+                    let ground_latency_ms = ground_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
+
+                    ui.label(format!(
+                        "Latency: intra {:.2}ms, inter {:.2}ms, ground {:.2}ms",
+                        intra_latency_ms, inter_latency_ms, ground_latency_ms
+                    ));
                 });
                 ui.separator();
             }
@@ -661,6 +697,9 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                         self.hide_behind_earth,
                         self.single_color,
                         self.dark_mode,
+                        self.pending_cameras,
+                        self.camera_id_counter,
+                        self.satellite_cameras,
                     );
                     *self.rotation = rot;
                     *self.zoom = new_zoom;
@@ -723,6 +762,9 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                 self.hide_behind_earth,
                 self.single_color,
                 self.dark_mode,
+                self.pending_cameras,
+                self.camera_id_counter,
+                self.satellite_cameras,
             );
             *self.rotation = rot;
             *self.zoom = new_zoom;
@@ -1137,6 +1179,9 @@ impl eframe::App for App {
                 torus_rotation: &mut self.torus_rotation,
                 earth_handle: self.earth_image_handle.as_ref(),
                 dark_mode: self.dark_mode,
+                pending_cameras: &mut self.pending_cameras,
+                camera_id_counter: &mut self.camera_id_counter,
+                satellite_cameras: &mut self.satellite_cameras,
             };
 
             DockArea::new(&mut self.dock_state)
@@ -1144,7 +1189,131 @@ impl eframe::App for App {
                 .show_close_buttons(true)
                 .show_inside(ui, &mut tab_viewer);
         });
+
+        for camera in std::mem::take(&mut self.pending_cameras) {
+            self.satellite_cameras.push(camera);
+        }
+
+        let all_tabs: Vec<_> = self.dock_state.main_surface().tabs().cloned().collect();
+
+        let mut cameras_to_remove = Vec::new();
+        for camera in &self.satellite_cameras {
+            let mut open = true;
+
+            let sat_data = all_tabs.first().and_then(|tab| {
+                tab.constellations.get(camera.constellation_idx).map(|cons| {
+                    let wc = cons.constellation();
+                    let positions = wc.satellite_positions(self.time);
+                    positions.iter()
+                        .find(|s| s.plane == camera.plane && s.sat_index == camera.sat_index)
+                        .map(|s| (s.lat, s.lon, cons.altitude_km))
+                })
+            }).flatten();
+
+            if let Some((lat, lon, altitude_km)) = sat_data {
+                let win_response = egui::Window::new(&camera.label)
+                    .id(egui::Id::new(format!("sat_cam_{}", camera.id)))
+                    .open(&mut open)
+                    .default_size([200.0, 220.0])
+                    .show(ctx, |ui| {
+                        draw_satellite_camera(
+                            ui,
+                            camera.id,
+                            lat,
+                            lon,
+                            altitude_km,
+                            self.coverage_angle,
+                            &self.earth_texture,
+                        );
+                    });
+
+                if let (Some(screen_pos), Some(win_resp)) = (camera.screen_pos, win_response) {
+                    let win_rect = win_resp.response.rect;
+                    let win_center = win_rect.left_center();
+                    ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Middle,
+                        egui::Id::new("sat_lines"),
+                    ))
+                    .line_segment(
+                        [screen_pos, win_center],
+                        egui::Stroke::new(1.5, egui::Color32::WHITE),
+                    );
+                }
+            }
+            if !open {
+                cameras_to_remove.push(camera.id);
+            }
+        }
+        self.satellite_cameras.retain(|c| !cameras_to_remove.contains(&c.id));
     }
+}
+
+fn draw_satellite_camera(
+    ui: &mut egui::Ui,
+    camera_id: usize,
+    lat: f64,
+    lon: f64,
+    altitude_km: f64,
+    coverage_angle: f64,
+    earth_texture: &EarthTexture,
+) {
+    let size = ui.available_size();
+    let img_size = size.x.min(size.y - 40.0) as usize;
+    if img_size < 10 {
+        return;
+    }
+
+    let lat_rad = lat.to_radians();
+    let lon_rad = lon.to_radians();
+    let fov_rad = coverage_angle.to_radians();
+
+    let mut pixels = vec![egui::Color32::BLACK; img_size * img_size];
+
+    for py in 0..img_size {
+        for px in 0..img_size {
+            let nx = (px as f64 / img_size as f64 - 0.5) * 2.0;
+            let ny = (py as f64 / img_size as f64 - 0.5) * 2.0;
+
+            let dist = (nx * nx + ny * ny).sqrt();
+            if dist > 1.0 {
+                continue;
+            }
+
+            let angle_from_nadir = dist * fov_rad;
+            let azimuth = ny.atan2(nx);
+
+            let clat = (lat_rad.sin() * angle_from_nadir.cos()
+                + lat_rad.cos() * angle_from_nadir.sin() * (-azimuth).cos())
+            .asin();
+            let clon = lon_rad
+                + (angle_from_nadir.sin() * (-azimuth).sin())
+                    .atan2(lat_rad.cos() * angle_from_nadir.cos()
+                        - lat_rad.sin() * angle_from_nadir.sin() * (-azimuth).cos());
+
+            let u = (clon + PI) / (2.0 * PI);
+            let v = (PI / 2.0 - clat) / PI;
+
+            let [r, g, b] = earth_texture.sample(u, v);
+            pixels[py * img_size + px] = egui::Color32::from_rgb(r, g, b);
+        }
+    }
+
+    let image = egui::ColorImage {
+        size: [img_size, img_size],
+        pixels,
+    };
+    let texture = ui.ctx().load_texture(
+        format!("sat_cam_tex_{}", camera_id),
+        image,
+        egui::TextureOptions::LINEAR,
+    );
+    ui.image(&texture);
+
+    ui.horizontal(|ui| {
+        ui.label(format!("Lat: {:.1}°", lat));
+        ui.label(format!("Lon: {:.1}°", lon));
+    });
+    ui.label(format!("Alt: {:.0} km", altitude_km));
 }
 
 fn draw_3d_view(
@@ -1165,6 +1334,9 @@ fn draw_3d_view(
     hide_behind_earth: bool,
     single_color: bool,
     dark_mode: bool,
+    pending_cameras: &mut Vec<SatelliteCamera>,
+    camera_id_counter: &mut usize,
+    satellite_cameras: &mut [SatelliteCamera],
 ) -> (Matrix3<f64>, f64) {
     let max_orbit_radius = constellations.iter()
         .map(|(c, _, _)| EARTH_RADIUS_KM + c.altitude_km)
@@ -1184,7 +1356,8 @@ fn draw_3d_view(
         .allow_drag(false)
         .allow_zoom(false)
         .allow_scroll(false)
-        .allow_boxed_zoom(false);
+        .allow_boxed_zoom(false)
+        .cursor_color(egui::Color32::TRANSPARENT);
 
     let response = plot.show(ui, |plot_ui| {
         plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
@@ -1468,10 +1641,93 @@ fn draw_3d_view(
         }
     });
 
+    for (cidx, (_constellation, positions, color_offset)) in constellations.iter().enumerate() {
+        for sat in positions {
+            for cam in satellite_cameras.iter_mut() {
+                if cam.constellation_idx == cidx && cam.plane == sat.plane && cam.sat_index == sat.sat_index {
+                    let (rx, ry, _) = rotate_point_matrix(sat.x, sat.y, sat.z, &rotation);
+                    let plot_pt = egui_plot::PlotPoint::new(rx, ry);
+                    let screen_pos = response.transform.position_from_point(&plot_pt);
+                    cam.screen_pos = Some(screen_pos);
+
+                    let color = plane_color(if single_color { *color_offset } else { sat.plane + color_offset });
+                    ui.painter().circle_stroke(
+                        screen_pos,
+                        sat_radius * 2.5,
+                        egui::Stroke::new(2.0, color),
+                    );
+                }
+            }
+        }
+    }
+
+    if let Some(hover_pos) = response.response.hover_pos() {
+        let plot_pos = response.transform.value_from_position(hover_pos);
+        let hover_threshold = margin * 0.025;
+
+        'hover: for (_constellation, positions, color_offset) in constellations {
+            for sat in positions {
+                let (rx, ry, rz) = rotate_point_matrix(sat.x, sat.y, sat.z, &rotation);
+                let earth_r_sq = (EARTH_RADIUS_KM * 0.95).powi(2) as f64;
+                let visible = rz >= 0.0 || (rx * rx + ry * ry) >= earth_r_sq;
+                if !visible && hide_behind_earth {
+                    continue;
+                }
+                let dx = rx - plot_pos.x;
+                let dy = ry - plot_pos.y;
+                if dx * dx + dy * dy < hover_threshold * hover_threshold {
+                    let plot_pt = egui_plot::PlotPoint::new(rx, ry);
+                    let screen_pt = response.transform.position_from_point(&plot_pt);
+                    let color = plane_color(if single_color { *color_offset } else { sat.plane + color_offset });
+                    ui.painter().circle_stroke(
+                        screen_pt,
+                        sat_radius * 2.0,
+                        egui::Stroke::new(2.0, color),
+                    );
+                    break 'hover;
+                }
+            }
+        }
+    }
+
     if response.response.dragged() && !response.response.drag_started() {
         let drag = response.response.drag_delta();
         let delta_rot = rotation_from_drag(drag.x as f64 * 0.01, drag.y as f64 * 0.01);
         rotation = delta_rot * rotation;
+    }
+
+    if response.response.clicked() {
+        if let Some(pos) = response.response.interact_pointer_pos() {
+            let plot_pos = response.transform.value_from_position(pos);
+            let click_x = plot_pos.x;
+            let click_y = plot_pos.y;
+            let click_threshold = margin * 0.03;
+
+            'outer: for (cidx, (_constellation, positions, _color_offset)) in constellations.iter().enumerate() {
+                for sat in positions {
+                    let (rx, ry, rz) = rotate_point_matrix(sat.x, sat.y, sat.z, &rotation);
+                    let earth_r_sq = (EARTH_RADIUS_KM * 0.95).powi(2) as f64;
+                    let visible = rz >= 0.0 || (rx * rx + ry * ry) >= earth_r_sq;
+                    if !visible && hide_behind_earth {
+                        continue;
+                    }
+                    let dx = rx - click_x;
+                    let dy = ry - click_y;
+                    if dx * dx + dy * dy < click_threshold * click_threshold {
+                        *camera_id_counter += 1;
+                        pending_cameras.push(SatelliteCamera {
+                            id: *camera_id_counter,
+                            label: format!("Sat {}-{}", sat.plane + 1, sat.sat_index + 1),
+                            constellation_idx: cidx,
+                            plane: sat.plane,
+                            sat_index: sat.sat_index,
+                            screen_pos: None,
+                        });
+                        break 'outer;
+                    }
+                }
+            }
+        }
     }
 
     if response.response.hovered() {
@@ -1604,7 +1860,8 @@ fn draw_torus(
         .allow_drag(false)
         .allow_zoom(false)
         .allow_scroll(false)
-        .allow_boxed_zoom(false);
+        .allow_boxed_zoom(false)
+        .cursor_color(egui::Color32::TRANSPARENT);
 
     let response = plot.show(ui, |plot_ui| {
         plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
