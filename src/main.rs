@@ -435,6 +435,10 @@ struct App {
     show_manhattan_path: bool,
     show_shortest_path: bool,
     show_camera_windows: bool,
+    rotate_earth: bool,
+    earth_rotation_speed: f64,
+    earth_rotation_angle: f64,
+    last_earth_rotation_angle: f64,
 }
 
 impl Default for App {
@@ -483,6 +487,10 @@ impl Default for App {
             show_manhattan_path: true,
             show_shortest_path: true,
             show_camera_windows: false,
+            rotate_earth: true,
+            earth_rotation_speed: 5.0,
+            earth_rotation_angle: 0.0,
+            last_earth_rotation_angle: 0.0,
         }
     }
 }
@@ -990,14 +998,30 @@ impl App {
         ui.checkbox(&mut self.show_torus, "Show torus");
         ui.checkbox(&mut self.show_ground_track, "Show ground");
         ui.checkbox(&mut self.hide_behind_earth, "Hide behind Earth");
+        ui.checkbox(&mut self.rotate_earth, "Rotate Earth");
+        if self.rotate_earth {
+            ui.horizontal(|ui| {
+                ui.label("Speed:");
+                ui.add(egui::DragValue::new(&mut self.earth_rotation_speed)
+                    .range(0.1..=100.0)
+                    .speed(0.1)
+                    .max_decimals(1)
+                    .suffix("x"));
+            });
+        }
         ui.checkbox(&mut self.single_color_per_constellation, "Single color per constellation");
 
         ui.add_space(10.0);
+
+        let orbit_radius_m = (EARTH_RADIUS_KM + altitude) * 1000.0;
+        let velocity_ms = (MU_EARTH / orbit_radius_m).sqrt();
+        let velocity_kmh = velocity_ms * 3.6;
 
         ui.horizontal(|ui| {
             ui.label("Speed:");
             ui.add(egui::Slider::new(&mut self.speed, 0.1..=10.0).logarithmic(true));
         });
+        ui.label(format!("Satellite velocity: {:.0} km/h", velocity_kmh));
 
         ui.horizontal(|ui| {
             ui.label("Zoom:");
@@ -1165,6 +1189,10 @@ impl eframe::App for App {
 
         if self.animate {
             self.time += self.speed;
+            if self.rotate_earth {
+                let earth_day_seconds = 86400.0;
+                self.earth_rotation_angle += (self.speed * self.earth_rotation_speed * 2.0 * PI) / earth_day_seconds;
+            }
             ctx.request_repaint();
         }
 
@@ -1187,8 +1215,15 @@ impl eframe::App for App {
 
         let rotation_changed = self.last_rotation.map_or(true, |r| r != self.rotation);
         let resolution_changed = self.last_resolution != self.earth_resolution;
-        if self.earth_image_handle.is_none() || rotation_changed || resolution_changed {
-            let earth_image = self.earth_texture.render_sphere(self.earth_resolution, &self.rotation);
+        let earth_angle_changed = self.last_earth_rotation_angle != self.earth_rotation_angle;
+        if self.earth_image_handle.is_none() || rotation_changed || resolution_changed || earth_angle_changed {
+            let earth_rot = Matrix3::new(
+                self.earth_rotation_angle.cos(), 0.0, self.earth_rotation_angle.sin(),
+                0.0, 1.0, 0.0,
+                -self.earth_rotation_angle.sin(), 0.0, self.earth_rotation_angle.cos(),
+            );
+            let combined = self.rotation * earth_rot;
+            let earth_image = self.earth_texture.render_sphere(self.earth_resolution, &combined);
             self.earth_image_handle = Some(ctx.load_texture(
                 "earth",
                 earth_image,
@@ -1196,6 +1231,7 @@ impl eframe::App for App {
             ));
             self.last_rotation = Some(self.rotation);
             self.last_resolution = self.earth_resolution;
+            self.last_earth_rotation_angle = self.earth_rotation_angle;
         }
 
         let is_mobile = ctx.input(|i| i.viewport().inner_rect.map_or(600.0, |r| r.width())) < 600.0;
