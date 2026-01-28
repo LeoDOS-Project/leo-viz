@@ -733,6 +733,10 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                         self.show_links,
                         self.single_color,
                         *self.torus_zoom,
+                        self.satellite_cameras,
+                        self.show_routing_paths,
+                        self.show_manhattan_path,
+                        self.show_shortest_path,
                     );
                     *self.torus_rotation = trot;
                     *self.torus_zoom = tzoom;
@@ -832,6 +836,10 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                     self.show_links,
                     self.single_color,
                     *self.torus_zoom,
+                    self.satellite_cameras,
+                    self.show_routing_paths,
+                    self.show_manhattan_path,
+                    self.show_shortest_path,
                 );
                 *self.torus_rotation = trot;
                 *self.torus_zoom = tzoom;
@@ -859,6 +867,10 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                     self.show_links,
                     self.single_color,
                     *self.torus_zoom,
+                    self.satellite_cameras,
+                    self.show_routing_paths,
+                    self.show_manhattan_path,
+                    self.show_shortest_path,
                 );
                 *self.torus_rotation = trot;
                 *self.torus_zoom = tzoom;
@@ -2015,6 +2027,10 @@ fn draw_torus(
     show_links: bool,
     single_color: bool,
     mut zoom: f64,
+    satellite_cameras: &[SatelliteCamera],
+    show_routing_paths: bool,
+    show_manhattan_path: bool,
+    show_shortest_path: bool,
 ) -> (Matrix3<f64>, f64) {
     let (major_radius, minor_radius) = if let Some((constellation, positions, _)) = constellations.first() {
         let sats_per_plane = constellation.sats_per_plane();
@@ -2094,7 +2110,7 @@ fn draw_torus(
             rotate_point_matrix(x, y, z, &rotation)
         };
 
-        for (constellation, positions, color_offset) in constellations {
+        for (cidx, (constellation, positions, color_offset)) in constellations.iter().enumerate() {
             let sats_per_plane = constellation.total_sats / constellation.num_planes;
             let orbit_radius = EARTH_RADIUS_KM + constellation.altitude_km;
             let period = 2.0 * PI * (orbit_radius.powi(3) / 398600.4418_f64).sqrt();
@@ -2193,6 +2209,74 @@ fn draw_torus(
                             .radius(r)
                             .filled(true),
                     );
+
+                    for cam in satellite_cameras.iter() {
+                        if cam.constellation_idx == cidx && cam.plane == sat.plane && cam.sat_index == sat.sat_index {
+                            let highlight_color = plane_color(if single_color { *color_offset } else { sat.plane + color_offset });
+                            plot_ui.points(
+                                Points::new("", PlotPoints::new(vec![[x, y]]))
+                                    .color(highlight_color)
+                                    .radius(sat_radius * 2.5)
+                                    .filled(false),
+                            );
+                        }
+                    }
+                }
+            }
+
+            if show_routing_paths {
+                let tracked: Vec<_> = satellite_cameras.iter()
+                    .filter(|c| c.constellation_idx == cidx)
+                    .collect();
+
+                if tracked.len() >= 2 {
+                    let manhattan_color = egui::Color32::from_rgb(255, 100, 100);
+                    let shortest_color = egui::Color32::from_rgb(100, 255, 100);
+
+                    for i in 0..tracked.len() {
+                        for j in (i + 1)..tracked.len() {
+                            let src = tracked[i];
+                            let dst = tracked[j];
+
+                            if show_manhattan_path {
+                                let path = compute_manhattan_path(
+                                    src.plane, src.sat_index,
+                                    dst.plane, dst.sat_index,
+                                    constellation.num_planes, sats_per_plane,
+                                );
+                                for k in 0..(path.len() - 1) {
+                                    let (p1, s1) = path[k];
+                                    let (p2, s2) = path[k + 1];
+                                    let (x1, y1, _) = torus_pos(p1, s1);
+                                    let (x2, y2, _) = torus_pos(p2, s2);
+                                    plot_ui.line(
+                                        Line::new("", PlotPoints::new(vec![[x1, y1], [x2, y2]]))
+                                            .color(manhattan_color)
+                                            .width(2.5),
+                                    );
+                                }
+                            }
+
+                            if show_shortest_path {
+                                let path = compute_shortest_path(
+                                    src.plane, src.sat_index,
+                                    dst.plane, dst.sat_index,
+                                    constellation.num_planes, sats_per_plane,
+                                );
+                                for k in 0..(path.len() - 1) {
+                                    let (p1, s1) = path[k];
+                                    let (p2, s2) = path[k + 1];
+                                    let (x1, y1, _) = torus_pos(p1, s1);
+                                    let (x2, y2, _) = torus_pos(p2, s2);
+                                    plot_ui.line(
+                                        Line::new("", PlotPoints::new(vec![[x1, y1], [x2, y2]]))
+                                            .color(shortest_color)
+                                            .width(2.0),
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
