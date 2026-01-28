@@ -1085,7 +1085,7 @@ impl App {
 
         ui.horizontal(|ui| {
             ui.label("Zoom:");
-            ui.add(egui::Slider::new(&mut self.zoom, 0.05..=3.0).logarithmic(true));
+            ui.add(egui::Slider::new(&mut self.zoom, 0.01..=20.0).logarithmic(true));
         });
 
         ui.horizontal(|ui| {
@@ -1235,7 +1235,7 @@ impl eframe::App for App {
             .fold(earth_radius, |a, b| a.max(b));
         if max_planet_radius > self.last_max_planet_radius {
             let ideal_zoom = earth_radius / max_planet_radius;
-            self.zoom = ideal_zoom.clamp(0.05, 1.0);
+            self.zoom = ideal_zoom.clamp(0.01, 1.0);
             self.last_max_planet_radius = max_planet_radius;
         } else if max_planet_radius < self.last_max_planet_radius {
             self.last_max_planet_radius = max_planet_radius;
@@ -2222,11 +2222,11 @@ fn draw_3d_view(
         let scroll = ui.input(|i| i.raw_scroll_delta.y);
         if scroll != 0.0 {
             let factor = 1.0 + scroll as f64 * 0.001;
-            zoom = (zoom * factor).clamp(0.05, 3.0);
+            zoom = (zoom * factor).clamp(0.01, 20.0);
         }
         if let Some(touch) = ui.input(|i| i.multi_touch()) {
             let factor = touch.zoom_delta as f64;
-            zoom = (zoom * factor).clamp(0.05, 3.0);
+            zoom = (zoom * factor).clamp(0.01, 20.0);
         }
     }
 
@@ -2610,11 +2610,11 @@ fn draw_torus(
         let scroll = ui.input(|i| i.raw_scroll_delta.y);
         if scroll != 0.0 {
             let factor = 1.0 + scroll as f64 * 0.001;
-            zoom = (zoom * factor).clamp(0.05, 3.0);
+            zoom = (zoom * factor).clamp(0.01, 20.0);
         }
         if let Some(touch) = ui.input(|i| i.multi_touch()) {
             let factor = touch.zoom_delta as f64;
-            zoom = (zoom * factor).clamp(0.05, 3.0);
+            zoom = (zoom * factor).clamp(0.01, 20.0);
         }
     }
 
