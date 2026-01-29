@@ -410,6 +410,7 @@ struct TabConfig {
     satellite_cameras: Vec<SatelliteCamera>,
     pending_cameras: Vec<SatelliteCamera>,
     cameras_to_remove: Vec<usize>,
+    show_stats: bool,
 }
 
 impl TabConfig {
@@ -422,6 +423,7 @@ impl TabConfig {
             satellite_cameras: Vec::new(),
             pending_cameras: Vec::new(),
             cameras_to_remove: Vec::new(),
+            show_stats: false,
         }
     }
 
@@ -450,6 +452,7 @@ struct App {
     animate: bool,
     show_orbits: bool,
     show_links: bool,
+    show_intra_links: bool,
     show_ground_track: bool,
     show_torus: bool,
     show_axes: bool,
@@ -472,6 +475,8 @@ struct App {
     texture_load_state: TextureLoadState,
     pending_body: Option<CelestialBody>,
     dark_mode: bool,
+    show_info: bool,
+    follow_satellite: bool,
     show_routing_paths: bool,
     show_manhattan_path: bool,
     show_shortest_path: bool,
@@ -500,6 +505,7 @@ impl Default for App {
             animate: true,
             show_orbits: true,
             show_links: true,
+            show_intra_links: false,
             show_ground_track: false,
             show_torus: false,
             show_axes: false,
@@ -526,6 +532,8 @@ impl Default for App {
             texture_load_state: TextureLoadState::Loaded(builtin_texture),
             pending_body: None,
             dark_mode: true,
+            show_info: false,
+            follow_satellite: false,
             show_routing_paths: false,
             show_manhattan_path: true,
             show_shortest_path: true,
@@ -543,6 +551,7 @@ struct ConstellationTabViewer<'a> {
     time: f64,
     show_orbits: bool,
     show_links: bool,
+    show_intra_links: bool,
     show_axes: bool,
     show_coverage: bool,
     coverage_angle: f64,
@@ -579,6 +588,59 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
         tab.satellite_cameras.retain(|c| !tab.cameras_to_remove.contains(&c.id));
         tab.cameras_to_remove.clear();
 
+        ui.horizontal(|ui| {
+            ui.label("Planet:");
+            egui::ComboBox::from_id_salt(format!("planet_{}", tab.name))
+                .selected_text(tab.celestial_body.label())
+                .show_ui(ui, |ui| {
+                    for body in CelestialBody::ALL {
+                        ui.selectable_value(&mut tab.celestial_body, body, body.label());
+                    }
+                });
+
+            if ui.button("Stats").clicked() {
+                tab.show_stats = !tab.show_stats;
+            }
+        });
+
+        if tab.show_stats {
+            egui::Window::new(format!("Stats - {}", tab.name))
+                .open(&mut tab.show_stats)
+                .show(ui.ctx(), |ui| {
+                    let planet_radius = tab.celestial_body.radius_km();
+                    let mu = tab.celestial_body.mu();
+                    const SPEED_OF_LIGHT_KM_S: f64 = 299792.0;
+
+                    for cons in &tab.constellations {
+                        ui.heading(cons.preset_name());
+
+                        let orbit_radius = planet_radius + cons.altitude_km;
+                        let orbit_radius_m = orbit_radius * 1000.0;
+                        let velocity_ms = (mu * 1e9 / orbit_radius_m).sqrt();
+                        let velocity_kmh = velocity_ms * 3.6;
+
+                        let intra_plane_dist = orbit_radius * (2.0 * (1.0 - (2.0 * PI / cons.sats_per_plane as f64).cos())).sqrt();
+                        let inc_rad = cons.inclination.to_radians();
+                        let base_inter = orbit_radius * (2.0 * (1.0 - (2.0 * PI / cons.num_planes as f64).cos())).sqrt();
+                        let inter_plane_dist = base_inter * inc_rad.sin().abs().max(0.1);
+                        let ground_dist = cons.altitude_km;
+
+                        let intra_latency_ms = intra_plane_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
+                        let inter_latency_ms = inter_plane_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
+                        let ground_latency_ms = ground_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
+
+                        ui.label(format!("Satellites: {}", cons.total_sats()));
+                        ui.label(format!("Velocity: {:.0} km/h", velocity_kmh));
+                        ui.label(format!("Intra-plane link: {:.0} km ({:.2} ms)", intra_plane_dist, intra_latency_ms));
+                        ui.label(format!("Inter-plane link: {:.0} km ({:.2} ms)", inter_plane_dist, inter_latency_ms));
+                        ui.label(format!("Ground link: {:.0} km ({:.2} ms)", ground_dist, ground_latency_ms));
+                        ui.separator();
+                    }
+                });
+        }
+
+        ui.separator();
+
         let mut const_to_remove: Option<usize> = None;
         let num_constellations = tab.constellations.len();
 
@@ -586,26 +648,23 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
             for (cidx, cons) in tab.constellations.iter_mut().enumerate() {
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
-                        let label = if self.single_color {
-                            format!("{} ({}):", cons.preset_name(), color_name(cons.color_offset))
-                        } else {
-                            format!("{}:", cons.preset_name())
-                        };
-                        ui.label(label);
-                        if num_constellations > 1 {
-                            if ui.small_button("x").clicked() {
-                                const_to_remove = Some(cidx);
-                            }
-                        }
-                    });
-
-                    ui.horizontal(|ui| {
                         let mut sats = cons.sats_per_plane as i32;
                         let mut planes = cons.num_planes as i32;
                         ui.label("Sats:");
                         let sats_resp = ui.add(egui::DragValue::new(&mut sats).range(1..=100));
                         ui.label("Orbits:");
                         let planes_resp = ui.add(egui::DragValue::new(&mut planes).range(1..=100));
+                        if num_constellations > 1 {
+                            let btn = egui::Button::new(
+                                egui::RichText::new("x").color(egui::Color32::WHITE)
+                            ).fill(egui::Color32::from_rgb(180, 60, 60)).small();
+                            if ui.add(btn).clicked() {
+                                const_to_remove = Some(cidx);
+                            }
+                        }
+                        if self.single_color {
+                            ui.label(format!("({})", color_name(cons.color_offset)));
+                        }
                         if sats > 0 && planes > 0 {
                             cons.sats_per_plane = sats as usize;
                             cons.num_planes = planes as usize;
@@ -641,9 +700,6 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                         if inc_resp.changed() {
                             cons.preset = Preset::None;
                         }
-                    });
-
-                    ui.horizontal(|ui| {
                         ui.label("F:");
                         let max_f = (cons.num_planes - 1).max(1) as f64;
                         let phase_resp = ui.add(egui::DragValue::new(&mut cons.phasing).range(0.0..=max_f).speed(0.1));
@@ -663,70 +719,54 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                     });
 
                     ui.horizontal(|ui| {
-                        // Note: Do not delete these comments
-                        // https://en.wikipedia.org/wiki/Starlink
-                        if ui.selectable_label(cons.preset == Preset::Starlink, "Starlink").clicked() {
-                            cons.sats_per_plane = 22; cons.num_planes = 72;
-                            cons.altitude_km = 550.0; cons.inclination = 53.0;
-                            cons.walker_type = WalkerType::Delta; cons.phasing = 1.0;
-                            cons.preset = Preset::Starlink;
-                        }
-                        // https://www.eoportal.org/satellite-missions/oneweb
-                        if ui.selectable_label(cons.preset == Preset::OneWeb, "OneWeb").clicked() {
-                            cons.sats_per_plane = 54; cons.num_planes = 12;
-                            cons.altitude_km = 1200.0; cons.inclination = 87.9;
-                            cons.walker_type = WalkerType::Star; cons.phasing = 1.0;
-                            cons.preset = Preset::OneWeb;
-                        }
-                        // https://en.wikipedia.org/wiki/Iridium_satellite_constellation
-                        if ui.selectable_label(cons.preset == Preset::Iridium, "Iridium").clicked() {
-                            cons.sats_per_plane = 11; cons.num_planes = 6;
-                            cons.altitude_km = 780.0; cons.inclination = 86.4;
-                            cons.walker_type = WalkerType::Star; cons.phasing = 2.0;
-                            cons.preset = Preset::Iridium;
-                        }
+                        ui.label("Preset:");
+                        egui::ComboBox::from_id_salt(format!("preset_{}_{}", tab.name, cidx))
+                            .selected_text(cons.preset_name())
+                            .show_ui(ui, |ui| {
+                                // https://en.wikipedia.org/wiki/Starlink
+                                if ui.selectable_label(cons.preset == Preset::Starlink, "Starlink").clicked() {
+                                    cons.sats_per_plane = 22; cons.num_planes = 72;
+                                    cons.altitude_km = 550.0; cons.inclination = 53.0;
+                                    cons.walker_type = WalkerType::Delta; cons.phasing = 1.0;
+                                    cons.preset = Preset::Starlink;
+                                }
+                                // https://www.eoportal.org/satellite-missions/oneweb
+                                if ui.selectable_label(cons.preset == Preset::OneWeb, "OneWeb").clicked() {
+                                    cons.sats_per_plane = 54; cons.num_planes = 12;
+                                    cons.altitude_km = 1200.0; cons.inclination = 87.9;
+                                    cons.walker_type = WalkerType::Star; cons.phasing = 1.0;
+                                    cons.preset = Preset::OneWeb;
+                                }
+                                // https://en.wikipedia.org/wiki/Iridium_satellite_constellation
+                                if ui.selectable_label(cons.preset == Preset::Iridium, "Iridium").clicked() {
+                                    cons.sats_per_plane = 11; cons.num_planes = 6;
+                                    cons.altitude_km = 780.0; cons.inclination = 86.4;
+                                    cons.walker_type = WalkerType::Star; cons.phasing = 2.0;
+                                    cons.preset = Preset::Iridium;
+                                }
+                                // https://www.eoportal.org/satellite-missions/projectkuiper
+                                if ui.selectable_label(cons.preset == Preset::Kuiper, "Kuiper").clicked() {
+                                    cons.sats_per_plane = 34; cons.num_planes = 34;
+                                    cons.altitude_km = 630.0; cons.inclination = 51.9;
+                                    cons.walker_type = WalkerType::Delta; cons.phasing = 1.0;
+                                    cons.preset = Preset::Kuiper;
+                                }
+                                // https://en.wikipedia.org/wiki/IRIS%C2%B2
+                                if ui.selectable_label(cons.preset == Preset::Iris2, "Iris²").clicked() {
+                                    cons.sats_per_plane = 22; cons.num_planes = 12;
+                                    cons.altitude_km = 1200.0; cons.inclination = 87.0;
+                                    cons.walker_type = WalkerType::Star; cons.phasing = 1.0;
+                                    cons.preset = Preset::Iris2;
+                                }
+                                // https://www.eoportal.org/satellite-missions/telesat-lightspeed
+                                if ui.selectable_label(cons.preset == Preset::Telesat, "Telesat").clicked() {
+                                    cons.sats_per_plane = 13; cons.num_planes = 6;
+                                    cons.altitude_km = 1015.0; cons.inclination = 98.98;
+                                    cons.walker_type = WalkerType::Star; cons.phasing = 1.0;
+                                    cons.preset = Preset::Telesat;
+                                }
+                            });
                     });
-
-                    ui.horizontal(|ui| {
-                        // https://www.eoportal.org/satellite-missions/projectkuiper
-                        if ui.selectable_label(cons.preset == Preset::Kuiper, "Kuiper").clicked() {
-                            cons.sats_per_plane = 34; cons.num_planes = 34;
-                            cons.altitude_km = 630.0; cons.inclination = 51.9;
-                            cons.walker_type = WalkerType::Delta; cons.phasing = 1.0;
-                            cons.preset = Preset::Kuiper;
-                        }
-                        // https://en.wikipedia.org/wiki/IRIS%C2%B2
-                        if ui.selectable_label(cons.preset == Preset::Iris2, "Iris²").clicked() {
-                            cons.sats_per_plane = 22; cons.num_planes = 12;
-                            cons.altitude_km = 1200.0; cons.inclination = 87.0;
-                            cons.walker_type = WalkerType::Star; cons.phasing = 1.0;
-                            cons.preset = Preset::Iris2;
-                        }
-                        // https://www.eoportal.org/satellite-missions/telesat-lightspeed
-                        if ui.selectable_label(cons.preset == Preset::Telesat, "Telesat").clicked() {
-                            cons.sats_per_plane = 13; cons.num_planes = 6;
-                            cons.altitude_km = 1015.0; cons.inclination = 98.98;
-                            cons.walker_type = WalkerType::Star; cons.phasing = 1.0;
-                            cons.preset = Preset::Telesat;
-                        }
-                    });
-
-                    let orbit_radius = tab.celestial_body.radius_km() + cons.altitude_km;
-                    let intra_plane_dist = orbit_radius * (2.0 * (1.0 - (2.0 * PI / cons.sats_per_plane as f64).cos())).sqrt();
-                    let inc_rad = cons.inclination.to_radians();
-                    let base_inter = orbit_radius * (2.0 * (1.0 - (2.0 * PI / cons.num_planes as f64).cos())).sqrt();
-                    let inter_plane_dist = base_inter * inc_rad.sin().abs().max(0.1);
-                    let ground_dist = cons.altitude_km;
-
-                    const SPEED_OF_LIGHT_KM_S: f64 = 299792.0;
-                    let intra_latency_ms = intra_plane_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
-                    let inter_latency_ms = inter_plane_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
-                    let ground_latency_ms = ground_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
-
-                    ui.label(format!(
-                        "Latency: intra {:.2}ms, inter {:.2}ms, ground {:.2}ms",
-                        intra_latency_ms, inter_latency_ms, ground_latency_ms
-                    ));
                 });
                 ui.separator();
             }
@@ -743,26 +783,6 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                 tab.constellations.remove(cidx);
             }
         }
-
-        ui.horizontal(|ui| {
-            ui.label("Planet:");
-            egui::ComboBox::from_id_salt(format!("planet_{}", tab.name))
-                .selected_text(tab.celestial_body.label())
-                .show_ui(ui, |ui| {
-                    for body in CelestialBody::ALL {
-                        ui.selectable_value(&mut tab.celestial_body, body, body.label());
-                    }
-                });
-
-            let planet_radius = tab.celestial_body.radius_km();
-            let mu = tab.celestial_body.mu();
-            for cons in &tab.constellations {
-                let orbit_radius_m = (planet_radius + cons.altitude_km) * 1000.0;
-                let velocity_ms = (mu * 1e9 / orbit_radius_m).sqrt();
-                let velocity_kmh = velocity_ms * 3.6;
-                ui.label(format!("{}: {:.0} km/h", cons.preset_name(), velocity_kmh));
-            }
-        });
 
         ui.separator();
 
@@ -801,6 +821,7 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                         *self.zoom,
                         self.sat_radius,
                         self.show_links,
+                        self.show_intra_links,
                         self.hide_behind_earth,
                         self.single_color,
                         self.dark_mode,
@@ -879,6 +900,7 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                 *self.zoom,
                 self.sat_radius,
                 self.show_links,
+                self.show_intra_links,
                 self.hide_behind_earth,
                 self.single_color,
                 self.dark_mode,
@@ -1053,6 +1075,10 @@ impl App {
         let total_minutes = (period / 60.0) as i32;
 
         ui.horizontal(|ui| {
+            ui.label("Speed:");
+            ui.add(egui::DragValue::new(&mut self.speed).range(0.1..=10.0).speed(0.1));
+        });
+        ui.horizontal(|ui| {
             ui.label("Time:");
             let mut current_minutes = current_in_orbit / 60.0;
             let response = ui.add(
@@ -1069,7 +1095,8 @@ impl App {
         });
 
         ui.checkbox(&mut self.show_orbits, "Show orbits");
-        ui.checkbox(&mut self.show_links, "Show links");
+        ui.checkbox(&mut self.show_intra_links, "Intra-plane links");
+        ui.checkbox(&mut self.show_links, "Inter-plane links");
         ui.checkbox(&mut self.show_routing_paths, "Show routing paths");
         if self.show_routing_paths {
             ui.indent("routing_opts", |ui| {
@@ -1104,23 +1131,16 @@ impl App {
                     .suffix("x"));
             });
         }
-        ui.checkbox(&mut self.single_color_per_constellation, "Single color per constellation");
+        ui.checkbox(&mut self.single_color_per_constellation, "Monochrome");
+        ui.checkbox(&mut self.follow_satellite, "Follow satellite");
 
         ui.add_space(10.0);
 
         ui.horizontal(|ui| {
-            ui.label("Speed:");
-            ui.add(egui::Slider::new(&mut self.speed, 0.1..=10.0).logarithmic(true));
-        });
-
-        ui.horizontal(|ui| {
             ui.label("Zoom:");
-            ui.add(egui::Slider::new(&mut self.zoom, 0.01..=20.0).logarithmic(true));
-        });
-
-        ui.horizontal(|ui| {
-            ui.label("Sat size:");
-            ui.add(egui::Slider::new(&mut self.sat_radius, 1.0..=15.0));
+            ui.add(egui::DragValue::new(&mut self.zoom).range(0.01..=20.0).speed(0.1));
+            ui.label("Sat:");
+            ui.add(egui::DragValue::new(&mut self.sat_radius).range(1.0..=15.0).speed(0.1));
         });
 
         ui.add_space(10.0);
@@ -1280,6 +1300,44 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
 
+        if self.follow_satellite {
+            if let Some((_surface, tab)) = self.dock_state.find_active_focused() {
+                if tab.satellite_cameras.len() == 1 {
+                    let cam = &tab.satellite_cameras[0];
+                    if let Some(cons) = tab.constellations.get(cam.constellation_idx) {
+                        let planet_radius = tab.celestial_body.radius_km();
+                        let planet_mu = tab.celestial_body.mu();
+                        let wc = cons.constellation(planet_radius, planet_mu);
+                        let positions = wc.satellite_positions(self.time);
+                        if let Some(sat) = positions.iter().find(|s| s.plane == cam.plane && s.sat_index == cam.sat_index) {
+                            let forward = Vector3::new(sat.x, sat.y, sat.z).normalize();
+
+                            let raan_spread = match cons.walker_type {
+                                WalkerType::Delta => 2.0 * PI,
+                                WalkerType::Star => PI,
+                            };
+                            let raan = raan_spread * cam.plane as f64 / cons.num_planes as f64;
+                            let inc = cons.inclination.to_radians();
+                            let orbital_normal = Vector3::new(
+                                raan.sin() * inc.sin(),
+                                inc.cos(),
+                                -raan.cos() * inc.sin(),
+                            );
+                            let velocity_dir = orbital_normal.cross(&forward).normalize();
+                            let up = -velocity_dir;
+                            let right = up.cross(&forward).normalize();
+
+                            self.rotation = Matrix3::new(
+                                right.x, right.y, right.z,
+                                up.x, up.y, up.z,
+                                forward.x, forward.y, forward.z,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         #[cfg(target_arch = "wasm32")]
         TEXTURE_RESULT.with(|cell| {
             if let Some(result) = cell.borrow_mut().take() {
@@ -1354,6 +1412,9 @@ impl eframe::App for App {
                     if ui.button("Balance").clicked() {
                         self.balance_tabs();
                     }
+                    if ui.button("Info").clicked() {
+                        self.show_info = !self.show_info;
+                    }
                 });
             });
 
@@ -1363,12 +1424,77 @@ impl eframe::App for App {
             }
         });
 
+        if self.show_info {
+            egui::Window::new("Info")
+                .open(&mut self.show_info)
+                .default_width(400.0)
+                .show(ctx, |ui| {
+                    ui.collapsing("Celestial Bodies", |ui| {
+                        egui::Grid::new("bodies_grid").striped(true).show(ui, |ui| {
+                            ui.strong("Body");
+                            ui.strong("Radius (km)");
+                            ui.strong("μ (km³/s²)");
+                            ui.end_row();
+                            for body in CelestialBody::ALL {
+                                ui.label(body.label());
+                                ui.label(format!("{:.0}", body.radius_km()));
+                                ui.label(format!("{:.0}", body.mu()));
+                                ui.end_row();
+                            }
+                        });
+                    });
+
+                    ui.collapsing("Orbital Mechanics", |ui| {
+                        ui.label("μ = G × M (standard gravitational parameter)");
+                        ui.separator();
+                        ui.label("Orbital velocity:");
+                        ui.monospace("  v = √(μ / r)");
+                        ui.separator();
+                        ui.label("Orbital period:");
+                        ui.monospace("  T = 2π √(r³ / μ)");
+                        ui.separator();
+                        ui.label("Where:");
+                        ui.label("  r = orbital radius (planet radius + altitude)");
+                        ui.label("  μ = gravitational parameter");
+                    });
+
+                    ui.collapsing("Walker Constellation", |ui| {
+                        ui.label("Notation: i:T/P/F");
+                        ui.label("  i = inclination (degrees)");
+                        ui.label("  T = total satellites");
+                        ui.label("  P = number of orbital planes");
+                        ui.label("  F = phasing factor (0 to P-1)");
+                        ui.separator();
+                        ui.label("Types:");
+                        ui.label("  Delta: planes spread 360° (co-rotating)");
+                        ui.label("  Star: planes spread 180° (counter-rotating seam)");
+                        ui.separator();
+                        ui.label("Phasing offset per plane:");
+                        ui.monospace("  Δ = F × 360° / T");
+                    });
+
+                    ui.collapsing("Link Latency", |ui| {
+                        ui.label("Speed of light: 299,792 km/s");
+                        ui.separator();
+                        ui.label("One-way latency:");
+                        ui.monospace("  t = distance / c");
+                        ui.separator();
+                        ui.label("Intra-plane distance (between adjacent sats):");
+                        ui.monospace("  d = 2r × sin(π / sats_per_plane)");
+                        ui.separator();
+                        ui.label("Inter-plane distance depends on inclination");
+                        ui.label("and relative orbital positions.");
+                    });
+                });
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| {
             let single_tab = self.dock_state.main_surface().num_tabs() == 1;
             let mut tab_viewer = ConstellationTabViewer {
                 time: self.time,
                 show_orbits: self.show_orbits,
                 show_links: self.show_links,
+                show_intra_links: self.show_intra_links,
                 show_axes: self.show_axes,
                 show_coverage: self.show_coverage,
                 coverage_angle: self.coverage_angle,
@@ -1404,8 +1530,6 @@ impl eframe::App for App {
                 let texture = self.planet_textures.get(&tab.celestial_body);
 
                 for camera in &tab.satellite_cameras {
-                    let mut open = true;
-
                     let sat_data = tab.constellations.get(camera.constellation_idx).map(|cons| {
                         let wc = cons.constellation(pr, pm);
                         let positions = wc.satellite_positions(self.time);
@@ -1417,7 +1541,8 @@ impl eframe::App for App {
                     if let Some((lat, lon, altitude_km, texture, planet_radius)) = sat_data {
                         let win_response = egui::Window::new(format!("{}: {}", tab.name, camera.label))
                             .id(egui::Id::new(format!("sat_cam_{}_{}", tab.name, camera.id)))
-                            .open(&mut open)
+                            .title_bar(true)
+                            .collapsible(false)
                             .default_size([200.0, 220.0])
                             .show(ctx, |ui| {
                                 if let Some(tex) = texture {
@@ -1733,6 +1858,7 @@ fn draw_3d_view(
     mut zoom: f64,
     sat_radius: f32,
     show_links: bool,
+    show_intra_links: bool,
     hide_behind_earth: bool,
     single_color: bool,
     dark_mode: bool,
@@ -1745,14 +1871,13 @@ fn draw_3d_view(
     show_shortest_path: bool,
     planet_radius: f64,
 ) -> (Matrix3<f64>, f64) {
-    let earth_radius = CelestialBody::Earth.radius_km();
     let max_altitude = constellations.iter()
         .map(|(c, _, _)| c.altitude_km)
         .fold(550.0_f64, |a, b| a.max(b));
-    let earth_reference = earth_radius + max_altitude;
-    let axis_len = earth_reference * 1.05;
-    let label_offset = axis_len * 1.1;
-    let margin = (earth_reference.max(label_offset) * 1.08) / zoom;
+    let orbit_radius = planet_radius + max_altitude;
+    let axis_len = orbit_radius * 1.05;
+    let planet_view_reference = planet_radius * 1.15;
+    let margin = planet_view_reference / zoom;
 
     let plot = Plot::new(id)
         .data_aspect(1.0)
@@ -2033,6 +2158,41 @@ fn draw_3d_view(
             }
         }
 
+        if show_intra_links {
+            let base_link_color = if show_routing_paths {
+                egui::Color32::from_rgb(80, 80, 80)
+            } else {
+                egui::Color32::from_rgb(200, 200, 200)
+            };
+            let link_dim = egui::Color32::from_rgba_unmultiplied(50, 50, 60, 80);
+            for (constellation, positions, _) in constellations {
+                let sats_per_plane = constellation.sats_per_plane();
+                for plane in 0..constellation.num_planes {
+                    let plane_sats: Vec<_> = positions.iter()
+                        .filter(|s| s.plane == plane)
+                        .collect();
+                    for i in 0..plane_sats.len() {
+                        let sat = plane_sats[i];
+                        let next = plane_sats[(i + 1) % sats_per_plane];
+                        let (rx1, ry1, rz1) = rotate_point_matrix(sat.x, sat.y, sat.z, &rotation);
+                        let (rx2, ry2, rz2) = rotate_point_matrix(next.x, next.y, next.z, &rotation);
+                        let visible1 = rz1 >= 0.0 || (rx1 * rx1 + ry1 * ry1) >= earth_r_sq;
+                        let visible2 = rz2 >= 0.0 || (rx2 * rx2 + ry2 * ry2) >= earth_r_sq;
+                        let both_visible = visible1 && visible2;
+                        if hide_behind_earth && !both_visible {
+                            continue;
+                        }
+                        let color = if both_visible { base_link_color } else { link_dim };
+                        plot_ui.line(
+                            Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
+                                .color(color)
+                                .width(1.0),
+                        );
+                    }
+                }
+            }
+        }
+
         if show_routing_paths && !satellite_cameras.is_empty() {
             let manhattan_color = egui::Color32::from_rgb(255, 100, 100);
             let shortest_color = egui::Color32::from_rgb(100, 255, 100);
@@ -2060,12 +2220,8 @@ fn draw_3d_view(
                         let dst_sat = positions.iter().find(|s| s.plane == dst.plane && s.sat_index == dst.sat_index);
 
                         let can_route = match (src_sat, dst_sat) {
-                            (Some(s), Some(d)) => {
-                                if s.plane == d.plane {
-                                    true
-                                } else if s.ascending != d.ascending {
-                                    false
-                                } else if is_star {
+                            (Some(_), Some(_)) => {
+                                if is_star {
                                     let plane_diff_fwd = (dst.plane + num_planes - src.plane) % num_planes;
                                     let plane_diff_bwd = (src.plane + num_planes - dst.plane) % num_planes;
                                     let crosses_seam = plane_diff_fwd > num_planes / 2 && plane_diff_bwd > num_planes / 2;
@@ -2331,7 +2487,7 @@ fn draw_torus(
     id: &str,
     constellations: &[(WalkerConstellation, Vec<SatelliteState>, usize)],
     time: f64,
-    mut rotation: Matrix3<f64>,
+    rotation: Matrix3<f64>,
     width: f32,
     height: f32,
     sat_radius: f32,
@@ -2389,6 +2545,23 @@ fn draw_torus(
     };
 
     let margin = (major_radius + minor_radius) * 1.3 / zoom;
+
+    let spin_rotation = if let Some((constellation, _, _)) = constellations.first() {
+        let orbit_radius = planet_radius + constellation.altitude_km;
+        let period = 2.0 * PI * (orbit_radius.powi(3) / constellation.planet_mu).sqrt();
+        let spin_angle = 2.0 * PI * time / period;
+        let c = spin_angle.cos();
+        let s = spin_angle.sin();
+        Matrix3::new(
+            c, 0.0, s,
+            0.0, 1.0, 0.0,
+            -s, 0.0, c,
+        )
+    } else {
+        Matrix3::identity()
+    };
+    let mut rotation = spin_rotation * rotation;
+
     let plot = Plot::new(id)
         .data_aspect(1.0)
         .width(width)
@@ -2581,12 +2754,8 @@ fn draw_torus(
                             let dst_sat = positions.iter().find(|s| s.plane == dst.plane && s.sat_index == dst.sat_index);
 
                             let can_route = match (src_sat, dst_sat) {
-                                (Some(s), Some(d)) => {
-                                    if s.plane == d.plane {
-                                        true
-                                    } else if s.ascending != d.ascending {
-                                        false
-                                    } else if is_star {
+                                (Some(_), Some(_)) => {
+                                    if is_star {
                                         let plane_diff_fwd = (dst.plane + num_planes - src.plane) % num_planes;
                                         let plane_diff_bwd = (src.plane + num_planes - dst.plane) % num_planes;
                                         let crosses_seam = plane_diff_fwd > num_planes / 2 && plane_diff_bwd > num_planes / 2;
