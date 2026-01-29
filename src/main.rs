@@ -2045,7 +2045,9 @@ fn draw_3d_view(
 
                         let can_route = match (src_sat, dst_sat) {
                             (Some(s), Some(d)) => {
-                                if s.ascending != d.ascending {
+                                if s.plane == d.plane {
+                                    true
+                                } else if s.ascending != d.ascending {
                                     false
                                 } else if is_star {
                                     let plane_diff_fwd = (dst.plane + num_planes - src.plane) % num_planes;
@@ -2564,7 +2566,9 @@ fn draw_torus(
 
                             let can_route = match (src_sat, dst_sat) {
                                 (Some(s), Some(d)) => {
-                                    if s.ascending != d.ascending {
+                                    if s.plane == d.plane {
+                                        true
+                                    } else if s.ascending != d.ascending {
                                         false
                                     } else if is_star {
                                         let plane_diff_fwd = (dst.plane + num_planes - src.plane) % num_planes;
