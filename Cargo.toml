@@ -15,6 +15,7 @@ egui_dock = "0.18"
 nalgebra = "0.33"
 image = "0.25"
 log = "0.4"
+sgp4 = "2.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 eframe = { version = "0.33", default-features = false, features = [
@@ -22,6 +23,7 @@ eframe = { version = "0.33", default-features = false, features = [
     "glow",
     "persistence",
 ] }
+ureq = "2.9"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 eframe = { version = "0.33", default-features = false, features = [

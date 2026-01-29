@@ -5,6 +5,7 @@ use nalgebra::{Matrix3, Vector3};
 use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::sync::Arc;
+use sgp4::Constants;
 
 #[cfg(target_arch = "wasm32")]
 use eframe::wasm_bindgen::JsCast;
@@ -345,8 +346,163 @@ enum Preset {
     Telesat,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum ConstellationMode {
+    Walker,
+    Tle,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum TlePreset {
+    Starlink,
+    OneWeb,
+    Iridium,
+    IridiumNext,
+    Globalstar,
+    Orbcomm,
+    Gps,
+    Galileo,
+    Glonass,
+    Beidou,
+}
+
+impl TlePreset {
+    fn label(&self) -> &'static str {
+        match self {
+            TlePreset::Starlink => "Starlink",
+            TlePreset::OneWeb => "OneWeb",
+            TlePreset::Iridium => "Iridium",
+            TlePreset::IridiumNext => "Iridium NEXT",
+            TlePreset::Globalstar => "Globalstar",
+            TlePreset::Orbcomm => "Orbcomm",
+            TlePreset::Gps => "GPS",
+            TlePreset::Galileo => "Galileo",
+            TlePreset::Glonass => "GLONASS",
+            TlePreset::Beidou => "Beidou",
+        }
+    }
+
+    fn url(&self) -> &'static str {
+        match self {
+            TlePreset::Starlink => "https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle",
+            TlePreset::OneWeb => "https://celestrak.org/NORAD/elements/gp.php?GROUP=oneweb&FORMAT=tle",
+            TlePreset::Iridium => "https://celestrak.org/NORAD/elements/gp.php?GROUP=iridium&FORMAT=tle",
+            TlePreset::IridiumNext => "https://celestrak.org/NORAD/elements/gp.php?GROUP=iridium-NEXT&FORMAT=tle",
+            TlePreset::Globalstar => "https://celestrak.org/NORAD/elements/gp.php?GROUP=globalstar&FORMAT=tle",
+            TlePreset::Orbcomm => "https://celestrak.org/NORAD/elements/gp.php?GROUP=orbcomm&FORMAT=tle",
+            TlePreset::Gps => "https://celestrak.org/NORAD/elements/gp.php?GROUP=gps-ops&FORMAT=tle",
+            TlePreset::Galileo => "https://celestrak.org/NORAD/elements/gp.php?GROUP=galileo&FORMAT=tle",
+            TlePreset::Glonass => "https://celestrak.org/NORAD/elements/gp.php?GROUP=glo-ops&FORMAT=tle",
+            TlePreset::Beidou => "https://celestrak.org/NORAD/elements/gp.php?GROUP=beidou&FORMAT=tle",
+        }
+    }
+
+    const ALL: [TlePreset; 10] = [
+        TlePreset::Starlink,
+        TlePreset::OneWeb,
+        TlePreset::Iridium,
+        TlePreset::IridiumNext,
+        TlePreset::Globalstar,
+        TlePreset::Orbcomm,
+        TlePreset::Gps,
+        TlePreset::Galileo,
+        TlePreset::Glonass,
+        TlePreset::Beidou,
+    ];
+}
+
+#[derive(Clone)]
+struct TleSatellite {
+    #[allow(dead_code)]
+    name: String,
+    constants: Constants,
+    epoch_minutes: f64,
+}
+
+#[derive(Clone)]
+enum TleLoadState {
+    NotLoaded,
+    Loading,
+    Loaded { satellites: Vec<TleSatellite>, loaded_at: std::time::Instant },
+    Failed(String),
+}
+
+fn current_utc_minutes() -> f64 {
+    let now = std::time::SystemTime::now();
+    let since_epoch = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    since_epoch.as_secs_f64() / 60.0
+}
+
+fn datetime_to_minutes(dt: &sgp4::chrono::NaiveDateTime) -> f64 {
+    dt.and_utc().timestamp() as f64 / 60.0
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fetch_tle_data(url: &str) -> Result<Vec<TleSatellite>, String> {
+    let response = ureq::get(url)
+        .call()
+        .map_err(|e| format!("HTTP error: {}", e))?;
+
+    let body = response.into_string()
+        .map_err(|e| format!("Read error: {}", e))?;
+
+    parse_tle_data(&body)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn fetch_tle_data(_url: &str) -> Result<Vec<TleSatellite>, String> {
+    Err("WASM fetch not yet implemented".to_string())
+}
+
+fn parse_tle_data(data: &str) -> Result<Vec<TleSatellite>, String> {
+    let lines: Vec<&str> = data.lines().collect();
+    let mut satellites = Vec::new();
+
+    let mut i = 0;
+    while i + 2 < lines.len() {
+        let name_line = lines[i].trim();
+        let line1 = lines[i + 1].trim();
+        let line2 = lines[i + 2].trim();
+
+        if !line1.starts_with('1') || !line2.starts_with('2') {
+            i += 1;
+            continue;
+        }
+
+        let tle = format!("{}\n{}\n{}", name_line, line1, line2);
+
+        match sgp4::parse_3les(&tle) {
+            Ok(elements_vec) => {
+                for elements in elements_vec {
+                    match Constants::from_elements(&elements) {
+                        Ok(constants) => {
+                            let epoch_minutes = datetime_to_minutes(&elements.datetime);
+                            satellites.push(TleSatellite {
+                                name: elements.object_name.unwrap_or_default(),
+                                constants,
+                                epoch_minutes,
+                            });
+                        }
+                        Err(_) => continue,
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+
+        i += 3;
+    }
+
+    if satellites.is_empty() {
+        Err("No valid TLE data found".to_string())
+    } else {
+        Ok(satellites)
+    }
+}
+
 #[derive(Clone)]
 struct ConstellationConfig {
+    mode: ConstellationMode,
     sats_per_plane: usize,
     num_planes: usize,
     altitude_km: f64,
@@ -355,11 +511,14 @@ struct ConstellationConfig {
     phasing: f64,
     preset: Preset,
     color_offset: usize,
+    tle_preset: TlePreset,
+    tle_state: TleLoadState,
 }
 
 impl ConstellationConfig {
     fn new(color_offset: usize) -> Self {
         Self {
+            mode: ConstellationMode::Walker,
             sats_per_plane: 11,
             num_planes: 6,
             altitude_km: 780.0,
@@ -368,17 +527,28 @@ impl ConstellationConfig {
             phasing: 2.0,
             preset: Preset::Iridium,
             color_offset,
+            tle_preset: TlePreset::Iridium,
+            tle_state: TleLoadState::NotLoaded,
         }
     }
 
     fn total_sats(&self) -> usize {
-        self.sats_per_plane * self.num_planes
+        match self.mode {
+            ConstellationMode::Walker => self.sats_per_plane * self.num_planes,
+            ConstellationMode::Tle => {
+                if let TleLoadState::Loaded { satellites, .. } = &self.tle_state {
+                    satellites.len()
+                } else {
+                    0
+                }
+            }
+        }
     }
 
     fn constellation(&self, planet_radius: f64, planet_mu: f64) -> WalkerConstellation {
         WalkerConstellation {
             walker_type: self.walker_type,
-            total_sats: self.total_sats(),
+            total_sats: self.sats_per_plane * self.num_planes,
             num_planes: self.num_planes,
             altitude_km: self.altitude_km,
             inclination_deg: self.inclination,
@@ -389,15 +559,78 @@ impl ConstellationConfig {
     }
 
     fn preset_name(&self) -> &'static str {
-        match self.preset {
-            Preset::None => "Custom",
-            Preset::Starlink => "Starlink",
-            Preset::OneWeb => "OneWeb",
-            Preset::Iridium => "Iridium",
-            Preset::Kuiper => "Kuiper",
-            Preset::Iris2 => "Iris²",
-            Preset::Telesat => "Telesat",
+        match self.mode {
+            ConstellationMode::Walker => match self.preset {
+                Preset::None => "Custom",
+                Preset::Starlink => "Starlink",
+                Preset::OneWeb => "OneWeb",
+                Preset::Iridium => "Iridium",
+                Preset::Kuiper => "Kuiper",
+                Preset::Iris2 => "Iris²",
+                Preset::Telesat => "Telesat",
+            },
+            ConstellationMode::Tle => self.tle_preset.label(),
         }
+    }
+
+    fn tle_satellite_positions(&self, time: f64, _planet_radius: f64) -> Vec<SatelliteState> {
+        let satellites = match &self.tle_state {
+            TleLoadState::Loaded { satellites, .. } => satellites,
+            _ => return Vec::new(),
+        };
+
+        let now_minutes = current_utc_minutes();
+        let propagation_minutes = now_minutes + time;
+
+        let mut positions = Vec::with_capacity(satellites.len());
+        for (idx, sat) in satellites.iter().enumerate() {
+            let minutes_since_epoch = propagation_minutes - sat.epoch_minutes;
+            let prediction = match sat.constants.propagate(sgp4::MinutesSinceEpoch(minutes_since_epoch)) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+
+            let x = prediction.position[0];
+            let y = prediction.position[1];
+            let z = prediction.position[2];
+
+            let r = (x * x + y * y + z * z).sqrt();
+            let lat = (z / r).asin().to_degrees();
+            let lon = y.atan2(x).to_degrees();
+
+            let ascending = prediction.velocity[2] > 0.0;
+
+            positions.push(SatelliteState {
+                plane: idx / 22,
+                sat_index: idx % 22,
+                x, y, z,
+                lat, lon,
+                ascending,
+                neighbor_idx: None,
+            });
+        }
+
+        for i in 0..positions.len() {
+            let mut best_dist = f64::MAX;
+            let mut best_idx = None;
+            let pi = &positions[i];
+            for j in 0..positions.len() {
+                if i == j { continue; }
+                let pj = &positions[j];
+                if pi.ascending != pj.ascending { continue; }
+                let dx = pi.x - pj.x;
+                let dy = pi.y - pj.y;
+                let dz = pi.z - pj.z;
+                let dist = dx*dx + dy*dy + dz*dz;
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_idx = Some(j);
+                }
+            }
+            positions[i].neighbor_idx = best_idx;
+        }
+
+        positions
     }
 }
 
@@ -648,12 +881,8 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
             for (cidx, cons) in tab.constellations.iter_mut().enumerate() {
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
-                        let mut sats = cons.sats_per_plane as i32;
-                        let mut planes = cons.num_planes as i32;
-                        ui.label("Sats:");
-                        let sats_resp = ui.add(egui::DragValue::new(&mut sats).range(1..=100));
-                        ui.label("Orbits:");
-                        let planes_resp = ui.add(egui::DragValue::new(&mut planes).range(1..=100));
+                        ui.selectable_value(&mut cons.mode, ConstellationMode::Walker, "Walker");
+                        ui.selectable_value(&mut cons.mode, ConstellationMode::Tle, "TLE");
                         if num_constellations > 1 {
                             let btn = egui::Button::new(
                                 egui::RichText::new("x").color(egui::Color32::WHITE)
@@ -665,6 +894,16 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                         if self.single_color {
                             ui.label(format!("({})", color_name(cons.color_offset)));
                         }
+                    });
+
+                    if cons.mode == ConstellationMode::Walker {
+                    ui.horizontal(|ui| {
+                        let mut sats = cons.sats_per_plane as i32;
+                        let mut planes = cons.num_planes as i32;
+                        ui.label("Sats:");
+                        let sats_resp = ui.add(egui::DragValue::new(&mut sats).range(1..=100));
+                        ui.label("Orbits:");
+                        let planes_resp = ui.add(egui::DragValue::new(&mut planes).range(1..=100));
                         if sats > 0 && planes > 0 {
                             cons.sats_per_plane = sats as usize;
                             cons.num_planes = planes as usize;
@@ -767,6 +1006,74 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                                 }
                             });
                     });
+                    } else {
+                        ui.horizontal(|ui| {
+                            ui.label("Source:");
+                            egui::ComboBox::from_id_salt(format!("tle_preset_{}_{}", tab.name, cidx))
+                                .selected_text(cons.tle_preset.label())
+                                .show_ui(ui, |ui| {
+                                    for preset in TlePreset::ALL {
+                                        if ui.selectable_label(cons.tle_preset == preset, preset.label()).clicked() {
+                                            cons.tle_preset = preset;
+                                            cons.tle_state = TleLoadState::NotLoaded;
+                                        }
+                                    }
+                                });
+                        });
+
+                        ui.horizontal(|ui| {
+                            match &cons.tle_state {
+                                TleLoadState::NotLoaded => {
+                                    if ui.button("Fetch TLEs").clicked() {
+                                        cons.tle_state = TleLoadState::Loading;
+                                        match fetch_tle_data(cons.tle_preset.url()) {
+                                            Ok(satellites) => {
+                                                cons.tle_state = TleLoadState::Loaded {
+                                                    satellites,
+                                                    loaded_at: std::time::Instant::now(),
+                                                };
+                                            }
+                                            Err(e) => {
+                                                cons.tle_state = TleLoadState::Failed(e);
+                                            }
+                                        }
+                                    }
+                                }
+                                TleLoadState::Loading => {
+                                    ui.label("Loading...");
+                                }
+                                TleLoadState::Loaded { satellites, loaded_at } => {
+                                    ui.label(format!("{} sats", satellites.len()));
+                                    let elapsed = loaded_at.elapsed().as_secs();
+                                    if elapsed < 60 {
+                                        ui.label(format!("({}s ago)", elapsed));
+                                    } else {
+                                        ui.label(format!("({}m ago)", elapsed / 60));
+                                    }
+                                    if ui.small_button("↻").clicked() {
+                                        cons.tle_state = TleLoadState::Loading;
+                                        match fetch_tle_data(cons.tle_preset.url()) {
+                                            Ok(satellites) => {
+                                                cons.tle_state = TleLoadState::Loaded {
+                                                    satellites,
+                                                    loaded_at: std::time::Instant::now(),
+                                                };
+                                            }
+                                            Err(e) => {
+                                                cons.tle_state = TleLoadState::Failed(e);
+                                            }
+                                        }
+                                    }
+                                }
+                                TleLoadState::Failed(e) => {
+                                    ui.label(egui::RichText::new(format!("Error: {}", e)).color(egui::Color32::RED));
+                                    if ui.small_button("Retry").clicked() {
+                                        cons.tle_state = TleLoadState::NotLoaded;
+                                    }
+                                }
+                            }
+                        });
+                    }
                 });
                 ui.separator();
             }
@@ -791,7 +1098,10 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
         let constellations_data: Vec<_> = tab.constellations.iter()
             .map(|c| {
                 let wc = c.constellation(planet_radius, planet_mu);
-                let pos = wc.satellite_positions(self.time);
+                let pos = match c.mode {
+                    ConstellationMode::Walker => wc.satellite_positions(self.time),
+                    ConstellationMode::Tle => c.tle_satellite_positions(self.time, planet_radius),
+                };
                 (wc, pos, c.color_offset)
             })
             .collect();
