@@ -189,6 +189,7 @@ struct WalkerConstellation {
     num_planes: usize,
     altitude_km: f64,
     inclination_deg: f64,
+    phasing: f64,
     planet_radius: f64,
     planet_mu: f64,
 }
@@ -219,13 +220,16 @@ impl WalkerConstellation {
         let sat_step = 2.0 * PI / sats_per_plane as f64;
         let is_star = self.walker_type == WalkerType::Star;
 
+        let phase_step = self.phasing * 2.0 * PI / self.total_sats as f64;
+
         for plane in 0..self.num_planes {
             let raan = raan_step * plane as f64;
             let raan_cos = raan.cos();
             let raan_sin = raan.sin();
+            let phase_offset = phase_step * plane as f64;
 
             for sat in 0..sats_per_plane {
-                let true_anomaly = sat_step * sat as f64 + mean_motion * time;
+                let true_anomaly = sat_step * sat as f64 + mean_motion * time + phase_offset;
                 let ascending = true_anomaly.cos() > 0.0;
 
                 let x_orbital = orbit_radius * true_anomaly.cos();
@@ -348,6 +352,7 @@ struct ConstellationConfig {
     altitude_km: f64,
     inclination: f64,
     walker_type: WalkerType,
+    phasing: f64,
     preset: Preset,
     color_offset: usize,
 }
@@ -360,6 +365,7 @@ impl ConstellationConfig {
             altitude_km: 780.0,
             inclination: 86.4,
             walker_type: WalkerType::Star,
+            phasing: 2.0,
             preset: Preset::Iridium,
             color_offset,
         }
@@ -376,6 +382,7 @@ impl ConstellationConfig {
             num_planes: self.num_planes,
             altitude_km: self.altitude_km,
             inclination_deg: self.inclination,
+            phasing: self.phasing,
             planet_radius,
             planet_mu,
         }
@@ -616,7 +623,7 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                             cons.preset = Preset::None;
                         }
                         if ui.small_button("MEO").clicked() {
-                            cons.altitude_km = 20000.0;
+                            cons.altitude_km = 2000.0;
                             cons.preset = Preset::None;
                         }
                         if ui.small_button("GEO").clicked() {
@@ -637,6 +644,15 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                     });
 
                     ui.horizontal(|ui| {
+                        ui.label("F:");
+                        let max_f = (cons.num_planes - 1).max(1) as f64;
+                        let phase_resp = ui.add(egui::DragValue::new(&mut cons.phasing).range(0.0..=max_f).speed(0.1));
+                        if phase_resp.changed() {
+                            cons.preset = Preset::None;
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
                         let old_type = cons.walker_type;
                         ui.selectable_value(&mut cons.walker_type, WalkerType::Delta, "Delta");
                         ui.selectable_value(&mut cons.walker_type, WalkerType::Star, "Star");
@@ -652,21 +668,21 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                         if ui.selectable_label(cons.preset == Preset::Starlink, "Starlink").clicked() {
                             cons.sats_per_plane = 22; cons.num_planes = 72;
                             cons.altitude_km = 550.0; cons.inclination = 53.0;
-                            cons.walker_type = WalkerType::Delta;
+                            cons.walker_type = WalkerType::Delta; cons.phasing = 1.0;
                             cons.preset = Preset::Starlink;
                         }
                         // https://www.eoportal.org/satellite-missions/oneweb
                         if ui.selectable_label(cons.preset == Preset::OneWeb, "OneWeb").clicked() {
                             cons.sats_per_plane = 54; cons.num_planes = 12;
                             cons.altitude_km = 1200.0; cons.inclination = 87.9;
-                            cons.walker_type = WalkerType::Star;
+                            cons.walker_type = WalkerType::Star; cons.phasing = 1.0;
                             cons.preset = Preset::OneWeb;
                         }
                         // https://en.wikipedia.org/wiki/Iridium_satellite_constellation
                         if ui.selectable_label(cons.preset == Preset::Iridium, "Iridium").clicked() {
                             cons.sats_per_plane = 11; cons.num_planes = 6;
                             cons.altitude_km = 780.0; cons.inclination = 86.4;
-                            cons.walker_type = WalkerType::Star;
+                            cons.walker_type = WalkerType::Star; cons.phasing = 2.0;
                             cons.preset = Preset::Iridium;
                         }
                     });
@@ -676,21 +692,21 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                         if ui.selectable_label(cons.preset == Preset::Kuiper, "Kuiper").clicked() {
                             cons.sats_per_plane = 34; cons.num_planes = 34;
                             cons.altitude_km = 630.0; cons.inclination = 51.9;
-                            cons.walker_type = WalkerType::Delta;
+                            cons.walker_type = WalkerType::Delta; cons.phasing = 1.0;
                             cons.preset = Preset::Kuiper;
                         }
                         // https://en.wikipedia.org/wiki/IRIS%C2%B2
                         if ui.selectable_label(cons.preset == Preset::Iris2, "Iris²").clicked() {
                             cons.sats_per_plane = 22; cons.num_planes = 12;
                             cons.altitude_km = 1200.0; cons.inclination = 87.0;
-                            cons.walker_type = WalkerType::Star;
+                            cons.walker_type = WalkerType::Star; cons.phasing = 1.0;
                             cons.preset = Preset::Iris2;
                         }
                         // https://www.eoportal.org/satellite-missions/telesat-lightspeed
                         if ui.selectable_label(cons.preset == Preset::Telesat, "Telesat").clicked() {
                             cons.sats_per_plane = 13; cons.num_planes = 6;
                             cons.altitude_km = 1015.0; cons.inclination = 98.98;
-                            cons.walker_type = WalkerType::Star;
+                            cons.walker_type = WalkerType::Star; cons.phasing = 1.0;
                             cons.preset = Preset::Telesat;
                         }
                     });
