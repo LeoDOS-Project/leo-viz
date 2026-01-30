@@ -4,7 +4,7 @@ use egui_plot::{Line, Plot, PlotImage, PlotPoints, PlotPoint, Points, Polygon, T
 use nalgebra::{Matrix3, Vector3};
 use std::collections::HashMap;
 use std::f64::consts::PI;
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 use sgp4::Constants;
 
 #[cfg(target_arch = "wasm32")]
@@ -22,6 +22,42 @@ enum CelestialBody {
     Sun,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Skin {
+    Default,
+    HellOnEarth,
+    Terraformed,
+    Civilized,
+}
+
+impl Skin {
+    fn label(&self) -> &'static str {
+        match self {
+            Skin::Default => "Default",
+            Skin::HellOnEarth => "Hell on Earth",
+            Skin::Terraformed => "Terraformed",
+            Skin::Civilized => "Civilized",
+        }
+    }
+
+    fn filename(&self, body: CelestialBody) -> Option<&'static str> {
+        match (body, self) {
+            (CelestialBody::Earth, Skin::Default) => Some("textures/earth_2k.jpg"),
+            (CelestialBody::Earth, Skin::HellOnEarth) => Some("textures/hell_on_earth_2k.png"),
+            (CelestialBody::Moon, Skin::Default) => Some("textures/moon_2k.jpg"),
+            (CelestialBody::Mars, Skin::Default) => Some("textures/mars_2k.jpg"),
+            (CelestialBody::Mars, Skin::Terraformed) => Some("textures/mars_terraformed.png"),
+            (CelestialBody::Mars, Skin::Civilized) => Some("textures/mars_civilized.png"),
+            (CelestialBody::Mercury, Skin::Default) => Some("textures/mercury_2k.jpg"),
+            (CelestialBody::Venus, Skin::Default) => Some("textures/venus_2k.jpg"),
+            (CelestialBody::Jupiter, Skin::Default) => Some("textures/jupiter_2k.jpg"),
+            (CelestialBody::Saturn, Skin::Default) => Some("textures/saturn_2k.jpg"),
+            (CelestialBody::Sun, Skin::Default) => Some("textures/sun_2k.jpg"),
+            _ => None,
+        }
+    }
+}
+
 impl CelestialBody {
     fn label(&self) -> &'static str {
         match self {
@@ -36,16 +72,11 @@ impl CelestialBody {
         }
     }
 
-    fn filename(&self) -> &'static str {
+    fn available_skins(&self) -> &'static [Skin] {
         match self {
-            CelestialBody::Earth => "textures/earth_2k.jpg",
-            CelestialBody::Moon => "textures/moon_2k.jpg",
-            CelestialBody::Mars => "textures/mars_2k.jpg",
-            CelestialBody::Mercury => "textures/mercury_2k.jpg",
-            CelestialBody::Venus => "textures/venus_2k.jpg",
-            CelestialBody::Jupiter => "textures/jupiter_2k.jpg",
-            CelestialBody::Saturn => "textures/saturn_2k.jpg",
-            CelestialBody::Sun => "textures/sun_2k.jpg",
+            CelestialBody::Earth => &[Skin::Default, Skin::HellOnEarth],
+            CelestialBody::Mars => &[Skin::Default, Skin::Terraformed, Skin::Civilized],
+            _ => &[Skin::Default],
         }
     }
 
@@ -513,6 +544,7 @@ struct ConstellationConfig {
     color_offset: usize,
     tle_preset: TlePreset,
     tle_state: TleLoadState,
+    hidden: bool,
 }
 
 impl ConstellationConfig {
@@ -529,6 +561,7 @@ impl ConstellationConfig {
             color_offset,
             tle_preset: TlePreset::Iridium,
             tle_state: TleLoadState::NotLoaded,
+            hidden: false,
         }
     }
 
@@ -580,7 +613,8 @@ impl ConstellationConfig {
         };
 
         let now_minutes = current_utc_minutes();
-        let propagation_minutes = now_minutes + time;
+        let time_offset_minutes = time / 60.0;
+        let propagation_minutes = now_minutes + time_offset_minutes;
 
         let mut positions = Vec::with_capacity(satellites.len());
         for (idx, sat) in satellites.iter().enumerate() {
@@ -591,12 +625,12 @@ impl ConstellationConfig {
             };
 
             let x = prediction.position[0];
-            let y = prediction.position[1];
-            let z = prediction.position[2];
+            let y = prediction.position[2];
+            let z = prediction.position[1];
 
             let r = (x * x + y * y + z * z).sqrt();
-            let lat = (z / r).asin().to_degrees();
-            let lon = y.atan2(x).to_degrees();
+            let lat = (y / r).asin().to_degrees();
+            let lon = z.atan2(x).to_degrees();
 
             let ascending = prediction.velocity[2] > 0.0;
 
@@ -610,26 +644,6 @@ impl ConstellationConfig {
             });
         }
 
-        for i in 0..positions.len() {
-            let mut best_dist = f64::MAX;
-            let mut best_idx = None;
-            let pi = &positions[i];
-            for j in 0..positions.len() {
-                if i == j { continue; }
-                let pj = &positions[j];
-                if pi.ascending != pj.ascending { continue; }
-                let dx = pi.x - pj.x;
-                let dy = pi.y - pj.y;
-                let dz = pi.z - pj.z;
-                let dist = dx*dx + dy*dy + dz*dz;
-                if dist < best_dist {
-                    best_dist = dist;
-                    best_idx = Some(j);
-                }
-            }
-            positions[i].neighbor_idx = best_idx;
-        }
-
         positions
     }
 }
@@ -640,6 +654,7 @@ struct TabConfig {
     constellations: Vec<ConstellationConfig>,
     constellation_counter: usize,
     celestial_body: CelestialBody,
+    skin: Skin,
     satellite_cameras: Vec<SatelliteCamera>,
     pending_cameras: Vec<SatelliteCamera>,
     cameras_to_remove: Vec<usize>,
@@ -653,6 +668,7 @@ impl TabConfig {
             constellations: vec![ConstellationConfig::new(0)],
             constellation_counter: 1,
             celestial_body: CelestialBody::Earth,
+            skin: Skin::Default,
             satellite_cameras: Vec::new(),
             pending_cameras: Vec::new(),
             cameras_to_remove: Vec::new(),
@@ -700,13 +716,13 @@ struct App {
     sat_radius: f32,
     rotation: Matrix3<f64>,
     torus_rotation: Matrix3<f64>,
-    planet_textures: HashMap<CelestialBody, Arc<EarthTexture>>,
-    planet_image_handles: HashMap<CelestialBody, egui::TextureHandle>,
+    planet_textures: HashMap<(CelestialBody, Skin), Arc<EarthTexture>>,
+    planet_image_handles: HashMap<(CelestialBody, Skin), egui::TextureHandle>,
     last_rotation: Option<Matrix3<f64>>,
     earth_resolution: usize,
     last_resolution: usize,
     texture_load_state: TextureLoadState,
-    pending_body: Option<CelestialBody>,
+    pending_body: Option<(CelestialBody, Skin)>,
     dark_mode: bool,
     show_info: bool,
     follow_satellite: bool,
@@ -719,6 +735,10 @@ struct App {
     earth_rotation_angle: f64,
     last_earth_rotation_angle: f64,
     last_max_planet_radius: f64,
+    #[cfg(not(target_arch = "wasm32"))]
+    tle_fetch_tx: mpsc::Sender<(TlePreset, Result<Vec<TleSatellite>, String>)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    tle_fetch_rx: mpsc::Receiver<(TlePreset, Result<Vec<TleSatellite>, String>)>,
 }
 
 impl Default for App {
@@ -729,12 +749,14 @@ impl Default for App {
             0.0, 1.0, 0.0,
         );
         let builtin_texture = Arc::new(EarthTexture::load());
+        #[cfg(not(target_arch = "wasm32"))]
+        let (tle_fetch_tx, tle_fetch_rx) = mpsc::channel();
         Self {
             dock_state: DockState::new(vec![TabConfig::new("Config 1".to_string())]),
             camera_id_counter: 0,
             tab_counter: 1,
             time: 0.0,
-            speed: 0.5,
+            speed: 1.0,
             animate: true,
             show_orbits: true,
             show_links: true,
@@ -755,7 +777,7 @@ impl Default for App {
             torus_rotation: torus_initial,
             planet_textures: {
                 let mut map = HashMap::new();
-                map.insert(CelestialBody::Earth, builtin_texture.clone());
+                map.insert((CelestialBody::Earth, Skin::Default), builtin_texture.clone());
                 map
             },
             planet_image_handles: HashMap::new(),
@@ -772,10 +794,14 @@ impl Default for App {
             show_shortest_path: true,
             show_camera_windows: false,
             rotate_earth: true,
-            earth_rotation_speed: 5.0,
+            earth_rotation_speed: 1.0,
             earth_rotation_angle: 0.0,
             last_earth_rotation_angle: 0.0,
             last_max_planet_radius: CelestialBody::Earth.radius_km(),
+            #[cfg(not(target_arch = "wasm32"))]
+            tle_fetch_tx,
+            #[cfg(not(target_arch = "wasm32"))]
+            tle_fetch_rx,
         }
     }
 }
@@ -804,7 +830,9 @@ struct ConstellationTabViewer<'a> {
     sat_radius: f32,
     rotation: &'a mut Matrix3<f64>,
     torus_rotation: &'a mut Matrix3<f64>,
-    planet_handles: &'a HashMap<CelestialBody, egui::TextureHandle>,
+    planet_handles: &'a HashMap<(CelestialBody, Skin), egui::TextureHandle>,
+    #[cfg(not(target_arch = "wasm32"))]
+    tle_fetch_tx: &'a mpsc::Sender<(TlePreset, Result<Vec<TleSatellite>, String>)>,
 }
 
 impl<'a> TabViewer for ConstellationTabViewer<'a> {
@@ -827,9 +855,23 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                 .selected_text(tab.celestial_body.label())
                 .show_ui(ui, |ui| {
                     for body in CelestialBody::ALL {
-                        ui.selectable_value(&mut tab.celestial_body, body, body.label());
+                        if ui.selectable_value(&mut tab.celestial_body, body, body.label()).changed() {
+                            tab.skin = Skin::Default;
+                        }
                     }
                 });
+
+            let available_skins = tab.celestial_body.available_skins();
+            if available_skins.len() > 1 {
+                ui.label("Skin:");
+                egui::ComboBox::from_id_salt(format!("skin_{}", tab.name))
+                    .selected_text(tab.skin.label())
+                    .show_ui(ui, |ui| {
+                        for skin in available_skins {
+                            ui.selectable_value(&mut tab.skin, *skin, skin.label());
+                        }
+                    });
+            }
 
             if ui.button("Stats").clicked() {
                 tab.show_stats = !tab.show_stats;
@@ -846,27 +888,48 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
 
                     for cons in &tab.constellations {
                         ui.heading(cons.preset_name());
-
-                        let orbit_radius = planet_radius + cons.altitude_km;
-                        let orbit_radius_m = orbit_radius * 1000.0;
-                        let velocity_ms = (mu * 1e9 / orbit_radius_m).sqrt();
-                        let velocity_kmh = velocity_ms * 3.6;
-
-                        let intra_plane_dist = orbit_radius * (2.0 * (1.0 - (2.0 * PI / cons.sats_per_plane as f64).cos())).sqrt();
-                        let inc_rad = cons.inclination.to_radians();
-                        let base_inter = orbit_radius * (2.0 * (1.0 - (2.0 * PI / cons.num_planes as f64).cos())).sqrt();
-                        let inter_plane_dist = base_inter * inc_rad.sin().abs().max(0.1);
-                        let ground_dist = cons.altitude_km;
-
-                        let intra_latency_ms = intra_plane_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
-                        let inter_latency_ms = inter_plane_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
-                        let ground_latency_ms = ground_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
-
                         ui.label(format!("Satellites: {}", cons.total_sats()));
-                        ui.label(format!("Velocity: {:.0} km/h", velocity_kmh));
-                        ui.label(format!("Intra-plane link: {:.0} km ({:.2} ms)", intra_plane_dist, intra_latency_ms));
-                        ui.label(format!("Inter-plane link: {:.0} km ({:.2} ms)", inter_plane_dist, inter_latency_ms));
-                        ui.label(format!("Ground link: {:.0} km ({:.2} ms)", ground_dist, ground_latency_ms));
+
+                        if cons.mode == ConstellationMode::Tle {
+                            if let TleLoadState::Loaded { satellites, .. } = &cons.tle_state {
+                                let positions = cons.tle_satellite_positions(self.time, planet_radius);
+                                if !positions.is_empty() {
+                                    let mut min_alt = f64::MAX;
+                                    let mut max_alt = f64::MIN;
+                                    for sat in &positions {
+                                        let r = (sat.x * sat.x + sat.y * sat.y + sat.z * sat.z).sqrt();
+                                        let alt = r - planet_radius;
+                                        min_alt = min_alt.min(alt);
+                                        max_alt = max_alt.max(alt);
+                                    }
+                                    ui.label(format!("Altitude: {:.0} - {:.0} km", min_alt, max_alt));
+                                    let avg_alt = (min_alt + max_alt) / 2.0;
+                                    let ground_latency_ms = avg_alt / SPEED_OF_LIGHT_KM_S * 1000.0;
+                                    ui.label(format!("Ground link: ~{:.0} km ({:.2} ms)", avg_alt, ground_latency_ms));
+                                }
+                                let _ = satellites;
+                            }
+                        } else {
+                            let orbit_radius = planet_radius + cons.altitude_km;
+                            let orbit_radius_m = orbit_radius * 1000.0;
+                            let velocity_ms = (mu * 1e9 / orbit_radius_m).sqrt();
+                            let velocity_kmh = velocity_ms * 3.6;
+
+                            let intra_plane_dist = orbit_radius * (2.0 * (1.0 - (2.0 * PI / cons.sats_per_plane as f64).cos())).sqrt();
+                            let inc_rad = cons.inclination.to_radians();
+                            let base_inter = orbit_radius * (2.0 * (1.0 - (2.0 * PI / cons.num_planes as f64).cos())).sqrt();
+                            let inter_plane_dist = base_inter * inc_rad.sin().abs().max(0.1);
+                            let ground_dist = cons.altitude_km;
+
+                            let intra_latency_ms = intra_plane_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
+                            let inter_latency_ms = inter_plane_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
+                            let ground_latency_ms = ground_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
+
+                            ui.label(format!("Velocity: {:.0} km/h", velocity_kmh));
+                            ui.label(format!("Intra-plane link: {:.0} km ({:.2} ms)", intra_plane_dist, intra_latency_ms));
+                            ui.label(format!("Inter-plane link: {:.0} km ({:.2} ms)", inter_plane_dist, inter_latency_ms));
+                            ui.label(format!("Ground link: {:.0} km ({:.2} ms)", ground_dist, ground_latency_ms));
+                        }
                         ui.separator();
                     }
                 });
@@ -883,6 +946,16 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                     ui.horizontal(|ui| {
                         ui.selectable_value(&mut cons.mode, ConstellationMode::Walker, "Walker");
                         ui.selectable_value(&mut cons.mode, ConstellationMode::Tle, "TLE");
+                        let hide_btn = if cons.hidden {
+                            egui::Button::new(egui::RichText::new("+").color(egui::Color32::WHITE))
+                                .fill(egui::Color32::from_rgb(60, 140, 60)).small()
+                        } else {
+                            egui::Button::new(egui::RichText::new("−").color(egui::Color32::WHITE))
+                                .fill(egui::Color32::from_rgb(100, 100, 100)).small()
+                        };
+                        if ui.add(hide_btn).clicked() {
+                            cons.hidden = !cons.hidden;
+                        }
                         if num_constellations > 1 {
                             let btn = egui::Button::new(
                                 egui::RichText::new("x").color(egui::Color32::WHITE)
@@ -891,7 +964,7 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                                 const_to_remove = Some(cidx);
                             }
                         }
-                        if self.single_color {
+                        if self.single_color || cons.mode == ConstellationMode::Tle {
                             ui.label(format!("({})", color_name(cons.color_offset)));
                         }
                     });
@@ -1021,25 +1094,23 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                                 });
                         });
 
+                        #[cfg(not(target_arch = "wasm32"))]
                         ui.horizontal(|ui| {
                             match &cons.tle_state {
                                 TleLoadState::NotLoaded => {
                                     if ui.button("Fetch TLEs").clicked() {
                                         cons.tle_state = TleLoadState::Loading;
-                                        match fetch_tle_data(cons.tle_preset.url()) {
-                                            Ok(satellites) => {
-                                                cons.tle_state = TleLoadState::Loaded {
-                                                    satellites,
-                                                    loaded_at: std::time::Instant::now(),
-                                                };
-                                            }
-                                            Err(e) => {
-                                                cons.tle_state = TleLoadState::Failed(e);
-                                            }
-                                        }
+                                        let preset = cons.tle_preset;
+                                        let url = preset.url().to_string();
+                                        let tx = self.tle_fetch_tx.clone();
+                                        std::thread::spawn(move || {
+                                            let result = fetch_tle_data(&url);
+                                            let _ = tx.send((preset, result));
+                                        });
                                     }
                                 }
                                 TleLoadState::Loading => {
+                                    ui.spinner();
                                     ui.label("Loading...");
                                 }
                                 TleLoadState::Loaded { satellites, loaded_at } => {
@@ -1052,17 +1123,13 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                                     }
                                     if ui.small_button("↻").clicked() {
                                         cons.tle_state = TleLoadState::Loading;
-                                        match fetch_tle_data(cons.tle_preset.url()) {
-                                            Ok(satellites) => {
-                                                cons.tle_state = TleLoadState::Loaded {
-                                                    satellites,
-                                                    loaded_at: std::time::Instant::now(),
-                                                };
-                                            }
-                                            Err(e) => {
-                                                cons.tle_state = TleLoadState::Failed(e);
-                                            }
-                                        }
+                                        let preset = cons.tle_preset;
+                                        let url = preset.url().to_string();
+                                        let tx = self.tle_fetch_tx.clone();
+                                        std::thread::spawn(move || {
+                                            let result = fetch_tle_data(&url);
+                                            let _ = tx.send((preset, result));
+                                        });
                                     }
                                 }
                                 TleLoadState::Failed(e) => {
@@ -1072,6 +1139,10 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                                     }
                                 }
                             }
+                        });
+                        #[cfg(target_arch = "wasm32")]
+                        ui.horizontal(|ui| {
+                            ui.label("TLE fetch not supported on web");
                         });
                     }
                 });
@@ -1096,13 +1167,16 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
         let planet_radius = tab.celestial_body.radius_km();
         let planet_mu = tab.celestial_body.mu();
         let constellations_data: Vec<_> = tab.constellations.iter()
-            .map(|c| {
+            .enumerate()
+            .filter(|(_, c)| !c.hidden)
+            .map(|(orig_idx, c)| {
                 let wc = c.constellation(planet_radius, planet_mu);
                 let pos = match c.mode {
                     ConstellationMode::Walker => wc.satellite_positions(self.time),
                     ConstellationMode::Tle => c.tle_satellite_positions(self.time, planet_radius),
                 };
-                (wc, pos, c.color_offset)
+                let is_tle = c.mode == ConstellationMode::Tle;
+                (wc, pos, c.color_offset, is_tle, orig_idx)
             })
             .collect();
 
@@ -1127,7 +1201,7 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                         *self.rotation,
                         half_width,
                         view_size,
-                        self.planet_handles.get(&tab.celestial_body),
+                        self.planet_handles.get(&(tab.celestial_body, tab.skin)),
                         *self.zoom,
                         self.sat_radius,
                         self.show_links,
@@ -1206,7 +1280,7 @@ impl<'a> TabViewer for ConstellationTabViewer<'a> {
                 *self.rotation,
                 viz_width,
                 earth_height,
-                self.planet_handles.get(&tab.celestial_body),
+                self.planet_handles.get(&(tab.celestial_body, tab.skin)),
                 *self.zoom,
                 self.sat_radius,
                 self.show_links,
@@ -1386,7 +1460,7 @@ impl App {
 
         ui.horizontal(|ui| {
             ui.label("Speed:");
-            ui.add(egui::DragValue::new(&mut self.speed).range(0.1..=10.0).speed(0.1));
+            ui.add(egui::DragValue::new(&mut self.speed).range(0.1..=1000.0).speed(1.0));
         });
         ui.horizontal(|ui| {
             ui.label("Time:");
@@ -1404,17 +1478,6 @@ impl App {
             ui.label(format!("({} min)", total_minutes));
         });
 
-        ui.checkbox(&mut self.show_orbits, "Show orbits");
-        ui.checkbox(&mut self.show_intra_links, "Intra-plane links");
-        ui.checkbox(&mut self.show_links, "Inter-plane links");
-        ui.checkbox(&mut self.show_routing_paths, "Show routing paths");
-        if self.show_routing_paths {
-            ui.indent("routing_opts", |ui| {
-                ui.checkbox(&mut self.show_manhattan_path, "Manhattan (red)");
-                ui.checkbox(&mut self.show_shortest_path, "Shortest distance (green)");
-            });
-        }
-        ui.checkbox(&mut self.show_camera_windows, "Show camera windows");
         ui.checkbox(&mut self.show_axes, "Show axes");
         ui.checkbox(&mut self.show_coverage, "Show coverage");
         if self.show_coverage {
@@ -1427,8 +1490,8 @@ impl App {
                     .suffix("°"));
             });
         }
-        ui.checkbox(&mut self.show_torus, "Show torus");
         ui.checkbox(&mut self.show_ground_track, "Show ground");
+        ui.checkbox(&mut self.show_camera_windows, "Show camera windows");
         ui.checkbox(&mut self.hide_behind_earth, "Hide behind Earth");
         ui.checkbox(&mut self.rotate_earth, "Rotate Earth");
         if self.rotate_earth {
@@ -1443,6 +1506,20 @@ impl App {
         }
         ui.checkbox(&mut self.single_color_per_constellation, "Monochrome");
         ui.checkbox(&mut self.follow_satellite, "Follow satellite");
+
+        ui.add_space(5.0);
+        ui.label(egui::RichText::new("Simulation options").strong());
+        ui.checkbox(&mut self.show_orbits, "Show orbits");
+        ui.checkbox(&mut self.show_intra_links, "Intra-plane links");
+        ui.checkbox(&mut self.show_links, "Inter-plane links");
+        ui.checkbox(&mut self.show_routing_paths, "Show routing paths");
+        if self.show_routing_paths {
+            ui.indent("routing_opts", |ui| {
+                ui.checkbox(&mut self.show_manhattan_path, "Manhattan (red)");
+                ui.checkbox(&mut self.show_shortest_path, "Shortest distance (green)");
+            });
+        }
+        ui.checkbox(&mut self.show_torus, "Show torus");
 
         ui.add_space(10.0);
 
@@ -1493,14 +1570,18 @@ impl App {
     }
 
     #[allow(unused_variables)]
-    fn load_texture_for_body(&mut self, body: CelestialBody, ctx: &egui::Context) {
-        if self.planet_textures.contains_key(&body) {
+    fn load_texture_for_body(&mut self, body: CelestialBody, skin: Skin, ctx: &egui::Context) {
+        let key = (body, skin);
+        if self.planet_textures.contains_key(&key) {
             return;
         }
 
-        let filename = body.filename();
+        let filename = match skin.filename(body) {
+            Some(f) => f,
+            None => return,
+        };
         self.texture_load_state = TextureLoadState::Loading;
-        self.pending_body = Some(body);
+        self.pending_body = Some(key);
 
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -1508,9 +1589,9 @@ impl App {
                 Ok(bytes) => match EarthTexture::from_bytes(&bytes) {
                     Ok(texture) => {
                         let texture = Arc::new(texture);
-                        self.planet_textures.insert(body, texture.clone());
+                        self.planet_textures.insert(key, texture.clone());
                         self.texture_load_state = TextureLoadState::Loaded(texture);
-                        self.planet_image_handles.remove(&body);
+                        self.planet_image_handles.remove(&key);
                     }
                     Err(e) => self.texture_load_state = TextureLoadState::Failed(e),
                 },
@@ -1582,16 +1663,36 @@ impl eframe::App for App {
             egui::Visuals::light()
         });
 
-        let bodies_needed: Vec<CelestialBody> = self.dock_state.main_surface().tabs()
-            .map(|tab| tab.celestial_body)
+        let bodies_needed: Vec<(CelestialBody, Skin)> = self.dock_state.main_surface().tabs()
+            .map(|tab| (tab.celestial_body, tab.skin))
             .collect();
-        for body in &bodies_needed {
-            self.load_texture_for_body(*body, ctx);
+        for (body, skin) in &bodies_needed {
+            self.load_texture_for_body(*body, *skin, ctx);
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        while let Ok((preset, result)) = self.tle_fetch_rx.try_recv() {
+            for (_, tab) in self.dock_state.iter_all_tabs_mut() {
+                for cons in &mut tab.constellations {
+                    if cons.mode == ConstellationMode::Tle
+                        && cons.tle_preset == preset
+                        && matches!(cons.tle_state, TleLoadState::Loading)
+                    {
+                        cons.tle_state = match result.clone() {
+                            Ok(satellites) => TleLoadState::Loaded {
+                                satellites,
+                                loaded_at: std::time::Instant::now(),
+                            },
+                            Err(e) => TleLoadState::Failed(e),
+                        };
+                    }
+                }
+            }
         }
 
         let earth_radius = CelestialBody::Earth.radius_km();
         let max_planet_radius = bodies_needed.iter()
-            .map(|b| b.radius_km())
+            .map(|(b, _)| b.radius_km())
             .fold(earth_radius, |a, b| a.max(b));
         if max_planet_radius > self.last_max_planet_radius {
             let ideal_zoom = earth_radius / max_planet_radius;
@@ -1602,10 +1703,11 @@ impl eframe::App for App {
         }
 
         if self.animate {
-            self.time += self.speed;
+            let dt = ctx.input(|i| i.stable_dt) as f64;
+            self.time += dt * self.speed;
             if self.rotate_earth {
                 let earth_day_seconds = 86400.0;
-                self.earth_rotation_angle += (self.speed * self.earth_rotation_speed * 2.0 * PI) / earth_day_seconds;
+                self.earth_rotation_angle += (dt * self.speed * self.earth_rotation_speed * 2.0 * PI) / earth_day_seconds;
             }
             ctx.request_repaint();
         }
@@ -1618,24 +1720,35 @@ impl eframe::App for App {
                         let planet_radius = tab.celestial_body.radius_km();
                         let planet_mu = tab.celestial_body.mu();
                         let wc = cons.constellation(planet_radius, planet_mu);
-                        let positions = wc.satellite_positions(self.time);
+                        let positions = match cons.mode {
+                            ConstellationMode::Walker => wc.satellite_positions(self.time),
+                            ConstellationMode::Tle => cons.tle_satellite_positions(self.time, planet_radius),
+                        };
                         if let Some(sat) = positions.iter().find(|s| s.plane == cam.plane && s.sat_index == cam.sat_index) {
                             let forward = Vector3::new(sat.x, sat.y, sat.z).normalize();
 
-                            let raan_spread = match cons.walker_type {
-                                WalkerType::Delta => 2.0 * PI,
-                                WalkerType::Star => PI,
+                            let (up, right) = if cons.mode == ConstellationMode::Tle {
+                                let world_up = Vector3::new(0.0, 1.0, 0.0);
+                                let right = world_up.cross(&forward).normalize();
+                                let up = forward.cross(&right).normalize();
+                                (up, right)
+                            } else {
+                                let raan_spread = match cons.walker_type {
+                                    WalkerType::Delta => 2.0 * PI,
+                                    WalkerType::Star => PI,
+                                };
+                                let raan = raan_spread * cam.plane as f64 / cons.num_planes as f64;
+                                let inc = cons.inclination.to_radians();
+                                let orbital_normal = Vector3::new(
+                                    raan.sin() * inc.sin(),
+                                    inc.cos(),
+                                    -raan.cos() * inc.sin(),
+                                );
+                                let velocity_dir = orbital_normal.cross(&forward).normalize();
+                                let up = -velocity_dir;
+                                let right = up.cross(&forward).normalize();
+                                (up, right)
                             };
-                            let raan = raan_spread * cam.plane as f64 / cons.num_planes as f64;
-                            let inc = cons.inclination.to_radians();
-                            let orbital_normal = Vector3::new(
-                                raan.sin() * inc.sin(),
-                                inc.cos(),
-                                -raan.cos() * inc.sin(),
-                            );
-                            let velocity_dir = orbital_normal.cross(&forward).normalize();
-                            let up = -velocity_dir;
-                            let right = up.cross(&forward).normalize();
 
                             self.rotation = Matrix3::new(
                                 right.x, right.y, right.z,
@@ -1680,15 +1793,15 @@ impl eframe::App for App {
             );
             let combined = self.rotation * earth_rot;
 
-            for body in &bodies_needed {
-                if let Some(texture) = self.planet_textures.get(body) {
+            for key in &bodies_needed {
+                if let Some(texture) = self.planet_textures.get(key) {
                     let image = texture.render_sphere(self.earth_resolution, &combined);
                     let handle = ctx.load_texture(
-                        &format!("planet_{:?}", body),
+                        &format!("planet_{:?}_{:?}", key.0, key.1),
                         image,
                         egui::TextureOptions::LINEAR,
                     );
-                    self.planet_image_handles.insert(*body, handle);
+                    self.planet_image_handles.insert(*key, handle);
                 }
             }
             self.last_rotation = Some(self.rotation);
@@ -1825,6 +1938,8 @@ impl eframe::App for App {
                 show_routing_paths: self.show_routing_paths,
                 show_manhattan_path: self.show_manhattan_path,
                 show_shortest_path: self.show_shortest_path,
+                #[cfg(not(target_arch = "wasm32"))]
+                tle_fetch_tx: &self.tle_fetch_tx,
             };
 
             DockArea::new(&mut self.dock_state)
@@ -1837,15 +1952,26 @@ impl eframe::App for App {
             for tab in self.dock_state.main_surface().tabs() {
                 let pr = tab.celestial_body.radius_km();
                 let pm = tab.celestial_body.mu();
-                let texture = self.planet_textures.get(&tab.celestial_body);
+                let texture = self.planet_textures.get(&(tab.celestial_body, tab.skin));
 
                 for camera in &tab.satellite_cameras {
                     let sat_data = tab.constellations.get(camera.constellation_idx).map(|cons| {
                         let wc = cons.constellation(pr, pm);
-                        let positions = wc.satellite_positions(self.time);
+                        let positions = match cons.mode {
+                            ConstellationMode::Walker => wc.satellite_positions(self.time),
+                            ConstellationMode::Tle => cons.tle_satellite_positions(self.time, pr),
+                        };
                         positions.iter()
                             .find(|s| s.plane == camera.plane && s.sat_index == camera.sat_index)
-                            .map(|s| (s.lat, s.lon, cons.altitude_km, texture, pr))
+                            .map(|s| {
+                                let alt = if cons.mode == ConstellationMode::Tle {
+                                    let r = (s.x * s.x + s.y * s.y + s.z * s.z).sqrt();
+                                    r - pr
+                                } else {
+                                    cons.altitude_km
+                                };
+                                (s.lat, s.lon, alt, texture, pr)
+                            })
                     }).flatten();
 
                     if let Some((lat, lon, altitude_km, texture, planet_radius)) = sat_data {
@@ -2156,7 +2282,7 @@ fn draw_routing_path(
 fn draw_3d_view(
     ui: &mut egui::Ui,
     id: &str,
-    constellations: &[(WalkerConstellation, Vec<SatelliteState>, usize)],
+    constellations: &[(WalkerConstellation, Vec<SatelliteState>, usize, bool, usize)],
     show_orbits: bool,
     show_axes: bool,
     show_coverage: bool,
@@ -2182,7 +2308,7 @@ fn draw_3d_view(
     planet_radius: f64,
 ) -> (Matrix3<f64>, f64) {
     let max_altitude = constellations.iter()
-        .map(|(c, _, _)| c.altitude_km)
+        .map(|(c, _, _, _, _)| c.altitude_km)
         .fold(550.0_f64, |a, b| a.max(b));
     let orbit_radius = planet_radius + max_altitude;
     let axis_len = orbit_radius * 1.05;
@@ -2213,7 +2339,8 @@ fn draw_3d_view(
         let earth_r_sq = visual_earth_r * visual_earth_r;
 
         if show_orbits && !hide_behind_earth {
-            for (constellation, _, color_offset) in constellations {
+            for (constellation, _, color_offset, is_tle, _) in constellations {
+                if *is_tle { continue; }
                 for plane in 0..constellation.num_planes {
                     let orbit_pts = constellation.orbit_points_3d(plane);
                     let color = plane_color(if single_color { *color_offset } else { plane + color_offset });
@@ -2244,7 +2371,7 @@ fn draw_3d_view(
         }
 
         if !hide_behind_earth {
-            for (constellation, positions, color_offset) in constellations {
+            for (constellation, positions, color_offset, _is_tle, _) in constellations {
                 for plane in 0..constellation.num_planes {
                     let color = plane_color(if single_color { *color_offset } else { plane + color_offset });
                     let pts: PlotPoints = positions
@@ -2305,7 +2432,7 @@ fn draw_3d_view(
         }
 
         if show_coverage {
-            for (constellation, positions, color_offset) in constellations {
+            for (constellation, positions, color_offset, _is_tle, _) in constellations {
                 let orbit_radius = planet_radius + constellation.altitude_km;
                 let cone_half_angle = coverage_angle.to_radians();
                 let max_earth_angle = (planet_radius / orbit_radius).acos();
@@ -2404,7 +2531,8 @@ fn draw_3d_view(
         }
 
         if show_orbits {
-            for (constellation, _, color_offset) in constellations {
+            for (constellation, _, color_offset, is_tle, _) in constellations {
+                if *is_tle { continue; }
                 for plane in 0..constellation.num_planes {
                     let orbit_pts = constellation.orbit_points_3d(plane);
                     let color = if show_routing_paths {
@@ -2445,7 +2573,7 @@ fn draw_3d_view(
                 egui::Color32::from_rgb(200, 200, 200)
             };
             let link_dim = egui::Color32::from_rgba_unmultiplied(50, 50, 60, 80);
-            for (_, positions, _) in constellations {
+            for (_, positions, _, _, _) in constellations {
                 for sat in positions {
                     if let Some(neighbor_idx) = sat.neighbor_idx {
                         let neighbor = &positions[neighbor_idx];
@@ -2475,7 +2603,7 @@ fn draw_3d_view(
                 egui::Color32::from_rgb(200, 200, 200)
             };
             let link_dim = egui::Color32::from_rgba_unmultiplied(50, 50, 60, 80);
-            for (constellation, positions, _) in constellations {
+            for (constellation, positions, _, _, _) in constellations {
                 let sats_per_plane = constellation.sats_per_plane();
                 for plane in 0..constellation.num_planes {
                     let plane_sats: Vec<_> = positions.iter()
@@ -2507,7 +2635,7 @@ fn draw_3d_view(
             let manhattan_color = egui::Color32::from_rgb(255, 100, 100);
             let shortest_color = egui::Color32::from_rgb(100, 255, 100);
 
-            for (cidx, (constellation, positions, _)) in constellations.iter().enumerate() {
+            for (cidx, (constellation, positions, _, _, _)) in constellations.iter().enumerate() {
                 let tracked: Vec<_> = satellite_cameras.iter()
                     .filter(|c| c.constellation_idx == cidx)
                     .collect();
@@ -2578,13 +2706,61 @@ fn draw_3d_view(
             }
         }
 
-        for (cidx, (constellation, positions, color_offset)) in constellations.iter().enumerate() {
+        for (constellation, positions, color_offset, is_tle, orig_idx) in constellations {
+            if *is_tle {
+                let base_color = plane_color(*color_offset);
+                for sat in positions {
+                    let color = base_color;
+                    let dim_col = egui::Color32::from_rgba_unmultiplied(
+                        color.r() / 2, color.g() / 2, color.b() / 2, 80,
+                    );
+
+                    let (rx, ry, rz) = rotate_point_matrix(sat.x, sat.y, sat.z, &rotation);
+                    let in_front = rz >= 0.0 || (rx * rx + ry * ry) >= earth_r_sq;
+
+                    let bg_color = if dark_mode {
+                        egui::Color32::from_rgb(30, 30, 30)
+                    } else {
+                        egui::Color32::from_rgb(240, 240, 240)
+                    };
+
+                    if !hide_behind_earth && !in_front {
+                        plot_ui.points(
+                            Points::new("", PlotPoints::new(vec![[rx, ry]]))
+                                .color(dim_col)
+                                .radius(sat_radius * 0.8)
+                                .filled(true),
+                        );
+                        plot_ui.points(
+                            Points::new("", PlotPoints::new(vec![[rx, ry]]))
+                                .color(bg_color)
+                                .radius(sat_radius * 0.4)
+                                .filled(true),
+                        );
+                    }
+                    if in_front {
+                        plot_ui.points(
+                            Points::new("", PlotPoints::new(vec![[rx, ry]]))
+                                .color(color)
+                                .radius(sat_radius)
+                                .filled(true),
+                        );
+                        plot_ui.points(
+                            Points::new("", PlotPoints::new(vec![[rx, ry]]))
+                                .color(bg_color)
+                                .radius(sat_radius * 0.5)
+                                .filled(true),
+                        );
+                    }
+                }
+                continue;
+            }
             for plane in 0..constellation.num_planes {
                 let base_color = plane_color(if single_color { *color_offset } else { plane + color_offset });
 
                 for sat in positions.iter().filter(|s| s.plane == plane) {
                     let is_tracked = satellite_cameras.iter().any(|c|
-                        c.constellation_idx == cidx && c.plane == sat.plane && c.sat_index == sat.sat_index
+                        c.constellation_idx == *orig_idx && c.plane == sat.plane && c.sat_index == sat.sat_index
                     );
                     let color = if show_routing_paths {
                         if is_tracked {
@@ -2606,6 +2782,12 @@ fn draw_3d_view(
                     let (rx, ry, rz) = rotate_point_matrix(sat.x, sat.y, sat.z, &rotation);
                     let in_front = rz >= 0.0 || (rx * rx + ry * ry) >= earth_r_sq;
 
+                    let bg_color = if dark_mode {
+                        egui::Color32::from_rgb(30, 30, 30)
+                    } else {
+                        egui::Color32::from_rgb(240, 240, 240)
+                    };
+
                     if !hide_behind_earth && !in_front {
                         plot_ui.points(
                             Points::new("", PlotPoints::new(vec![[rx, ry]]))
@@ -2613,6 +2795,14 @@ fn draw_3d_view(
                                 .radius(sat_radius * 0.8)
                                 .filled(true),
                         );
+                        if *is_tle {
+                            plot_ui.points(
+                                Points::new("", PlotPoints::new(vec![[rx, ry]]))
+                                    .color(bg_color)
+                                    .radius(sat_radius * 0.4)
+                                    .filled(true),
+                            );
+                        }
                     }
                     if in_front {
                         plot_ui.points(
@@ -2621,16 +2811,24 @@ fn draw_3d_view(
                                 .radius(sat_radius)
                                 .filled(true),
                         );
+                        if *is_tle {
+                            plot_ui.points(
+                                Points::new("", PlotPoints::new(vec![[rx, ry]]))
+                                    .color(bg_color)
+                                    .radius(sat_radius * 0.5)
+                                    .filled(true),
+                            );
+                        }
                     }
                 }
             }
         }
     });
 
-    for (cidx, (_constellation, positions, color_offset)) in constellations.iter().enumerate() {
+    for (_constellation, positions, color_offset, _is_tle, orig_idx) in constellations {
         for sat in positions {
             for cam in satellite_cameras.iter_mut() {
-                if cam.constellation_idx == cidx && cam.plane == sat.plane && cam.sat_index == sat.sat_index {
+                if cam.constellation_idx == *orig_idx && cam.plane == sat.plane && cam.sat_index == sat.sat_index {
                     let (rx, ry, _) = rotate_point_matrix(sat.x, sat.y, sat.z, &rotation);
                     let plot_pt = egui_plot::PlotPoint::new(rx, ry);
                     let screen_pos = response.transform.position_from_point(&plot_pt);
@@ -2651,7 +2849,7 @@ fn draw_3d_view(
         let plot_pos = response.transform.value_from_position(hover_pos);
         let hover_threshold = margin * 0.025;
 
-        'hover: for (_constellation, positions, color_offset) in constellations {
+        'hover: for (_constellation, positions, color_offset, _, _) in constellations {
             for sat in positions {
                 let (rx, ry, rz) = rotate_point_matrix(sat.x, sat.y, sat.z, &rotation);
                 let earth_r_sq = (planet_radius * 0.95).powi(2) as f64;
@@ -2689,7 +2887,7 @@ fn draw_3d_view(
             let click_y = plot_pos.y;
             let click_threshold = margin * 0.03;
 
-            'outer: for (cidx, (_constellation, positions, _color_offset)) in constellations.iter().enumerate() {
+            'outer: for (_constellation, positions, _color_offset, _, orig_idx) in constellations {
                 for sat in positions {
                     let (rx, ry, rz) = rotate_point_matrix(sat.x, sat.y, sat.z, &rotation);
                     let earth_r_sq = (planet_radius * 0.95).powi(2) as f64;
@@ -2701,20 +2899,20 @@ fn draw_3d_view(
                     let dy = ry - click_y;
                     if dx * dx + dy * dy < click_threshold * click_threshold {
                         let existing = satellite_cameras.iter().find(|c|
-                            c.constellation_idx == cidx && c.plane == sat.plane && c.sat_index == sat.sat_index
+                            c.constellation_idx == *orig_idx && c.plane == sat.plane && c.sat_index == sat.sat_index
                         );
                         if let Some(cam) = existing {
                             cameras_to_remove.push(cam.id);
                         } else {
                             let in_pending = pending_cameras.iter().any(|c|
-                                c.constellation_idx == cidx && c.plane == sat.plane && c.sat_index == sat.sat_index
+                                c.constellation_idx == *orig_idx && c.plane == sat.plane && c.sat_index == sat.sat_index
                             );
                             if !in_pending {
                                 *camera_id_counter += 1;
                                 pending_cameras.push(SatelliteCamera {
                                     id: *camera_id_counter,
                                     label: format!("Sat {}-{}", sat.plane + 1, sat.sat_index + 1),
-                                    constellation_idx: cidx,
+                                    constellation_idx: *orig_idx,
                                     plane: sat.plane,
                                     sat_index: sat.sat_index,
                                     screen_pos: None,
@@ -2746,7 +2944,7 @@ fn draw_3d_view(
 fn draw_ground_track(
     ui: &mut egui::Ui,
     id: &str,
-    constellations: &[(WalkerConstellation, Vec<SatelliteState>, usize)],
+    constellations: &[(WalkerConstellation, Vec<SatelliteState>, usize, bool, usize)],
     width: f32,
     height: f32,
     sat_radius: f32,
@@ -2762,7 +2960,7 @@ fn draw_ground_track(
         .show_axes([true, true]);
 
     plot.show(ui, |plot_ui| {
-        for (constellation, positions, color_offset) in constellations {
+        for (constellation, positions, color_offset, _is_tle, _) in constellations {
             for plane in 0..constellation.num_planes {
                 let color = plane_color(if single_color { *color_offset } else { plane + color_offset });
                 let pts: PlotPoints = positions
@@ -2795,7 +2993,7 @@ fn draw_ground_track(
 fn draw_torus(
     ui: &mut egui::Ui,
     id: &str,
-    constellations: &[(WalkerConstellation, Vec<SatelliteState>, usize)],
+    constellations: &[(WalkerConstellation, Vec<SatelliteState>, usize, bool, usize)],
     time: f64,
     rotation: Matrix3<f64>,
     width: f32,
@@ -2813,7 +3011,7 @@ fn draw_torus(
     camera_id_counter: &mut usize,
     cameras_to_remove: &mut Vec<usize>,
 ) -> (Matrix3<f64>, f64) {
-    let (major_radius, minor_radius) = if let Some((constellation, positions, _)) = constellations.first() {
+    let (major_radius, minor_radius) = if let Some((constellation, positions, _, _, _)) = constellations.first() {
         let sats_per_plane = constellation.sats_per_plane();
         let orbit_radius = planet_radius + constellation.altitude_km;
 
@@ -2856,7 +3054,7 @@ fn draw_torus(
 
     let margin = (major_radius + minor_radius) * 1.3 / zoom;
 
-    let spin_rotation = if let Some((constellation, _, _)) = constellations.first() {
+    let spin_rotation = if let Some((constellation, _, _, _, _)) = constellations.first() {
         let orbit_radius = planet_radius + constellation.altitude_km;
         let period = 2.0 * PI * (orbit_radius.powi(3) / constellation.planet_mu).sqrt();
         let spin_angle = 2.0 * PI * time / period;
@@ -2908,7 +3106,7 @@ fn draw_torus(
             rotate_point_matrix(x, y, z, &rotation)
         };
 
-        for (cidx, (constellation, positions, color_offset)) in constellations.iter().enumerate() {
+        for (_cidx, (constellation, positions, color_offset, _is_tle, orig_idx)) in constellations.iter().enumerate() {
             let sats_per_plane = constellation.total_sats / constellation.num_planes;
             let orbit_radius = constellation.planet_radius + constellation.altitude_km;
             let period = 2.0 * PI * (orbit_radius.powi(3) / constellation.planet_mu).sqrt();
@@ -3003,7 +3201,7 @@ fn draw_torus(
 
                 for sat in positions.iter().filter(|s| s.plane == plane) {
                     let is_tracked = satellite_cameras.iter().any(|c|
-                        c.constellation_idx == cidx && c.plane == sat.plane && c.sat_index == sat.sat_index
+                        c.constellation_idx == *orig_idx && c.plane == sat.plane && c.sat_index == sat.sat_index
                     );
                     let color = if show_routing_paths {
                         if is_tracked {
@@ -3046,7 +3244,7 @@ fn draw_torus(
 
             if show_routing_paths {
                 let tracked: Vec<_> = satellite_cameras.iter()
-                    .filter(|c| c.constellation_idx == cidx)
+                    .filter(|c| c.constellation_idx == *orig_idx)
                     .collect();
 
                 if tracked.len() >= 2 {
@@ -3150,7 +3348,7 @@ fn draw_torus(
         if response.response.clicked() {
             let click_x = response.transform.value_from_position(pos).x;
             let click_y = response.transform.value_from_position(pos).y;
-            let (major_radius, minor_radius) = if let Some((constellation, _, _)) = constellations.first() {
+            let (major_radius, minor_radius) = if let Some((constellation, _, _, _, _)) = constellations.first() {
                 let sats_per_plane = constellation.sats_per_plane();
                 let orbit_radius = planet_radius + constellation.altitude_km;
                 let inclination_rad = constellation.inclination_deg.to_radians();
@@ -3175,7 +3373,7 @@ fn draw_torus(
                 rotate_point_matrix(x, y, z, &rotation)
             };
 
-            'outer: for (cidx, (constellation, positions, _)) in constellations.iter().enumerate() {
+            'outer: for (_cidx, (constellation, positions, _, _, orig_idx)) in constellations.iter().enumerate() {
                 let sats_per_plane = constellation.total_sats / constellation.num_planes;
                 let orbit_radius = constellation.planet_radius + constellation.altitude_km;
                 let period = 2.0 * PI * (orbit_radius.powi(3) / constellation.planet_mu).sqrt();
@@ -3190,20 +3388,20 @@ fn draw_torus(
                     let dy = ty - click_y;
                     if dx * dx + dy * dy < click_threshold * click_threshold {
                         let existing = satellite_cameras.iter().find(|c|
-                            c.constellation_idx == cidx && c.plane == sat.plane && c.sat_index == sat.sat_index
+                            c.constellation_idx == *orig_idx && c.plane == sat.plane && c.sat_index == sat.sat_index
                         );
                         if let Some(cam) = existing {
                             cameras_to_remove.push(cam.id);
                         } else {
                             let in_pending = pending_cameras.iter().any(|c|
-                                c.constellation_idx == cidx && c.plane == sat.plane && c.sat_index == sat.sat_index
+                                c.constellation_idx == *orig_idx && c.plane == sat.plane && c.sat_index == sat.sat_index
                             );
                             if !in_pending {
                                 *camera_id_counter += 1;
                                 pending_cameras.push(SatelliteCamera {
                                     id: *camera_id_counter,
                                     label: format!("Sat {}-{}", sat.plane + 1, sat.sat_index + 1),
-                                    constellation_idx: cidx,
+                                    constellation_idx: *orig_idx,
                                     plane: sat.plane,
                                     sat_index: sat.sat_index,
                                     screen_pos: None,
