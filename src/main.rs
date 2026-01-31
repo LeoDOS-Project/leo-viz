@@ -292,10 +292,9 @@ impl WalkerConstellation {
             let next_plane_start = next_plane * sats_per_plane;
             let next_plane_end = next_plane_start + sats_per_plane;
             let target_idx = sat.sat_index;
-            let target_ascending = sat.ascending;
             for j in next_plane_start..next_plane_end {
                 let other = &positions[j];
-                if other.sat_index == target_idx && other.ascending == target_ascending {
+                if other.sat_index == target_idx {
                     positions[i].neighbor_idx = Some(j);
                     break;
                 }
@@ -720,7 +719,6 @@ struct App {
     coverage_angle: f64,
     hide_behind_earth: bool,
     single_color_per_constellation: bool,
-    menu_open: bool,
     zoom: f64,
     torus_zoom: f64,
     vertical_split: f32,
@@ -768,7 +766,7 @@ impl Default for App {
             camera_id_counter: 0,
             tab_counter: 1,
             time: 0.0,
-            speed: 1.0,
+            speed: 50.0,
             animate: true,
             show_orbits: true,
             show_links: true,
@@ -780,7 +778,6 @@ impl Default for App {
             coverage_angle: 25.0,
             hide_behind_earth: true,
             single_color_per_constellation: false,
-            menu_open: false,
             zoom: 1.0,
             torus_zoom: 1.0,
             vertical_split: 0.6,
@@ -822,7 +819,17 @@ impl Default for App {
 impl App {
     fn add_tab(&mut self) {
         self.tab_counter += 1;
-        let tab = TabConfig::new(format!("Planet {}", self.tab_counter));
+        let mut tab = TabConfig::new(format!("Planet {}", self.tab_counter));
+        if let Some(last_tab) = self.tabs.last() {
+            tab.constellations = last_tab.constellations.clone();
+            tab.constellation_counter = last_tab.constellation_counter;
+            tab.show_tle_window = last_tab.show_tle_window;
+            for (preset, (selected, _)) in &last_tab.tle_selections {
+                if let Some((new_selected, _)) = tab.tle_selections.get_mut(preset) {
+                    *new_selected = *selected;
+                }
+            }
+        }
         self.tabs.push(tab);
         self.active_tab = self.tabs.len() - 1;
     }
@@ -972,6 +979,11 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         let tle_fetch_tx = self.tle_fetch_tx.clone();
 
+        let controls_height = 180.0;
+        egui::ScrollArea::vertical()
+            .id_salt(format!("controls_{}", tab_idx))
+            .max_height(controls_height)
+            .show(ui, |ui| {
         let tab = &mut self.tabs[tab_idx];
         ui.horizontal(|ui| {
             if show_tle {
@@ -1189,7 +1201,8 @@ impl App {
                 ui.separator();
             }
 
-            if ui.button("[+] Add constellation").clicked() {
+            let add_btn_text = if num_constellations == 0 { "[+] Add constellation" } else { "[+]" };
+            if ui.button(add_btn_text).clicked() {
                 const_to_remove = Some(usize::MAX);
             }
         });
@@ -1201,6 +1214,7 @@ impl App {
                 self.tabs[tab_idx].constellations.remove(cidx);
             }
         }
+        }); // end scroll area
 
         ui.separator();
 
@@ -1241,7 +1255,7 @@ impl App {
         let use_horizontal = single_tab && self.show_torus && !self.show_ground_track;
 
         if use_horizontal {
-            let half_width = (available.x - 15.0) / 2.0;
+            let half_width = available.x / 2.0;
             let view_height = available.y - 20.0;
             let view_size = half_width.min(view_height);
 
@@ -1332,7 +1346,7 @@ impl App {
                 });
             });
         } else {
-            let viz_width = available.x - 10.0;
+            let viz_width = available.x;
             let available_for_views = available.y - 20.0;
 
             let has_secondary = self.show_torus || self.show_ground_track;
@@ -1595,7 +1609,10 @@ impl App {
         }
         ui.checkbox(&mut self.show_ground_track, "Show ground");
         ui.checkbox(&mut self.show_camera_windows, "Show camera windows");
-        ui.checkbox(&mut self.hide_behind_earth, "Hide behind Earth");
+        let mut show_behind = !self.hide_behind_earth;
+        if ui.checkbox(&mut show_behind, "Show behind planet").changed() {
+            self.hide_behind_earth = !show_behind;
+        }
         ui.checkbox(&mut self.render_planet, "Render planet");
         ui.checkbox(&mut self.single_color_per_constellation, "Monochrome");
         ui.checkbox(&mut self.follow_satellite, "Follow satellite");
@@ -1889,169 +1906,171 @@ impl eframe::App for App {
             self.last_resolution = self.earth_resolution;
         }
 
-        let is_mobile = ctx.input(|i| i.viewport().inner_rect.map_or(600.0, |r| r.width())) < 600.0;
-
-        if is_mobile {
-            egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    let menu_label = if self.menu_open { "Settings \u{25B2}" } else { "Settings \u{25BC}" };
-                    if ui.button(menu_label).clicked() {
-                        self.menu_open = !self.menu_open;
-                    }
-                    ui.heading("LEO Viz");
-                });
-                if self.menu_open {
-                    ui.separator();
-                    self.show_settings(ui);
-                }
-            });
-        } else if self.show_side_panel {
-            egui::SidePanel::left("global_controls").show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.heading("LEO Viz");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("-").clicked() {
-                            self.show_side_panel = false;
-                        }
-                    });
-                });
-                if ui.button("Info").clicked() {
+        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(4.0);
+                ui.heading("LEO Viz");
+                if ui.button("[Info]").clicked() {
                     self.show_info = !self.show_info;
                 }
-                ui.separator();
-                ui.heading("Display Settings");
-                ui.separator();
-                self.show_settings(ui);
-            });
-        } else {
-            egui::SidePanel::left("collapsed_panel")
-                .max_width(30.0)
-                .resizable(false)
-                .show(ctx, |ui| {
-                    if ui.button("+").clicked() {
+                if self.show_side_panel {
+                    if ui.small_button("−").clicked() {
+                        self.show_side_panel = false;
+                    }
+                } else {
+                    if ui.small_button("+").clicked() {
                         self.show_side_panel = true;
                     }
-                });
-        }
+                }
+            });
+        });
 
         if self.show_info {
             egui::Window::new("Info")
                 .open(&mut self.show_info)
-                .default_width(400.0)
+                .default_width(700.0)
                 .show(ctx, |ui| {
-                    ui.heading("Celestial Bodies");
-                    egui::Grid::new("bodies_grid").striped(true).show(ui, |ui| {
-                        ui.strong("Body");
-                        ui.strong("Radius (km)");
-                        ui.strong("μ (km³/s²)");
-                        ui.end_row();
-                        for body in CelestialBody::ALL {
-                            ui.label(body.label());
-                            ui.label(format!("{:.0}", body.radius_km()));
-                            ui.label(format!("{:.0}", body.mu()));
+                    ui.columns(2, |cols| {
+                        cols[0].heading("Celestial Bodies");
+                        let mut bodies: Vec<_> = CelestialBody::ALL.iter().collect();
+                        bodies.sort_by(|a, b| b.radius_km().partial_cmp(&a.radius_km()).unwrap());
+                        egui::Grid::new("bodies_grid").striped(true).show(&mut cols[0], |ui| {
+                            ui.strong("Body");
+                            ui.strong("Radius (km)");
+                            ui.strong("μ (km³/s²)");
                             ui.end_row();
-                        }
+                            for body in bodies {
+                                ui.label(body.label());
+                                ui.label(format!("{:.0}", body.radius_km()));
+                                ui.label(format!("{:.0}", body.mu()));
+                                ui.end_row();
+                            }
+                        });
+
+                        cols[0].add_space(10.0);
+                        cols[0].heading("Constants & Variables");
+                        egui::Grid::new("constants_grid").show(&mut cols[0], |ui| {
+                            ui.strong("Symbol");
+                            ui.strong("Meaning");
+                            ui.end_row();
+                            ui.monospace("G");
+                            ui.label("Gravitational constant (6.674×10⁻¹¹ m³/kg/s²)");
+                            ui.end_row();
+                            ui.monospace("M");
+                            ui.label("Mass of celestial body (kg)");
+                            ui.end_row();
+                            ui.monospace("μ");
+                            ui.label("Standard gravitational parameter = G × M");
+                            ui.end_row();
+                            ui.monospace("r");
+                            ui.label("Orbital radius = planet radius + altitude");
+                            ui.end_row();
+                            ui.monospace("v");
+                            ui.label("Orbital velocity (km/s)");
+                            ui.end_row();
+                            ui.monospace("T");
+                            ui.label("Orbital period (seconds)");
+                            ui.end_row();
+                            ui.monospace("c");
+                            ui.label("Speed of light (299,792 km/s)");
+                            ui.end_row();
+                        });
+
+                        cols[0].add_space(10.0);
+                        cols[0].heading("Orbital Mechanics");
+                        cols[0].label("Orbital velocity:");
+                        cols[0].monospace("  v = √(μ / r)");
+                        cols[0].label("Orbital period:");
+                        cols[0].monospace("  T = 2π √(r³ / μ)");
+                        cols[0].label("One-way latency:");
+                        cols[0].monospace("  t = distance / c");
+
+                        cols[1].heading("Walker Constellation");
+                        cols[1].label("Notation: i:T/P/F");
+                        egui::Grid::new("walker_grid").show(&mut cols[1], |ui| {
+                            ui.monospace("i");
+                            ui.label("Inclination (degrees from equator)");
+                            ui.end_row();
+                            ui.monospace("T");
+                            ui.label("Total number of satellites");
+                            ui.end_row();
+                            ui.monospace("P");
+                            ui.label("Number of orbital planes");
+                            ui.end_row();
+                            ui.monospace("F");
+                            ui.label("Phasing factor (0 to P-1)");
+                            ui.end_row();
+                        });
+                        cols[1].add_space(5.0);
+                        cols[1].label("Types:");
+                        cols[1].label("  Delta: 360° RAAN spread (co-rotating)");
+                        cols[1].label("  Star: 180° RAAN spread (counter-rotating)");
+                        cols[1].label("Phasing offset per plane:");
+                        cols[1].monospace("  Δ = F × 360° / T");
+
+                        cols[1].add_space(10.0);
+                        cols[1].heading("Satellite Constellations");
+                        egui::Grid::new("constellations_grid").striped(true).show(&mut cols[1], |ui| {
+                            ui.strong("Name");
+                            ui.strong("Config");
+                            ui.strong("Alt");
+                            ui.strong("Inc");
+                            ui.end_row();
+                            ui.label("Starlink");
+                            ui.label("22×72");
+                            ui.label("550km");
+                            ui.label("53°");
+                            ui.end_row();
+                            ui.label("OneWeb");
+                            ui.label("49×36");
+                            ui.label("1200km");
+                            ui.label("87.9°");
+                            ui.end_row();
+                            ui.label("Iridium");
+                            ui.label("11×6");
+                            ui.label("780km");
+                            ui.label("86.4°");
+                            ui.end_row();
+                            ui.label("Kuiper");
+                            ui.label("34×34");
+                            ui.label("630km");
+                            ui.label("51.9°");
+                            ui.end_row();
+                            ui.label("Iris²");
+                            ui.label("22×12");
+                            ui.label("7800km");
+                            ui.label("75°");
+                            ui.end_row();
+                            ui.label("Telesat");
+                            ui.label("13×6");
+                            ui.label("1015km");
+                            ui.label("99°");
+                            ui.end_row();
+                        });
+
+                        cols[1].add_space(10.0);
+                        cols[1].heading("Live TLE Sources");
+                        cols[1].label("From CelesTrak: Starlink, OneWeb,");
+                        cols[1].label("Iridium, Globalstar, Orbcomm, GPS,");
+                        cols[1].label("Galileo, GLONASS, Beidou");
                     });
+                });
+        }
 
-                    ui.add_space(10.0);
-                    ui.heading("Orbital Mechanics");
-                    ui.label("μ = G × M (standard gravitational parameter)");
-                    ui.separator();
-                    ui.label("Orbital velocity:");
-                    ui.monospace("  v = √(μ / r)");
-                    ui.separator();
-                    ui.label("Orbital period:");
-                    ui.monospace("  T = 2π √(r³ / μ)");
-                    ui.separator();
-                    ui.label("Where:");
-                    ui.label("  r = orbital radius (planet radius + altitude)");
-                    ui.label("  μ = gravitational parameter");
-
-                    ui.add_space(10.0);
-                    ui.heading("Walker Constellation");
-                    ui.label("Notation: i:T/P/F");
-                    ui.label("  i = inclination (degrees)");
-                    ui.label("  T = total satellites");
-                    ui.label("  P = number of orbital planes");
-                    ui.label("  F = phasing factor (0 to P-1)");
-                    ui.separator();
-                    ui.label("Types:");
-                    ui.label("  Delta: planes spread 360° (co-rotating)");
-                    ui.label("  Star: planes spread 180° (counter-rotating seam)");
-                    ui.separator();
-                    ui.label("Phasing offset per plane:");
-                    ui.monospace("  Δ = F × 360° / T");
-
-                    ui.add_space(10.0);
-                    ui.heading("Link Latency");
-                    ui.label("Speed of light: 299,792 km/s");
-                    ui.separator();
-                    ui.label("One-way latency:");
-                    ui.monospace("  t = distance / c");
-                    ui.separator();
-                    ui.label("Intra-plane distance (between adjacent sats):");
-                    ui.monospace("  d = 2r × sin(π / sats_per_plane)");
-                    ui.separator();
-                    ui.label("Inter-plane distance depends on inclination");
-                    ui.label("and relative orbital positions.");
-
-                    ui.add_space(10.0);
-                    ui.heading("Satellite Constellations");
-                    egui::Grid::new("constellations_grid").striped(true).show(ui, |ui| {
-                        ui.strong("Name");
-                        ui.strong("Sats");
-                        ui.strong("Planes");
-                        ui.strong("Alt (km)");
-                        ui.strong("Inc (°)");
-                        ui.end_row();
-
-                        ui.label("Starlink");
-                        ui.label("22×72");
-                        ui.label("72");
-                        ui.label("550");
-                        ui.label("53");
-                        ui.end_row();
-
-                        ui.label("OneWeb");
-                        ui.label("49×36");
-                        ui.label("36");
-                        ui.label("1200");
-                        ui.label("87.9");
-                        ui.end_row();
-
-                        ui.label("Iridium");
-                        ui.label("11×6");
-                        ui.label("6");
-                        ui.label("780");
-                        ui.label("86.4");
-                        ui.end_row();
-
-                        ui.label("Kuiper");
-                        ui.label("34×34");
-                        ui.label("34");
-                        ui.label("630");
-                        ui.label("51.9");
-                        ui.end_row();
-
-                        ui.label("Iris²");
-                        ui.label("22×12");
-                        ui.label("12");
-                        ui.label("7800");
-                        ui.label("75");
-                        ui.end_row();
-
-                        ui.label("Telesat");
-                        ui.label("13×6");
-                        ui.label("6");
-                        ui.label("1015");
-                        ui.label("98.98");
-                        ui.end_row();
+        if self.show_side_panel {
+            egui::SidePanel::left("settings_panel")
+                .resizable(true)
+                .default_width(200.0)
+                .show(ctx, |ui| {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(4.0);
+                        ui.strong("Settings");
                     });
-
-                    ui.add_space(5.0);
-                    ui.label("Live TLE sources from CelesTrak:");
-                    ui.label("  Starlink, OneWeb, Iridium, Globalstar,");
-                    ui.label("  Orbcomm, GPS, Galileo, GLONASS, Beidou");
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        self.show_settings(ui);
+                    });
                 });
         }
 
@@ -2062,27 +2081,26 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let available_rect = ui.available_rect_before_wrap();
-            let tab_width = available_rect.width() / num_tabs as f32;
-            let separator_width = 4.0;
+            let gap = 1.0;
+            let num_separators = if num_tabs > 1 { num_tabs - 1 } else { 0 };
+            let total_gap = gap * num_separators as f32;
+            let tab_width = (available_rect.width() - total_gap) / num_tabs as f32;
 
             for tab_idx in 0..num_tabs {
-                let x_offset = tab_idx as f32 * tab_width;
-                let inner_width = if tab_idx < num_tabs - 1 {
-                    tab_width - separator_width
-                } else {
-                    tab_width
-                };
+                let x_offset = tab_idx as f32 * (tab_width + gap);
 
                 let tab_rect = egui::Rect::from_min_size(
                     egui::pos2(available_rect.min.x + x_offset, available_rect.min.y),
-                    egui::vec2(inner_width, available_rect.height()),
+                    egui::vec2(tab_width, available_rect.height()),
                 );
 
                 let tab_name = self.tabs[tab_idx].name.clone();
 
                 let is_last_tab = tab_idx == num_tabs - 1;
                 ui.scope_builder(egui::UiBuilder::new().max_rect(tab_rect), |ui| {
+                    ui.add_space(4.0);
                     ui.horizontal(|ui| {
+                        ui.add_space(4.0);
                         ui.strong(&tab_name);
                         if is_last_tab {
                             if ui.small_button("+").clicked() {
@@ -2103,14 +2121,13 @@ impl eframe::App for App {
                 });
 
                 if tab_idx < num_tabs - 1 {
-                    let sep_rect = egui::Rect::from_min_size(
-                        egui::pos2(available_rect.min.x + x_offset + inner_width, available_rect.min.y),
-                        egui::vec2(separator_width, available_rect.height()),
-                    );
-                    ui.painter().rect_filled(
-                        sep_rect,
-                        0.0,
-                        egui::Color32::from_rgb(60, 60, 60),
+                    let sep_x = available_rect.min.x + x_offset + tab_width + gap * 0.5;
+                    ui.painter().line_segment(
+                        [
+                            egui::pos2(sep_x, available_rect.min.y),
+                            egui::pos2(sep_x, available_rect.max.y),
+                        ],
+                        egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 80)),
                     );
                 }
             }
@@ -2479,6 +2496,8 @@ fn draw_3d_view(
     let axis_len = orbit_radius * 1.05;
     let planet_view_reference = planet_radius * 1.15;
     let margin = planet_view_reference / zoom;
+    let scaled_sat_radius = sat_radius * zoom as f32;
+    let scaled_link_width = (1.0 * zoom as f32).max(0.5);
 
     let plot = Plot::new(id)
         .data_aspect(1.0)
@@ -2520,7 +2539,7 @@ fn draw_3d_view(
                             plot_ui.line(
                                 Line::new("", PlotPoints::new(std::mem::take(&mut behind_segment)))
                                     .color(dim_color(color))
-                                    .width(1.0),
+                                    .width(scaled_link_width),
                             );
                         }
                     }
@@ -2528,7 +2547,7 @@ fn draw_3d_view(
                         plot_ui.line(
                             Line::new("", PlotPoints::new(behind_segment))
                                 .color(dim_color(color))
-                                .width(1.0),
+                                .width(scaled_link_width),
                         );
                     }
                 }
@@ -2556,7 +2575,7 @@ fn draw_3d_view(
                     plot_ui.points(
                         Points::new("", pts)
                             .color(dim_color(color))
-                            .radius(sat_radius * 0.8)
+                            .radius(scaled_sat_radius * 0.8)
                             .filled(true),
                     );
                 }
@@ -2594,7 +2613,7 @@ fn draw_3d_view(
                         [border_radius * theta.cos(), border_radius * theta.sin()]
                     })
                     .collect();
-                plot_ui.line(Line::new("", border_pts).color(egui::Color32::WHITE).width(1.0));
+                plot_ui.line(Line::new("", border_pts).color(egui::Color32::WHITE).width(scaled_link_width));
             }
         } else {
             let earth_pts: PlotPoints = (0..=100)
@@ -2664,7 +2683,7 @@ fn draw_3d_view(
                                 plot_ui.line(
                                     Line::new("", PlotPoints::new(std::mem::take(&mut segment)))
                                         .color(color)
-                                        .width(1.0),
+                                        .width(scaled_link_width),
                                 );
                             }
                         }
@@ -2672,7 +2691,7 @@ fn draw_3d_view(
                             plot_ui.line(
                                 Line::new("", PlotPoints::new(segment))
                                     .color(color)
-                                    .width(1.0),
+                                    .width(scaled_link_width),
                             );
                         }
                     }
@@ -2768,7 +2787,7 @@ fn draw_3d_view(
                         plot_ui.line(
                             Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
                                 .color(color)
-                                .width(1.0),
+                                .width(scaled_link_width),
                         );
                     }
                 }
@@ -2803,7 +2822,7 @@ fn draw_3d_view(
                         plot_ui.line(
                             Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
                                 .color(color)
-                                .width(1.0),
+                                .width(scaled_link_width),
                         );
                     }
                 }
@@ -2906,13 +2925,13 @@ fn draw_3d_view(
                         plot_ui.points(
                             Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                 .color(dim_col)
-                                .radius(sat_radius * 0.8)
+                                .radius(scaled_sat_radius * 0.8)
                                 .filled(true),
                         );
                         plot_ui.points(
                             Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                 .color(bg_color)
-                                .radius(sat_radius * 0.4)
+                                .radius(scaled_sat_radius * 0.4)
                                 .filled(true),
                         );
                     }
@@ -2920,13 +2939,13 @@ fn draw_3d_view(
                         plot_ui.points(
                             Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                 .color(color)
-                                .radius(sat_radius)
+                                .radius(scaled_sat_radius)
                                 .filled(true),
                         );
                         plot_ui.points(
                             Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                 .color(bg_color)
-                                .radius(sat_radius * 0.5)
+                                .radius(scaled_sat_radius * 0.5)
                                 .filled(true),
                         );
                     }
@@ -2970,14 +2989,14 @@ fn draw_3d_view(
                         plot_ui.points(
                             Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                 .color(dim_col)
-                                .radius(sat_radius * 0.8)
+                                .radius(scaled_sat_radius * 0.8)
                                 .filled(true),
                         );
                         if *is_tle {
                             plot_ui.points(
                                 Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                     .color(bg_color)
-                                    .radius(sat_radius * 0.4)
+                                    .radius(scaled_sat_radius * 0.4)
                                     .filled(true),
                             );
                         }
@@ -2986,14 +3005,14 @@ fn draw_3d_view(
                         plot_ui.points(
                             Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                 .color(color)
-                                .radius(sat_radius)
+                                .radius(scaled_sat_radius)
                                 .filled(true),
                         );
                         if *is_tle {
                             plot_ui.points(
                                 Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                     .color(bg_color)
-                                    .radius(sat_radius * 0.5)
+                                    .radius(scaled_sat_radius * 0.5)
                                     .filled(true),
                             );
                         }
@@ -3015,7 +3034,7 @@ fn draw_3d_view(
                     let color = plane_color(if single_color { *color_offset } else { sat.plane + color_offset });
                     ui.painter().circle_stroke(
                         screen_pos,
-                        sat_radius * 2.5,
+                        scaled_sat_radius * 2.5,
                         egui::Stroke::new(2.0, color),
                     );
                 }
@@ -3043,7 +3062,7 @@ fn draw_3d_view(
                     let color = plane_color(if single_color { *color_offset } else { sat.plane + color_offset });
                     ui.painter().circle_stroke(
                         screen_pt,
-                        sat_radius * 2.0,
+                        scaled_sat_radius * 2.0,
                         egui::Stroke::new(2.0, color),
                     );
                     break 'hover;
@@ -3200,6 +3219,8 @@ fn draw_torus(
     };
 
     let margin = (major_radius + minor_radius) * 1.3 / zoom;
+    let scaled_sat_radius = sat_radius * zoom as f32;
+    let scaled_link_width = (1.0 * zoom as f32).max(0.5);
 
     let mut user_rotation = rotation;
     let display_rotation = rotation;
@@ -3278,7 +3299,7 @@ fn draw_torus(
                             plot_ui.line(
                                 Line::new("", PlotPoints::new(std::mem::take(&mut back_segment)))
                                     .color(dim_col)
-                                    .width(1.0),
+                                    .width(scaled_link_width),
                             );
                         }
                     } else {
@@ -3287,16 +3308,16 @@ fn draw_torus(
                             plot_ui.line(
                                 Line::new("", PlotPoints::new(std::mem::take(&mut front_segment)))
                                     .color(color)
-                                    .width(1.5),
+                                    .width(scaled_link_width * 1.5),
                             );
                         }
                     }
                 }
                 if !front_segment.is_empty() {
-                    plot_ui.line(Line::new("", PlotPoints::new(front_segment)).color(color).width(1.5));
+                    plot_ui.line(Line::new("", PlotPoints::new(front_segment)).color(color).width(scaled_link_width * 1.5));
                 }
                 if !back_segment.is_empty() {
-                    plot_ui.line(Line::new("", PlotPoints::new(back_segment)).color(dim_col).width(1.0));
+                    plot_ui.line(Line::new("", PlotPoints::new(back_segment)).color(dim_col).width(scaled_link_width));
                 }
             }
 
@@ -3323,7 +3344,7 @@ fn draw_torus(
                         plot_ui.line(
                             Line::new("", PlotPoints::new(vec![[x1, y1], [x2, y2]]))
                                 .color(color)
-                                .width(1.0),
+                                .width(scaled_link_width),
                         );
                     }
                 }
@@ -3357,7 +3378,7 @@ fn draw_torus(
                     let phase = 2.0 * PI * sat.sat_index as f64 / sats_per_plane as f64 + mean_motion * time;
                     let (x, y, _) = torus_pos(sat.plane, sat.sat_index);
                     let facing = is_facing_camera(angle, phase);
-                    let (c, r) = if facing { (color, sat_radius) } else { (dim_col, sat_radius * 0.8) };
+                    let (c, r) = if facing { (color, scaled_sat_radius) } else { (dim_col, scaled_sat_radius * 0.8) };
                     plot_ui.points(
                         Points::new("", PlotPoints::new(vec![[x, y]]))
                             .color(c)
@@ -3369,7 +3390,7 @@ fn draw_torus(
                         plot_ui.points(
                             Points::new("", PlotPoints::new(vec![[x, y]]))
                                 .color(base_color)
-                                .radius(sat_radius * 2.5)
+                                .radius(scaled_sat_radius * 2.5)
                                 .filled(false),
                         );
                     }
