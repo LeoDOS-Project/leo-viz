@@ -160,22 +160,24 @@ impl EarthTexture {
         self.pixels[(y * self.width + x) as usize]
     }
 
-    fn render_sphere(&self, size: usize, rot: &Matrix3<f64>) -> egui::ColorImage {
+    fn render_sphere(&self, size: usize, rot: &Matrix3<f64>, flattening: f64) -> egui::ColorImage {
         let mut pixels = vec![egui::Color32::TRANSPARENT; size * size];
         let center = size as f64 / 2.0;
         let radius = center * 0.95;
         let inv_rot = rot.transpose();
+        let polar_scale = 1.0 - flattening;
 
         for py in 0..size {
             for px in 0..size {
                 let dx = px as f64 - center;
                 let dy = py as f64 - center;
-                let dist_sq = dx * dx + dy * dy;
+                let dy_scaled = dy / polar_scale;
+                let dist_sq = dx * dx + dy_scaled * dy_scaled;
 
                 if dist_sq < radius * radius {
                     let z = (radius * radius - dist_sq).sqrt();
                     let x = dx / radius;
-                    let y = -dy / radius;
+                    let y = -dy_scaled / radius;
                     let z = z / radius;
 
                     let v = inv_rot * Vector3::new(x, y, z);
@@ -351,14 +353,13 @@ fn rotate_point_matrix(x: f64, y: f64, z: f64, rot: &Matrix3<f64>) -> (f64, f64,
 fn matrix_to_lat_lon(m: &Matrix3<f64>) -> (f64, f64) {
     let lat = m[(2, 1)].asin().clamp(-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2);
     let mut lon = (-m[(0, 2)]).atan2(m[(0, 0)]) - std::f64::consts::FRAC_PI_2;
-    if lon < -std::f64::consts::PI {
-        lon += 2.0 * std::f64::consts::PI;
-    }
+    if lon < -std::f64::consts::PI { lon += 2.0 * std::f64::consts::PI; }
+    if lon > std::f64::consts::PI { lon -= 2.0 * std::f64::consts::PI; }
     (lat, lon)
 }
 
 fn lat_lon_to_matrix(lat: f64, lon: f64) -> Matrix3<f64> {
-    let lon = -(lon + std::f64::consts::FRAC_PI_2);
+    let lon = -lon - std::f64::consts::FRAC_PI_2;
     let (sl, cl) = (lat.sin(), lat.cos());
     let (sn, cn) = (lon.sin(), lon.cos());
     Matrix3::new(
@@ -829,6 +830,7 @@ struct ViewerState {
     last_rotation: Option<Matrix3<f64>>,
     earth_resolution: usize,
     last_resolution: usize,
+    last_flattening: f64,
     texture_load_state: TextureLoadState,
     pending_body: Option<(CelestialBody, Skin)>,
     dark_mode: bool,
@@ -839,6 +841,8 @@ struct ViewerState {
     show_shortest_path: bool,
     show_camera_windows: bool,
     render_planet: bool,
+    show_ellipsoid: bool,
+    ellipsoid_scale: f64,
     last_max_planet_radius: f64,
     real_time: f64,
     start_timestamp: DateTime<Utc>,
@@ -907,6 +911,7 @@ impl Default for App {
                 last_rotation: None,
                 earth_resolution: 512,
                 last_resolution: 0,
+                last_flattening: 0.0,
                 texture_load_state: TextureLoadState::Loaded(builtin_texture),
                 pending_body: None,
                 dark_mode: true,
@@ -917,6 +922,8 @@ impl Default for App {
                 show_shortest_path: true,
                 show_camera_windows: false,
                 render_planet: true,
+                show_ellipsoid: false,
+                ellipsoid_scale: 10.0,
                 last_max_planet_radius: CelestialBody::Earth.radius_km(),
                 real_time: 0.0,
                 start_timestamp: Utc::now(),
@@ -1131,7 +1138,7 @@ impl ViewerState {
             if available_skins.len() > 1 {
                 ui.label("Skin:");
                 egui::ComboBox::from_id_salt(format!("skin_{}_{}", tab_idx, planet_idx))
-                    .selected_text(current_skin.label())
+                    .selected_text(new_skin.label())
                     .show_ui(ui, |ui| {
                         for skin in available_skins {
                             ui.selectable_value(&mut new_skin, *skin, skin.label());
@@ -1836,7 +1843,7 @@ impl ViewerState {
         let geo_lon = if self.earth_fixed_camera {
             base_lon
         } else {
-            let mut l = base_lon + self.current_gmst;
+            let mut l = base_lon - self.current_gmst;
             while l > std::f64::consts::PI { l -= 2.0 * std::f64::consts::PI; }
             while l < -std::f64::consts::PI { l += 2.0 * std::f64::consts::PI; }
             l
@@ -1860,7 +1867,7 @@ impl ViewerState {
                 let target_lon = if self.earth_fixed_camera {
                     lon_deg.to_radians()
                 } else {
-                    lon_deg.to_radians() - self.current_gmst
+                    lon_deg.to_radians() + self.current_gmst
                 };
                 self.rotation = lat_lon_to_matrix(lat_deg.to_radians(), target_lon);
             }
@@ -1868,7 +1875,7 @@ impl ViewerState {
         let was_earth_fixed = self.earth_fixed_camera;
         ui.checkbox(&mut self.earth_fixed_camera, "Earth-fixed (Lat/Lon tracks ground)");
         if self.earth_fixed_camera != was_earth_fixed {
-            let new_rotation = lat_lon_to_matrix(lat, geo_lon - if self.earth_fixed_camera { 0.0 } else { self.current_gmst });
+            let new_rotation = lat_lon_to_matrix(lat, geo_lon + if self.earth_fixed_camera { 0.0 } else { self.current_gmst });
             self.rotation = new_rotation;
             let cos_g = self.current_gmst.cos();
             let sin_g = self.current_gmst.sin();
@@ -1977,6 +1984,13 @@ impl ViewerState {
             self.hide_behind_earth = !show_behind;
         }
         ui.checkbox(&mut self.render_planet, "Render planet");
+        ui.checkbox(&mut self.show_ellipsoid, "Show ellipsoid (oblate)");
+        if self.show_ellipsoid {
+            ui.horizontal(|ui| {
+                ui.label("Exaggeration:");
+                ui.add(egui::DragValue::new(&mut self.ellipsoid_scale).range(1.0..=50.0).speed(0.5).suffix("x"));
+            });
+        }
         ui.checkbox(&mut self.single_color_per_constellation, "Monochrome");
         ui.checkbox(&mut self.follow_satellite, "Follow satellite");
 
@@ -2433,13 +2447,19 @@ impl eframe::App for App {
 
         let rotation_changed = v.last_rotation.map_or(true, |r| r != combined_rotation);
         let resolution_changed = v.last_resolution != v.earth_resolution;
+        let flattening = if v.show_ellipsoid {
+            (1.0 / 298.257) * v.ellipsoid_scale
+        } else {
+            0.0
+        };
+        let flattening_changed = (v.last_flattening - flattening).abs() > 0.0001;
 
         for key in &bodies_needed {
             let texture_missing = !v.planet_image_handles.contains_key(key);
-            let need_rerender = rotation_changed || resolution_changed || texture_missing;
+            let need_rerender = rotation_changed || resolution_changed || texture_missing || flattening_changed;
             if need_rerender {
                 if let Some(texture) = v.planet_textures.get(key) {
-                    let image = texture.render_sphere(v.earth_resolution, &combined_rotation);
+                    let image = texture.render_sphere(v.earth_resolution, &combined_rotation, flattening);
                     let handle = ctx.load_texture(
                         &format!("planet_{:?}_{:?}", key.0, key.1),
                         image,
@@ -2454,6 +2474,9 @@ impl eframe::App for App {
         }
         if resolution_changed {
             v.last_resolution = v.earth_resolution;
+        }
+        if flattening_changed {
+            v.last_flattening = flattening;
         }
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
