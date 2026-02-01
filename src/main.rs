@@ -350,15 +350,15 @@ fn rotate_point_matrix(x: f64, y: f64, z: f64, rot: &Matrix3<f64>) -> (f64, f64,
 
 fn matrix_to_lat_lon(m: &Matrix3<f64>) -> (f64, f64) {
     let lat = m[(2, 1)].asin().clamp(-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2);
-    let mut lon = m[(0, 2)].atan2(m[(0, 0)]) + std::f64::consts::FRAC_PI_2;
-    if lon > std::f64::consts::PI {
-        lon -= 2.0 * std::f64::consts::PI;
+    let mut lon = (-m[(0, 2)]).atan2(m[(0, 0)]) - std::f64::consts::FRAC_PI_2;
+    if lon < -std::f64::consts::PI {
+        lon += 2.0 * std::f64::consts::PI;
     }
     (lat, lon)
 }
 
 fn lat_lon_to_matrix(lat: f64, lon: f64) -> Matrix3<f64> {
-    let lon = lon - std::f64::consts::FRAC_PI_2;
+    let lon = -(lon + std::f64::consts::FRAC_PI_2);
     let (sl, cl) = (lat.sin(), lat.cos());
     let (sn, cn) = (lon.sin(), lon.cos());
     Matrix3::new(
@@ -896,7 +896,7 @@ impl Default for App {
                 torus_zoom: 1.0,
                 vertical_split: 0.6,
                 sat_radius: 5.0,
-                rotation: lat_lon_to_matrix(65.0_f64.to_radians(), 0.0),
+                rotation: lat_lon_to_matrix(0.0, 0.0),
                 torus_rotation: torus_initial,
                 planet_textures: {
                     let mut map = HashMap::new();
@@ -1831,6 +1831,81 @@ impl ViewerState {
     }
 
     fn show_settings(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("Camera").strong());
+        let (lat, base_lon) = matrix_to_lat_lon(&self.rotation);
+        let geo_lon = if self.earth_fixed_camera {
+            base_lon
+        } else {
+            let mut l = base_lon + self.current_gmst;
+            while l > std::f64::consts::PI { l -= 2.0 * std::f64::consts::PI; }
+            while l < -std::f64::consts::PI { l += 2.0 * std::f64::consts::PI; }
+            l
+        };
+        let mut lat_deg = lat.to_degrees();
+        let mut lon_deg = geo_lon.to_degrees();
+        ui.horizontal(|ui| {
+            ui.label("Lat:");
+            let lat_changed = ui.add(egui::DragValue::new(&mut lat_deg).speed(0.5).max_decimals(1).suffix("°")).changed();
+            ui.label("Lon:");
+            let lon_changed = ui.add(egui::DragValue::new(&mut lon_deg).speed(0.5).max_decimals(1).suffix("°")).changed();
+            ui.label("Alt:");
+            let mut alt_km = 10000.0 / self.zoom;
+            if ui.add(egui::DragValue::new(&mut alt_km).range(500.0..=1000000.0).speed(100.0).suffix(" km")).changed() {
+                self.zoom = (10000.0 / alt_km).clamp(0.01, 20.0);
+            }
+            lat_deg = lat_deg.clamp(-90.0, 90.0);
+            while lon_deg > 180.0 { lon_deg -= 360.0; }
+            while lon_deg < -180.0 { lon_deg += 360.0; }
+            if lat_changed || lon_changed {
+                let target_lon = if self.earth_fixed_camera {
+                    lon_deg.to_radians()
+                } else {
+                    lon_deg.to_radians() - self.current_gmst
+                };
+                self.rotation = lat_lon_to_matrix(lat_deg.to_radians(), target_lon);
+            }
+        });
+        let was_earth_fixed = self.earth_fixed_camera;
+        ui.checkbox(&mut self.earth_fixed_camera, "Earth-fixed (Lat/Lon tracks ground)");
+        if self.earth_fixed_camera != was_earth_fixed {
+            let new_rotation = lat_lon_to_matrix(lat, geo_lon - if self.earth_fixed_camera { 0.0 } else { self.current_gmst });
+            self.rotation = new_rotation;
+            let cos_g = self.current_gmst.cos();
+            let sin_g = self.current_gmst.sin();
+            let planet_y_rot = Matrix3::new(
+                cos_g, 0.0, sin_g,
+                0.0, 1.0, 0.0,
+                -sin_g, 0.0, cos_g,
+            );
+            self.satellite_rotation = if self.earth_fixed_camera {
+                new_rotation * planet_y_rot.transpose()
+            } else {
+                new_rotation
+            };
+        }
+        ui.horizontal(|ui| {
+            if ui.button("N/S view").clicked() {
+                self.rotation = Matrix3::identity();
+            }
+            if ui.button("E/W view").clicked() {
+                self.rotation = Matrix3::new(
+                    1.0, 0.0, 0.0,
+                    0.0, 0.0, 1.0,
+                    0.0, -1.0, 0.0,
+                );
+            }
+            if ui.button("Reset").clicked() {
+                self.rotation = Matrix3::identity();
+                self.torus_rotation = Matrix3::new(
+                    1.0, 0.0, 0.0,
+                    0.0, 0.0, -1.0,
+                    0.0, 1.0, 0.0,
+                );
+                self.zoom = 1.0;
+            }
+        });
+
+        ui.add_space(5.0);
         ui.checkbox(&mut self.dark_mode, "Dark mode");
         let mut stop_time = !self.animate;
         ui.checkbox(&mut stop_time, "Stop time");
@@ -1928,85 +2003,6 @@ impl ViewerState {
             ui.add(egui::DragValue::new(&mut self.link_width).range(0.1..=5.0).speed(0.1));
         });
         ui.checkbox(&mut self.fixed_sizes, "Fixed sizes (ignore alt)");
-
-        ui.add_space(5.0);
-        ui.label(egui::RichText::new("Camera position").strong());
-        let (lat, base_lon) = matrix_to_lat_lon(&self.rotation);
-        let geo_lon = if self.earth_fixed_camera {
-            base_lon
-        } else {
-            let mut l = base_lon + self.current_gmst;
-            while l > std::f64::consts::PI { l -= 2.0 * std::f64::consts::PI; }
-            while l < -std::f64::consts::PI { l += 2.0 * std::f64::consts::PI; }
-            l
-        };
-        let mut lat_deg = lat.to_degrees();
-        let mut lon_deg = geo_lon.to_degrees();
-        ui.horizontal(|ui| {
-            ui.label("Lat:");
-            let lat_changed = ui.add(egui::DragValue::new(&mut lat_deg).range(-90.0..=90.0).speed(1.0).suffix("°")).changed();
-            ui.label("Lon:");
-            let lon_changed = ui.add(egui::DragValue::new(&mut lon_deg).speed(1.0).suffix("°")).changed();
-            ui.label("Alt:");
-            let mut alt_km = 10000.0 / self.zoom;
-            if ui.add(egui::DragValue::new(&mut alt_km).range(500.0..=1000000.0).speed(100.0).suffix(" km")).changed() {
-                self.zoom = (10000.0 / alt_km).clamp(0.01, 20.0);
-            }
-            if lon_changed {
-                while lon_deg > 180.0 { lon_deg -= 360.0; }
-                while lon_deg < -180.0 { lon_deg += 360.0; }
-            }
-            if lat_changed || lon_changed {
-                let target_lon = if self.earth_fixed_camera {
-                    lon_deg.to_radians()
-                } else {
-                    lon_deg.to_radians() - self.current_gmst
-                };
-                self.rotation = lat_lon_to_matrix(lat_deg.to_radians(), target_lon);
-            }
-        });
-        let was_earth_fixed = self.earth_fixed_camera;
-        ui.checkbox(&mut self.earth_fixed_camera, "Earth-fixed (Lat/Lon tracks ground)");
-        if self.earth_fixed_camera != was_earth_fixed {
-            let new_rotation = lat_lon_to_matrix(lat, geo_lon - if self.earth_fixed_camera { 0.0 } else { self.current_gmst });
-            self.rotation = new_rotation;
-            let cos_g = self.current_gmst.cos();
-            let sin_g = self.current_gmst.sin();
-            let planet_y_rot = Matrix3::new(
-                cos_g, 0.0, sin_g,
-                0.0, 1.0, 0.0,
-                -sin_g, 0.0, cos_g,
-            );
-            self.satellite_rotation = if self.earth_fixed_camera {
-                new_rotation * planet_y_rot.transpose()
-            } else {
-                new_rotation
-            };
-        }
-
-        ui.add_space(5.0);
-        ui.horizontal(|ui| {
-            if ui.button("N/S view").clicked() {
-                self.rotation = Matrix3::identity();
-            }
-            if ui.button("E/W view").clicked() {
-                self.rotation = Matrix3::new(
-                    1.0, 0.0, 0.0,
-                    0.0, 0.0, 1.0,
-                    0.0, -1.0, 0.0,
-                );
-            }
-        });
-
-        if ui.button("Reset view").clicked() {
-            self.rotation = Matrix3::identity();
-            self.torus_rotation = Matrix3::new(
-                1.0, 0.0, 0.0,
-                0.0, 0.0, -1.0,
-                0.0, 1.0, 0.0,
-            );
-            self.zoom = 1.0;
-        }
 
         ui.add_space(5.0);
         ui.label(egui::RichText::new("Tab cycling").strong());
