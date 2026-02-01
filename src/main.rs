@@ -118,6 +118,45 @@ impl CelestialBody {
             CelestialBody::Sun => 132712440018.0,
         }
     }
+
+    fn j2(&self) -> f64 {
+        match self {
+            CelestialBody::Earth => 1.08263e-3,
+            CelestialBody::Moon => 2.03e-4,
+            CelestialBody::Mars => 1.96045e-3,
+            CelestialBody::Mercury => 6.0e-5,
+            CelestialBody::Venus => 4.458e-6,
+            CelestialBody::Jupiter => 1.4736e-2,
+            CelestialBody::Saturn => 1.6298e-2,
+            CelestialBody::Sun => 2.0e-7,
+        }
+    }
+
+    fn equatorial_radius_km(&self) -> f64 {
+        match self {
+            CelestialBody::Earth => 6378.137,
+            CelestialBody::Moon => 1738.1,
+            CelestialBody::Mars => 3396.2,
+            CelestialBody::Mercury => 2440.5,
+            CelestialBody::Venus => 6051.8,
+            CelestialBody::Jupiter => 71492.0,
+            CelestialBody::Saturn => 60268.0,
+            CelestialBody::Sun => 696000.0,
+        }
+    }
+
+    fn flattening(&self) -> f64 {
+        match self {
+            CelestialBody::Earth => 1.0 / 298.257,
+            CelestialBody::Moon => 0.0012,
+            CelestialBody::Mars => 1.0 / 169.89,
+            CelestialBody::Mercury => 0.0009,
+            CelestialBody::Venus => 0.0,
+            CelestialBody::Jupiter => 1.0 / 15.41,
+            CelestialBody::Saturn => 1.0 / 10.21,
+            CelestialBody::Sun => 9.0e-6,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -163,7 +202,7 @@ impl EarthTexture {
     fn render_sphere(&self, size: usize, rot: &Matrix3<f64>, flattening: f64) -> egui::ColorImage {
         let mut pixels = vec![egui::Color32::TRANSPARENT; size * size];
         let center = size as f64 / 2.0;
-        let radius = center * 0.95;
+        let radius = center;
         let inv_rot = rot.transpose();
         let polar_scale = 1.0 - flattening;
 
@@ -223,6 +262,8 @@ struct WalkerConstellation {
     phasing: f64,
     planet_radius: f64,
     planet_mu: f64,
+    planet_j2: f64,
+    planet_equatorial_radius: f64,
 }
 
 impl WalkerConstellation {
@@ -253,8 +294,12 @@ impl WalkerConstellation {
 
         let phase_step = self.phasing * 2.0 * PI / self.total_sats as f64;
 
+        let r_ratio = self.planet_equatorial_radius / orbit_radius;
+        let raan_drift_rate = -1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion * inc_cos;
+
         for plane in 0..self.num_planes {
-            let raan = raan_step * plane as f64;
+            let raan_initial = raan_step * plane as f64;
+            let raan = raan_initial + raan_drift_rate * time;
             let raan_cos = raan.cos();
             let raan_sin = raan.sin();
             let phase_offset = phase_step * plane as f64;
@@ -589,7 +634,7 @@ impl ConstellationConfig {
         self.sats_per_plane * self.num_planes
     }
 
-    fn constellation(&self, planet_radius: f64, planet_mu: f64) -> WalkerConstellation {
+    fn constellation(&self, planet_radius: f64, planet_mu: f64, planet_j2: f64, planet_equatorial_radius: f64) -> WalkerConstellation {
         WalkerConstellation {
             walker_type: self.walker_type,
             total_sats: self.sats_per_plane * self.num_planes,
@@ -599,6 +644,8 @@ impl ConstellationConfig {
             phasing: self.phasing,
             planet_radius,
             planet_mu,
+            planet_j2,
+            planet_equatorial_radius,
         }
     }
 
@@ -830,7 +877,6 @@ struct ViewerState {
     last_rotation: Option<Matrix3<f64>>,
     earth_resolution: usize,
     last_resolution: usize,
-    last_flattening: f64,
     texture_load_state: TextureLoadState,
     pending_body: Option<(CelestialBody, Skin)>,
     dark_mode: bool,
@@ -841,8 +887,7 @@ struct ViewerState {
     show_shortest_path: bool,
     show_camera_windows: bool,
     render_planet: bool,
-    show_ellipsoid: bool,
-    ellipsoid_scale: f64,
+    show_polar_circle: bool,
     last_max_planet_radius: f64,
     real_time: f64,
     start_timestamp: DateTime<Utc>,
@@ -911,7 +956,6 @@ impl Default for App {
                 last_rotation: None,
                 earth_resolution: 512,
                 last_resolution: 0,
-                last_flattening: 0.0,
                 texture_load_state: TextureLoadState::Loaded(builtin_texture),
                 pending_body: None,
                 dark_mode: true,
@@ -922,8 +966,7 @@ impl Default for App {
                 show_shortest_path: true,
                 show_camera_windows: false,
                 render_planet: true,
-                show_ellipsoid: false,
-                ellipsoid_scale: 10.0,
+                show_polar_circle: false,
                 last_max_planet_radius: CelestialBody::Earth.radius_km(),
                 real_time: 0.0,
                 start_timestamp: Utc::now(),
@@ -1503,6 +1546,8 @@ impl ViewerState {
         let planet = &self.tabs[tab_idx].planets[planet_idx];
         let planet_radius = planet.celestial_body.radius_km();
         let planet_mu = planet.celestial_body.mu();
+        let planet_j2 = planet.celestial_body.j2();
+        let planet_eq_radius = planet.celestial_body.equatorial_radius_km();
         let celestial_body = planet.celestial_body;
         let skin = planet.skin;
         let view_name = planet.name.clone();
@@ -1511,7 +1556,7 @@ impl ViewerState {
             .enumerate()
             .filter(|(_, c)| !c.hidden)
             .map(|(orig_idx, c)| {
-                let wc = c.constellation(planet_radius, planet_mu);
+                let wc = c.constellation(planet_radius, planet_mu, planet_j2, planet_eq_radius);
                 let pos = wc.satellite_positions(self.time);
                 (wc, pos, c.color_offset, false, orig_idx)
             })
@@ -1528,6 +1573,8 @@ impl ViewerState {
                 phasing: 0.0,
                 planet_radius,
                 planet_mu,
+                planet_j2,
+                planet_equatorial_radius: planet_eq_radius,
             };
             let tle_color_offset = 0;
             constellations_data.push((tle_wc, tle_positions, tle_color_offset, true, usize::MAX));
@@ -1568,6 +1615,8 @@ impl ViewerState {
             let torus_zoom = self.torus_zoom;
             let link_width = self.link_width;
             let fixed_sizes = self.fixed_sizes;
+            let flattening = celestial_body.flattening();
+            let show_polar_circle = self.show_polar_circle;
 
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
@@ -1603,6 +1652,8 @@ impl ViewerState {
                         render_planet,
                         link_width,
                         fixed_sizes,
+                        flattening,
+                        show_polar_circle,
                     );
                     self.rotation = rot;
                     self.zoom = new_zoom;
@@ -1678,6 +1729,8 @@ impl ViewerState {
             let planet_handle = self.planet_image_handles.get(&(celestial_body, skin));
             let link_width = self.link_width;
             let fixed_sizes = self.fixed_sizes;
+            let flattening = celestial_body.flattening();
+            let show_polar_circle = self.show_polar_circle;
 
             let planet = &mut self.tabs[tab_idx].planets[planet_idx];
             let (rot, new_zoom) = draw_3d_view(
@@ -1711,6 +1764,8 @@ impl ViewerState {
                 render_planet,
                 link_width,
                 fixed_sizes,
+                flattening,
+                show_polar_circle,
             );
             self.rotation = rot;
             self.zoom = new_zoom;
@@ -1984,13 +2039,7 @@ impl ViewerState {
             self.hide_behind_earth = !show_behind;
         }
         ui.checkbox(&mut self.render_planet, "Render planet");
-        ui.checkbox(&mut self.show_ellipsoid, "Show ellipsoid (oblate)");
-        if self.show_ellipsoid {
-            ui.horizontal(|ui| {
-                ui.label("Exaggeration:");
-                ui.add(egui::DragValue::new(&mut self.ellipsoid_scale).range(1.0..=50.0).speed(0.5).suffix("x"));
-            });
-        }
+        ui.checkbox(&mut self.show_polar_circle, "Show polar circle");
         ui.checkbox(&mut self.single_color_per_constellation, "Monochrome");
         ui.checkbox(&mut self.follow_satellite, "Follow satellite");
 
@@ -2396,7 +2445,9 @@ impl eframe::App for App {
                         if let Some(cons) = planet.constellations.get(cam.constellation_idx) {
                             let planet_radius = planet.celestial_body.radius_km();
                             let planet_mu = planet.celestial_body.mu();
-                            let wc = cons.constellation(planet_radius, planet_mu);
+                            let planet_j2 = planet.celestial_body.j2();
+                            let planet_eq_radius = planet.celestial_body.equatorial_radius_km();
+                            let wc = cons.constellation(planet_radius, planet_mu, planet_j2, planet_eq_radius);
                             let positions = wc.satellite_positions(v.time);
                             if let Some(sat) = positions.iter().find(|s| s.plane == cam.plane && s.sat_index == cam.sat_index) {
                                 let forward: Vector3<f64> = Vector3::new(sat.x, sat.y, sat.z).normalize();
@@ -2447,18 +2498,13 @@ impl eframe::App for App {
 
         let rotation_changed = v.last_rotation.map_or(true, |r| r != combined_rotation);
         let resolution_changed = v.last_resolution != v.earth_resolution;
-        let flattening = if v.show_ellipsoid {
-            (1.0 / 298.257) * v.ellipsoid_scale
-        } else {
-            0.0
-        };
-        let flattening_changed = (v.last_flattening - flattening).abs() > 0.0001;
 
         for key in &bodies_needed {
             let texture_missing = !v.planet_image_handles.contains_key(key);
-            let need_rerender = rotation_changed || resolution_changed || texture_missing || flattening_changed;
+            let need_rerender = rotation_changed || resolution_changed || texture_missing;
             if need_rerender {
                 if let Some(texture) = v.planet_textures.get(key) {
+                    let flattening = key.0.flattening();
                     let image = texture.render_sphere(v.earth_resolution, &combined_rotation, flattening);
                     let handle = ctx.load_texture(
                         &format!("planet_{:?}_{:?}", key.0, key.1),
@@ -2474,9 +2520,6 @@ impl eframe::App for App {
         }
         if resolution_changed {
             v.last_resolution = v.earth_resolution;
-        }
-        if flattening_changed {
-            v.last_flattening = flattening;
         }
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
@@ -2514,11 +2557,13 @@ impl eframe::App for App {
                             ui.strong("Body");
                             ui.strong("Radius (km)");
                             ui.strong("μ (km³/s²)");
+                            ui.strong("J₂ (×10⁻³)");
                             ui.end_row();
                             for body in bodies {
                                 ui.label(body.label());
                                 ui.label(format!("{:.0}", body.radius_km()));
                                 ui.label(format!("{:.0}", body.mu()));
+                                ui.label(format!("{:.4}", body.j2() * 1000.0));
                                 ui.end_row();
                             }
                         });
@@ -2550,7 +2595,21 @@ impl eframe::App for App {
                             ui.monospace("c");
                             ui.label("Speed of light (299,792 km/s)");
                             ui.end_row();
+                            ui.monospace("J₂");
+                            ui.label("Second zonal harmonic (oblateness coefficient)");
+                            ui.end_row();
                         });
+
+                        cols[0].add_space(10.0);
+                        cols[0].heading("J₂ Perturbation");
+                        cols[0].label("J₂ describes how oblate (flattened) a body is.");
+                        cols[0].label("It causes orbital planes (RAAN) to precess:");
+                        cols[0].monospace("  dΩ/dt = -1.5 J₂ (Rₑ/a)² n cos(i)");
+                        cols[0].label("where Rₑ = equatorial radius, a = semi-major axis,");
+                        cols[0].label("n = mean motion, i = inclination.");
+                        cols[0].add_space(5.0);
+                        cols[0].label("Higher J₂ = faster precession. Jupiter/Saturn");
+                        cols[0].label("have the highest J₂ due to rapid rotation.");
 
                         cols[0].add_space(10.0);
                         cols[0].heading("Orbital Mechanics");
@@ -2663,11 +2722,13 @@ impl eframe::App for App {
                 for planet in &tab.planets {
                     let pr = planet.celestial_body.radius_km();
                     let pm = planet.celestial_body.mu();
+                    let pj2 = planet.celestial_body.j2();
+                    let peq = planet.celestial_body.equatorial_radius_km();
                     let texture = self.viewer.planet_textures.get(&(planet.celestial_body, planet.skin));
 
                     for camera in &planet.satellite_cameras {
                         let sat_data = planet.constellations.get(camera.constellation_idx).map(|cons| {
-                            let wc = cons.constellation(pr, pm);
+                            let wc = cons.constellation(pr, pm, pj2, peq);
                             let positions = wc.satellite_positions(self.viewer.time);
                             positions.iter()
                                 .find(|s| s.plane == camera.plane && s.sat_index == camera.sat_index)
@@ -3011,6 +3072,8 @@ fn draw_3d_view(
     render_planet: bool,
     link_width: f32,
     fixed_sizes: bool,
+    flattening: f64,
+    show_polar_circle: bool,
 ) -> (Matrix3<f64>, f64) {
     let max_altitude = constellations.iter()
         .map(|(c, _, _, _, _)| c.altitude_km)
@@ -3130,14 +3193,28 @@ fn draw_3d_view(
             }
 
             if dark_mode {
-                let border_radius = planet_radius * 0.95;
+                let equatorial_r = planet_radius;
+                let polar_r = planet_radius * (1.0 - flattening);
                 let border_pts: PlotPoints = (0..=100)
                     .map(|i| {
                         let theta = 2.0 * PI * i as f64 / 100.0;
-                        [border_radius * theta.cos(), border_radius * theta.sin()]
+                        [equatorial_r * theta.cos(), polar_r * theta.sin()]
                     })
                     .collect();
-                plot_ui.line(Line::new("", border_pts).color(egui::Color32::WHITE).width(scaled_link_width));
+                plot_ui.line(Line::new("", border_pts).color(egui::Color32::WHITE).width(1.0));
+            }
+
+            if show_polar_circle {
+                let polar_r = planet_radius * (1.0 - flattening);
+                let circle_pts: PlotPoints = (0..=100)
+                    .map(|i| {
+                        let theta = 2.0 * PI * i as f64 / 100.0;
+                        [polar_r * theta.cos(), polar_r * theta.sin()]
+                    })
+                    .collect();
+                plot_ui.line(Line::new("", circle_pts)
+                    .color(egui::Color32::from_rgb(255, 200, 50))
+                    .width(1.0));
             }
         } else {
             let earth_pts: PlotPoints = (0..=100)
@@ -3273,7 +3350,7 @@ fn draw_3d_view(
                             plot_ui.line(
                                 Line::new("", PlotPoints::new(std::mem::take(&mut front_segment)))
                                     .color(color)
-                                    .width(1.5),
+                                    .width(scaled_link_width),
                             );
                         }
                     }
@@ -3281,7 +3358,7 @@ fn draw_3d_view(
                         plot_ui.line(
                             Line::new("", PlotPoints::new(front_segment))
                                 .color(color)
-                                .width(1.5),
+                                .width(scaled_link_width),
                         );
                     }
                 }
