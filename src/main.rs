@@ -1922,14 +1922,12 @@ impl ViewerState {
         ui.add_space(10.0);
 
         ui.horizontal(|ui| {
-            ui.label("Zoom:");
-            ui.add(egui::DragValue::new(&mut self.zoom).range(0.01..=20.0).speed(0.1));
             ui.label("Sat:");
             ui.add(egui::DragValue::new(&mut self.sat_radius).range(1.0..=15.0).speed(0.1));
             ui.label("Link:");
             ui.add(egui::DragValue::new(&mut self.link_width).range(0.1..=5.0).speed(0.1));
         });
-        ui.checkbox(&mut self.fixed_sizes, "Fixed sizes (ignore zoom)");
+        ui.checkbox(&mut self.fixed_sizes, "Fixed sizes (ignore alt)");
 
         ui.add_space(5.0);
         ui.label(egui::RichText::new("Camera position").strong());
@@ -1949,6 +1947,11 @@ impl ViewerState {
             let lat_changed = ui.add(egui::DragValue::new(&mut lat_deg).range(-90.0..=90.0).speed(1.0).suffix("°")).changed();
             ui.label("Lon:");
             let lon_changed = ui.add(egui::DragValue::new(&mut lon_deg).speed(1.0).suffix("°")).changed();
+            ui.label("Alt:");
+            let mut alt_km = 10000.0 / self.zoom;
+            if ui.add(egui::DragValue::new(&mut alt_km).range(500.0..=1000000.0).speed(100.0).suffix(" km")).changed() {
+                self.zoom = (10000.0 / alt_km).clamp(0.01, 20.0);
+            }
             if lon_changed {
                 while lon_deg > 180.0 { lon_deg -= 360.0; }
                 while lon_deg < -180.0 { lon_deg += 360.0; }
