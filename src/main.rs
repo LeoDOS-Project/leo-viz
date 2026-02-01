@@ -157,6 +157,19 @@ impl CelestialBody {
             CelestialBody::Sun => 9.0e-6,
         }
     }
+
+    fn rotation_period_hours(&self) -> f64 {
+        match self {
+            CelestialBody::Earth => 23.9345,
+            CelestialBody::Moon => 655.7,
+            CelestialBody::Mars => 24.6229,
+            CelestialBody::Mercury => 1407.6,
+            CelestialBody::Venus => -5832.5,
+            CelestialBody::Jupiter => 9.925,
+            CelestialBody::Saturn => 10.656,
+            CelestialBody::Sun => 609.12,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -539,6 +552,17 @@ fn greenwich_mean_sidereal_time(timestamp: DateTime<Utc>) -> f64 {
     gmst_normalized.to_radians()
 }
 
+fn body_rotation_angle(body: CelestialBody, sim_time_seconds: f64, gmst: f64) -> f64 {
+    if body == CelestialBody::Earth {
+        gmst
+    } else {
+        let period_hours = body.rotation_period_hours();
+        let period_seconds = period_hours * 3600.0;
+        let rotations = sim_time_seconds / period_seconds;
+        (rotations * 2.0 * PI).rem_euclid(2.0 * PI)
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_tle_data(url: &str) -> Result<Vec<TleSatellite>, String> {
     let response = ureq::get(url)
@@ -896,7 +920,6 @@ struct ViewerState {
     link_width: f32,
     fixed_sizes: bool,
     earth_fixed_camera: bool,
-    satellite_rotation: Matrix3<f64>,
     current_gmst: f64,
     auto_cycle_tabs: bool,
     cycle_interval: f64,
@@ -975,7 +998,6 @@ impl Default for App {
                 link_width: 1.0,
                 fixed_sizes: false,
                 earth_fixed_camera: true,
-                satellite_rotation: Matrix3::identity(),
                 current_gmst: 0.0,
                 auto_cycle_tabs: false,
                 cycle_interval: 5.0,
@@ -1597,7 +1619,19 @@ impl ViewerState {
             let show_coverage = if use_local { local.show_coverage } else { self.show_coverage };
             let coverage_angle = if use_local { local.coverage_angle } else { self.coverage_angle };
             let rotation = self.rotation;
-            let satellite_rotation = self.satellite_rotation;
+            let body_rot_angle = body_rotation_angle(celestial_body, self.time, self.current_gmst);
+            let cos_a = body_rot_angle.cos();
+            let sin_a = body_rot_angle.sin();
+            let body_y_rotation = Matrix3::new(
+                cos_a, 0.0, sin_a,
+                0.0, 1.0, 0.0,
+                -sin_a, 0.0, cos_a,
+            );
+            let satellite_rotation = if self.earth_fixed_camera {
+                self.rotation * body_y_rotation.transpose()
+            } else {
+                self.rotation
+            };
             let zoom = self.zoom;
             let sat_radius = self.sat_radius;
             let show_links = if use_local { local.show_links } else { self.show_links };
@@ -1714,7 +1748,19 @@ impl ViewerState {
             let show_coverage = if use_local { local.show_coverage } else { self.show_coverage };
             let coverage_angle = if use_local { local.coverage_angle } else { self.coverage_angle };
             let rotation = self.rotation;
-            let satellite_rotation = self.satellite_rotation;
+            let body_rot_angle = body_rotation_angle(celestial_body, self.time, self.current_gmst);
+            let cos_a = body_rot_angle.cos();
+            let sin_a = body_rot_angle.sin();
+            let body_y_rotation = Matrix3::new(
+                cos_a, 0.0, sin_a,
+                0.0, 1.0, 0.0,
+                -sin_a, 0.0, cos_a,
+            );
+            let satellite_rotation = if self.earth_fixed_camera {
+                self.rotation * body_y_rotation.transpose()
+            } else {
+                self.rotation
+            };
             let zoom = self.zoom;
             let sat_radius = self.sat_radius;
             let show_links = if use_local { local.show_links } else { self.show_links };
@@ -1893,12 +1939,18 @@ impl ViewerState {
     }
 
     fn show_settings(&mut self, ui: &mut egui::Ui) {
+        let current_body = self.tabs.first()
+            .and_then(|t| t.planets.first())
+            .map(|p| p.celestial_body)
+            .unwrap_or(CelestialBody::Earth);
+        let body_rotation = body_rotation_angle(current_body, self.time, self.current_gmst);
+
         ui.label(egui::RichText::new("Camera").strong());
         let (lat, base_lon) = matrix_to_lat_lon(&self.rotation);
         let geo_lon = if self.earth_fixed_camera {
             base_lon
         } else {
-            let mut l = base_lon - self.current_gmst;
+            let mut l = base_lon - body_rotation;
             while l > std::f64::consts::PI { l -= 2.0 * std::f64::consts::PI; }
             while l < -std::f64::consts::PI { l += 2.0 * std::f64::consts::PI; }
             l
@@ -1922,7 +1974,7 @@ impl ViewerState {
                 let target_lon = if self.earth_fixed_camera {
                     lon_deg.to_radians()
                 } else {
-                    lon_deg.to_radians() + self.current_gmst
+                    lon_deg.to_radians() + body_rotation
                 };
                 self.rotation = lat_lon_to_matrix(lat_deg.to_radians(), target_lon);
             }
@@ -1930,20 +1982,8 @@ impl ViewerState {
         let was_earth_fixed = self.earth_fixed_camera;
         ui.checkbox(&mut self.earth_fixed_camera, "Earth-fixed (Lat/Lon tracks ground)");
         if self.earth_fixed_camera != was_earth_fixed {
-            let new_rotation = lat_lon_to_matrix(lat, geo_lon + if self.earth_fixed_camera { 0.0 } else { self.current_gmst });
+            let new_rotation = lat_lon_to_matrix(lat, geo_lon + if self.earth_fixed_camera { 0.0 } else { body_rotation });
             self.rotation = new_rotation;
-            let cos_g = self.current_gmst.cos();
-            let sin_g = self.current_gmst.sin();
-            let planet_y_rot = Matrix3::new(
-                cos_g, 0.0, sin_g,
-                0.0, 1.0, 0.0,
-                -sin_g, 0.0, cos_g,
-            );
-            self.satellite_rotation = if self.earth_fixed_camera {
-                new_rotation * planet_y_rot.transpose()
-            } else {
-                new_rotation
-            };
         }
         ui.horizontal(|ui| {
             if ui.button("N/S view").clicked() {
@@ -2419,23 +2459,6 @@ impl eframe::App for App {
         let sim_time = v.start_timestamp + Duration::seconds(v.time as i64);
         let gmst = greenwich_mean_sidereal_time(sim_time);
         v.current_gmst = gmst;
-        let cos_a = gmst.cos();
-        let sin_a = gmst.sin();
-        let planet_y_rotation = Matrix3::new(
-            cos_a, 0.0, sin_a,
-            0.0, 1.0, 0.0,
-            -sin_a, 0.0, cos_a,
-        );
-        let combined_rotation = if v.earth_fixed_camera {
-            v.rotation
-        } else {
-            v.rotation * planet_y_rotation
-        };
-        v.satellite_rotation = if v.earth_fixed_camera {
-            v.rotation * planet_y_rotation.transpose()
-        } else {
-            v.rotation
-        };
 
         if v.follow_satellite {
             if let Some(tab) = v.tabs.get(active_tab_idx) {
@@ -2496,16 +2519,30 @@ impl eframe::App for App {
             }
         });
 
-        let rotation_changed = v.last_rotation.map_or(true, |r| r != combined_rotation);
+        let rotation_changed = v.last_rotation.map_or(true, |r| r != v.rotation);
         let resolution_changed = v.last_resolution != v.earth_resolution;
+        let time_changed = v.animate;
 
         for key in &bodies_needed {
             let texture_missing = !v.planet_image_handles.contains_key(key);
-            let need_rerender = rotation_changed || resolution_changed || texture_missing;
+            let need_rerender = rotation_changed || resolution_changed || texture_missing || time_changed;
             if need_rerender {
                 if let Some(texture) = v.planet_textures.get(key) {
+                    let body_rotation = body_rotation_angle(key.0, v.time, v.current_gmst);
+                    let cos_a = body_rotation.cos();
+                    let sin_a = body_rotation.sin();
+                    let body_y_rotation = Matrix3::new(
+                        cos_a, 0.0, sin_a,
+                        0.0, 1.0, 0.0,
+                        -sin_a, 0.0, cos_a,
+                    );
+                    let body_combined = if v.earth_fixed_camera {
+                        v.rotation
+                    } else {
+                        v.rotation * body_y_rotation
+                    };
                     let flattening = key.0.flattening();
-                    let image = texture.render_sphere(v.earth_resolution, &combined_rotation, flattening);
+                    let image = texture.render_sphere(v.earth_resolution, &body_combined, flattening);
                     let handle = ctx.load_texture(
                         &format!("planet_{:?}_{:?}", key.0, key.1),
                         image,
@@ -2516,7 +2553,7 @@ impl eframe::App for App {
             }
         }
         if rotation_changed {
-            v.last_rotation = Some(combined_rotation);
+            v.last_rotation = Some(v.rotation);
         }
         if resolution_changed {
             v.last_resolution = v.earth_resolution;
@@ -2558,12 +2595,19 @@ impl eframe::App for App {
                             ui.strong("Radius (km)");
                             ui.strong("μ (km³/s²)");
                             ui.strong("J₂ (×10⁻³)");
+                            ui.strong("Rotation (h)");
                             ui.end_row();
                             for body in bodies {
                                 ui.label(body.label());
                                 ui.label(format!("{:.0}", body.radius_km()));
                                 ui.label(format!("{:.0}", body.mu()));
                                 ui.label(format!("{:.4}", body.j2() * 1000.0));
+                                let rot = body.rotation_period_hours();
+                                if rot.abs() > 100.0 {
+                                    ui.label(format!("{:.0}", rot));
+                                } else {
+                                    ui.label(format!("{:.1}", rot));
+                                }
                                 ui.end_row();
                             }
                         });
