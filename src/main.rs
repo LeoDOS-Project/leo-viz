@@ -398,8 +398,11 @@ impl SphereRenderer {
                 uniform float u_flattening;
                 uniform float u_aspect;
                 uniform float u_scale;
+                uniform float u_atmosphere;
 
                 const float PI = 3.14159265359;
+                const vec3 ATMO_COLOR = vec3(0.4, 0.7, 1.0);
+                const float ATMO_THICKNESS = 0.06;
 
                 void main() {
                     vec2 centered = (v_uv - 0.5) * 2.0;
@@ -409,9 +412,21 @@ impl SphereRenderer {
                     float polar_scale = 1.0 - u_flattening;
                     float dy_scaled = centered.y / polar_scale;
                     float dist_sq = centered.x * centered.x + dy_scaled * dy_scaled;
+                    float dist = sqrt(dist_sq);
 
-                    if (dist_sq >= 1.0) {
+                    float atmo_outer = 1.0 + ATMO_THICKNESS * u_atmosphere;
+
+                    if (dist >= atmo_outer) {
                         out_color = vec4(0.0, 0.0, 0.0, 0.0);
+                        return;
+                    }
+
+                    if (dist >= 1.0 && u_atmosphere > 0.0) {
+                        float atmo_depth = (dist - 1.0) / (ATMO_THICKNESS * u_atmosphere);
+                        float atmo_falloff = 1.0 - atmo_depth;
+                        atmo_falloff = pow(atmo_falloff, 2.0);
+                        float glow = atmo_falloff * 0.8;
+                        out_color = vec4(ATMO_COLOR * glow, glow);
                         return;
                     }
 
@@ -430,6 +445,13 @@ impl SphereRenderer {
 
                     float shade = 0.3 + 0.7 * max(z, 0.0);
                     color *= shade;
+
+                    if (u_atmosphere > 0.0) {
+                        float fresnel = 1.0 - z;
+                        fresnel = pow(fresnel, 3.0);
+                        float rim = fresnel * 0.6 * u_atmosphere;
+                        color = mix(color, ATMO_COLOR, rim);
+                    }
 
                     out_color = vec4(color, 1.0);
                 }
@@ -520,6 +542,7 @@ impl SphereRenderer {
         flattening: f64,
         aspect: f32,
         scale: f32,
+        atmosphere: f32,
     ) {
         let Some(texture) = self.textures.get(&key) else { return };
 
@@ -545,6 +568,7 @@ impl SphereRenderer {
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_flattening").as_ref(), flattening as f32);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_aspect").as_ref(), aspect);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_scale").as_ref(), scale);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_atmosphere").as_ref(), atmosphere);
 
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
@@ -3539,11 +3563,15 @@ fn draw_3d_view(
         let aspect = width / height;
         let key = body_key;
         let scale = (planet_radius / margin) as f32;
+        let atmosphere = match body_key.0 {
+            CelestialBody::Earth => 1.0_f32,
+            _ => 0.0,
+        };
 
         let callback = egui::PaintCallback {
             rect,
             callback: Arc::new(egui_glow::CallbackFn::new(move |_info, painter| {
-                renderer.lock().paint(painter.gl(), key, &inv_rotation, flat as f64, aspect, scale);
+                renderer.lock().paint(painter.gl(), key, &inv_rotation, flat as f64, aspect, scale, atmosphere);
             })),
         };
         ui.painter().add(callback);
@@ -3658,7 +3686,7 @@ fn draw_3d_view(
                 );
             }
 
-            if dark_mode {
+            if dark_mode && !use_gpu {
                 let equatorial_r = planet_radius;
                 let polar_r = planet_radius * (1.0 - flattening);
                 let border_pts: PlotPoints = (0..=100)
