@@ -94,7 +94,7 @@ impl Skin {
 
     fn filename(&self, body: CelestialBody, resolution: TextureResolution) -> Option<&'static str> {
         match (body, self, resolution) {
-            (CelestialBody::Earth, Skin::Default, TextureResolution::R21504) => Some("Earth16K/Earth_Diffuse_21k.jpg"),
+            (CelestialBody::Earth, Skin::Default, TextureResolution::R21504) => Some("textures/Earth16K/Earth_Diffuse_21k.jpg"),
             (CelestialBody::Earth, Skin::Default, TextureResolution::R8192) => Some("textures/earth_8k.jpg"),
             (CelestialBody::Earth, Skin::Default, TextureResolution::R512) => Some("textures/earth_512.jpg"),
             (CelestialBody::Earth, Skin::Default, _) => Some("textures/earth_2k.jpg"),
@@ -105,10 +105,10 @@ impl Skin {
             (CelestialBody::Mars, Skin::Default, _) => Some("textures/mars_2k.jpg"),
             (CelestialBody::Mars, Skin::Terraformed, _) => Some("textures/mars_terraformed.png"),
             (CelestialBody::Mars, Skin::Civilized, _) => Some("textures/mars_civilized.png"),
-            (CelestialBody::Mercury, Skin::Default, TextureResolution::R21504) => Some("Mercury16K/Mercury_Diffuse_16k.jpg"),
+            (CelestialBody::Mercury, Skin::Default, TextureResolution::R21504) => Some("textures/Mercury16K/Mercury_Diffuse_16k.jpg"),
             (CelestialBody::Mercury, Skin::Default, TextureResolution::R8192) => Some("textures/mercury_8k.jpg"),
             (CelestialBody::Mercury, Skin::Default, _) => Some("textures/mercury_2k.jpg"),
-            (CelestialBody::Venus, Skin::Default, TextureResolution::R21504) => Some("Venus16K/Venus_Diffuse_16k.jpg"),
+            (CelestialBody::Venus, Skin::Default, TextureResolution::R21504) => Some("textures/Venus16K/Venus_Diffuse_16k.jpg"),
             (CelestialBody::Venus, Skin::Default, TextureResolution::R8192) => Some("textures/venus_8k.jpg"),
             (CelestialBody::Venus, Skin::Default, _) => Some("textures/venus_2k.jpg"),
             (CelestialBody::Jupiter, Skin::Default, TextureResolution::R8192) => Some("textures/jupiter_8k.jpg"),
@@ -2793,7 +2793,7 @@ impl ViewerState {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let filename = "Earth16K/Earth_Сities_16k.png";
+            let filename = "textures/Earth16K/Earth_Сities_16k.png";
             if let Ok(bytes) = std::fs::read(asset_path(filename)) {
                 if let Ok(texture) = EarthTexture::from_bytes(&bytes) {
                     self.night_texture = Some(Arc::new(texture));
