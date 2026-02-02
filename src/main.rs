@@ -768,10 +768,16 @@ impl WalkerConstellation {
         positions
     }
 
-    fn orbit_points_3d(&self, plane: usize) -> Vec<(f64, f64, f64)> {
+    fn orbit_points_3d(&self, plane: usize, time: f64) -> Vec<(f64, f64, f64)> {
         let orbit_radius = self.planet_radius + self.altitude_km;
-        let raan = (self.raan_spread() / self.num_planes as f64) * plane as f64;
+        let period = 2.0 * PI * (orbit_radius.powi(3) / self.planet_mu).sqrt();
+        let mean_motion = 2.0 * PI / period;
+        let r_ratio = self.planet_equatorial_radius / orbit_radius;
         let inc = self.inclination_deg.to_radians();
+        let raan_drift_rate = -1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion * inc.cos();
+
+        let raan_initial = (self.raan_spread() / self.num_planes as f64) * plane as f64;
+        let raan = raan_initial + raan_drift_rate * time;
         let inc_cos = inc.cos();
         let inc_sin = inc.sin();
         let raan_cos = raan.cos();
@@ -1589,6 +1595,9 @@ impl ViewerState {
         let mut new_skin = current_skin;
         let mut reset_skin = false;
 
+        let show_stats = self.tabs[tab_idx].show_stats;
+        let show_tle = self.tabs[tab_idx].planets[planet_idx].show_tle_window;
+
         ui.horizontal(|ui| {
             ui.strong(&planet_name);
             if ui.small_button("+").clicked() {
@@ -1602,14 +1611,9 @@ impl ViewerState {
                     remove_planet = true;
                 }
             }
-        });
 
-        if remove_planet {
-            return (add_planet, remove_planet);
-        }
+            ui.separator();
 
-        ui.horizontal(|ui| {
-            ui.label("Body:");
             egui::ComboBox::from_id_salt(format!("body_{}_{}", tab_idx, planet_idx))
                 .selected_text(current_body.label())
                 .show_ui(ui, |ui| {
@@ -1622,7 +1626,6 @@ impl ViewerState {
 
             let available_skins = new_body.available_skins();
             if available_skins.len() > 1 {
-                ui.label("Skin:");
                 egui::ComboBox::from_id_salt(format!("skin_{}_{}", tab_idx, planet_idx))
                     .selected_text(new_skin.label())
                     .show_ui(ui, |ui| {
@@ -1631,7 +1634,20 @@ impl ViewerState {
                         }
                     });
             }
+
+            ui.separator();
+
+            if ui.selectable_label(show_stats, "Stats").clicked() {
+                self.tabs[tab_idx].show_stats = !show_stats;
+            }
+            if ui.selectable_label(show_tle, "Live").clicked() {
+                self.tabs[tab_idx].planets[planet_idx].show_tle_window = !show_tle;
+            }
         });
+
+        if remove_planet {
+            return (add_planet, remove_planet);
+        }
 
         {
             let planet = &mut self.tabs[tab_idx].planets[planet_idx];
@@ -1642,16 +1658,6 @@ impl ViewerState {
                 planet.skin = new_skin;
             }
         }
-
-        ui.horizontal(|ui| {
-            let show_stats = self.tabs[tab_idx].show_stats;
-            if ui.button(if show_stats { "Stats ✓" } else { "Stats" }).clicked() {
-                self.tabs[tab_idx].show_stats = !show_stats;
-            }
-            let show_tle = self.tabs[tab_idx].planets[planet_idx].show_tle_window;
-            if ui.checkbox(&mut self.tabs[tab_idx].planets[planet_idx].show_tle_window, "Live").changed() && !show_tle {
-            }
-        });
 
         let show_stats = self.tabs[tab_idx].show_stats;
         if show_stats {
@@ -2116,6 +2122,7 @@ impl ViewerState {
                         self.earth_fixed_camera,
                         self.use_gpu_rendering,
                         self.show_clouds,
+                        self.time,
                     );
                     self.rotation = rot;
                     self.zoom = new_zoom;
@@ -2247,6 +2254,7 @@ impl ViewerState {
                 self.earth_fixed_camera,
                 self.use_gpu_rendering,
                 self.show_clouds,
+                self.time,
             );
             self.rotation = rot;
             self.zoom = new_zoom;
@@ -3650,6 +3658,7 @@ fn draw_3d_view(
     earth_fixed_camera: bool,
     use_gpu_rendering: bool,
     show_clouds: bool,
+    time: f64,
 ) -> (Matrix3<f64>, f64) {
     let max_altitude = constellations.iter()
         .map(|(c, _, _, _, _)| c.altitude_km)
@@ -3720,7 +3729,7 @@ fn draw_3d_view(
             for (constellation, _, color_offset, is_tle, _) in constellations {
                 if *is_tle { continue; }
                 for plane in 0..constellation.num_planes {
-                    let orbit_pts = constellation.orbit_points_3d(plane);
+                    let orbit_pts = constellation.orbit_points_3d(plane, time);
                     let color = plane_color(if single_color { *color_offset } else { plane + color_offset });
 
                     let mut behind_segment: Vec<[f64; 2]> = Vec::new();
@@ -3942,7 +3951,7 @@ fn draw_3d_view(
             for (constellation, _, color_offset, is_tle, _) in constellations {
                 if *is_tle { continue; }
                 for plane in 0..constellation.num_planes {
-                    let orbit_pts = constellation.orbit_points_3d(plane);
+                    let orbit_pts = constellation.orbit_points_3d(plane, time);
                     let color = if show_routing_paths {
                         egui::Color32::from_rgb(80, 80, 80)
                     } else {
