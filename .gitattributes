@@ -1,3 +1,6 @@
+textures/Venus16K/* filter=lfs diff=lfs merge=lfs -text
+textures/Earth16K/* filter=lfs diff=lfs merge=lfs -text
+textures/Mercury16K/* filter=lfs diff=lfs merge=lfs -text
 Earth16K/** filter=lfs diff=lfs merge=lfs -text
 Mercury16K/** filter=lfs diff=lfs merge=lfs -text
 Venus16K/** filter=lfs diff=lfs merge=lfs -text
