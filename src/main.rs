@@ -27,7 +27,13 @@ enum CelestialBody {
     Venus,
     Jupiter,
     Saturn,
+    Uranus,
+    Neptune,
     Sun,
+    Ceres,
+    Haumea,
+    Makemake,
+    Eris,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -76,8 +82,8 @@ impl TextureResolution {
 
     fn cloud_filename(&self) -> Option<&'static str> {
         match self {
-            TextureResolution::R8192 | TextureResolution::R21504 => Some("textures/earth_clouds_8k.jpg"),
-            _ => Some("textures/earth_clouds_2k.jpg"),
+            TextureResolution::R8192 | TextureResolution::R21504 => Some("textures/earth/earth_clouds_8k.jpg"),
+            _ => Some("textures/earth/earth_clouds_2k.jpg"),
         }
     }
 }
@@ -94,29 +100,39 @@ impl Skin {
 
     fn filename(&self, body: CelestialBody, resolution: TextureResolution) -> Option<&'static str> {
         match (body, self, resolution) {
-            (CelestialBody::Earth, Skin::Default, TextureResolution::R21504) => Some("textures/Earth16K/Earth_Diffuse_21k.jpg"),
-            (CelestialBody::Earth, Skin::Default, TextureResolution::R8192) => Some("textures/earth_8k.jpg"),
-            (CelestialBody::Earth, Skin::Default, TextureResolution::R512) => Some("textures/earth_512.jpg"),
-            (CelestialBody::Earth, Skin::Default, _) => Some("textures/earth_2k.jpg"),
-            (CelestialBody::Earth, Skin::HellOnEarth, _) => Some("textures/hell_on_earth_2k.png"),
-            (CelestialBody::Moon, Skin::Default, TextureResolution::R8192) => Some("textures/moon_8k.jpg"),
-            (CelestialBody::Moon, Skin::Default, _) => Some("textures/moon_2k.jpg"),
-            (CelestialBody::Mars, Skin::Default, TextureResolution::R8192) => Some("textures/mars_8k.jpg"),
-            (CelestialBody::Mars, Skin::Default, _) => Some("textures/mars_2k.jpg"),
-            (CelestialBody::Mars, Skin::Terraformed, _) => Some("textures/mars_terraformed.png"),
-            (CelestialBody::Mars, Skin::Civilized, _) => Some("textures/mars_civilized.png"),
-            (CelestialBody::Mercury, Skin::Default, TextureResolution::R21504) => Some("textures/Mercury16K/Mercury_Diffuse_16k.jpg"),
-            (CelestialBody::Mercury, Skin::Default, TextureResolution::R8192) => Some("textures/mercury_8k.jpg"),
-            (CelestialBody::Mercury, Skin::Default, _) => Some("textures/mercury_2k.jpg"),
-            (CelestialBody::Venus, Skin::Default, TextureResolution::R21504) => Some("textures/Venus16K/Venus_Diffuse_16k.jpg"),
-            (CelestialBody::Venus, Skin::Default, TextureResolution::R8192) => Some("textures/venus_8k.jpg"),
-            (CelestialBody::Venus, Skin::Default, _) => Some("textures/venus_2k.jpg"),
-            (CelestialBody::Jupiter, Skin::Default, TextureResolution::R8192) => Some("textures/jupiter_8k.jpg"),
-            (CelestialBody::Jupiter, Skin::Default, _) => Some("textures/jupiter_2k.jpg"),
-            (CelestialBody::Saturn, Skin::Default, TextureResolution::R8192) => Some("textures/saturn_8k.jpg"),
-            (CelestialBody::Saturn, Skin::Default, _) => Some("textures/saturn_2k.jpg"),
-            (CelestialBody::Sun, Skin::Default, TextureResolution::R8192) => Some("textures/sun_8k.jpg"),
-            (CelestialBody::Sun, Skin::Default, _) => Some("textures/sun_2k.jpg"),
+            (CelestialBody::Earth, Skin::Default, TextureResolution::R21504) => Some("textures/earth/Earth_Diffuse_21k.jpg"),
+            (CelestialBody::Earth, Skin::Default, TextureResolution::R8192) => Some("textures/earth/earth_8k.jpg"),
+            (CelestialBody::Earth, Skin::Default, TextureResolution::R512) => Some("textures/earth/earth_512.jpg"),
+            (CelestialBody::Earth, Skin::Default, _) => Some("textures/earth/earth_2k.jpg"),
+            (CelestialBody::Earth, Skin::HellOnEarth, _) => Some("textures/earth/hell_on_earth_2k.png"),
+            (CelestialBody::Moon, Skin::Default, TextureResolution::R8192) => Some("textures/moon/moon_8k.jpg"),
+            (CelestialBody::Moon, Skin::Default, _) => Some("textures/moon/moon_2k.jpg"),
+            (CelestialBody::Mars, Skin::Default, TextureResolution::R8192) => Some("textures/mars/mars_8k.jpg"),
+            (CelestialBody::Mars, Skin::Default, _) => Some("textures/mars/mars_2k.jpg"),
+            (CelestialBody::Mars, Skin::Terraformed, _) => Some("textures/mars/mars_terraformed.png"),
+            (CelestialBody::Mars, Skin::Civilized, _) => Some("textures/mars/mars_civilized.png"),
+            (CelestialBody::Mercury, Skin::Default, TextureResolution::R21504) => Some("textures/mercury/Mercury_Diffuse_16k.jpg"),
+            (CelestialBody::Mercury, Skin::Default, TextureResolution::R8192) => Some("textures/mercury/mercury_8k.jpg"),
+            (CelestialBody::Mercury, Skin::Default, _) => Some("textures/mercury/mercury_2k.jpg"),
+            (CelestialBody::Venus, Skin::Default, TextureResolution::R21504) => Some("textures/venus/Venus_Diffuse_16k.jpg"),
+            (CelestialBody::Venus, Skin::Default, TextureResolution::R8192) => Some("textures/venus/venus_8k.jpg"),
+            (CelestialBody::Venus, Skin::Default, _) => Some("textures/venus/venus_2k.jpg"),
+            (CelestialBody::Jupiter, Skin::Default, TextureResolution::R8192) => Some("textures/jupiter/jupiter_8k.jpg"),
+            (CelestialBody::Jupiter, Skin::Default, _) => Some("textures/jupiter/jupiter_2k.jpg"),
+            (CelestialBody::Saturn, Skin::Default, TextureResolution::R8192) => Some("textures/saturn/saturn_8k.jpg"),
+            (CelestialBody::Saturn, Skin::Default, _) => Some("textures/saturn/saturn_2k.jpg"),
+            (CelestialBody::Uranus, Skin::Default, _) => Some("textures/uranus/uranus_2k.jpg"),
+            (CelestialBody::Neptune, Skin::Default, _) => Some("textures/neptune/neptune_2k.jpg"),
+            (CelestialBody::Sun, Skin::Default, TextureResolution::R8192) => Some("textures/sun/sun_8k.jpg"),
+            (CelestialBody::Sun, Skin::Default, _) => Some("textures/sun/sun_2k.jpg"),
+            (CelestialBody::Ceres, Skin::Default, TextureResolution::R8192) => Some("textures/ceres/ceres_4k.jpg"),
+            (CelestialBody::Ceres, Skin::Default, _) => Some("textures/ceres/ceres_2k.jpg"),
+            (CelestialBody::Haumea, Skin::Default, TextureResolution::R8192) => Some("textures/haumea/haumea_4k.jpg"),
+            (CelestialBody::Haumea, Skin::Default, _) => Some("textures/haumea/haumea_2k.jpg"),
+            (CelestialBody::Makemake, Skin::Default, TextureResolution::R8192) => Some("textures/makemake/makemake_4k.jpg"),
+            (CelestialBody::Makemake, Skin::Default, _) => Some("textures/makemake/makemake_2k.jpg"),
+            (CelestialBody::Eris, Skin::Default, TextureResolution::R8192) => Some("textures/eris/eris_4k.jpg"),
+            (CelestialBody::Eris, Skin::Default, _) => Some("textures/eris/eris_2k.jpg"),
             _ => None,
         }
     }
@@ -132,7 +148,13 @@ impl CelestialBody {
             CelestialBody::Venus => "Venus",
             CelestialBody::Jupiter => "Jupiter",
             CelestialBody::Saturn => "Saturn",
+            CelestialBody::Uranus => "Uranus",
+            CelestialBody::Neptune => "Neptune",
             CelestialBody::Sun => "Sun",
+            CelestialBody::Ceres => "Ceres",
+            CelestialBody::Haumea => "Haumea",
+            CelestialBody::Makemake => "Makemake",
+            CelestialBody::Eris => "Eris",
         }
     }
 
@@ -144,7 +166,7 @@ impl CelestialBody {
         }
     }
 
-    const ALL: [CelestialBody; 8] = [
+    const ALL: [CelestialBody; 14] = [
         CelestialBody::Earth,
         CelestialBody::Moon,
         CelestialBody::Mars,
@@ -152,7 +174,13 @@ impl CelestialBody {
         CelestialBody::Venus,
         CelestialBody::Jupiter,
         CelestialBody::Saturn,
+        CelestialBody::Uranus,
+        CelestialBody::Neptune,
         CelestialBody::Sun,
+        CelestialBody::Ceres,
+        CelestialBody::Haumea,
+        CelestialBody::Makemake,
+        CelestialBody::Eris,
     ];
 
     fn radius_km(&self) -> f64 {
@@ -164,7 +192,13 @@ impl CelestialBody {
             CelestialBody::Venus => 6051.8,
             CelestialBody::Jupiter => 69911.0,
             CelestialBody::Saturn => 58232.0,
+            CelestialBody::Uranus => 25362.0,
+            CelestialBody::Neptune => 24622.0,
             CelestialBody::Sun => 696340.0,
+            CelestialBody::Ceres => 473.0,
+            CelestialBody::Haumea => 816.0,
+            CelestialBody::Makemake => 715.0,
+            CelestialBody::Eris => 1163.0,
         }
     }
 
@@ -177,7 +211,13 @@ impl CelestialBody {
             CelestialBody::Venus => 324859.0,
             CelestialBody::Jupiter => 126686534.0,
             CelestialBody::Saturn => 37931187.0,
+            CelestialBody::Uranus => 5793939.0,
+            CelestialBody::Neptune => 6836529.0,
             CelestialBody::Sun => 132712440018.0,
+            CelestialBody::Ceres => 62.6,
+            CelestialBody::Haumea => 2.67,
+            CelestialBody::Makemake => 2.0,
+            CelestialBody::Eris => 111.0,
         }
     }
 
@@ -190,7 +230,13 @@ impl CelestialBody {
             CelestialBody::Venus => 4.458e-6,
             CelestialBody::Jupiter => 1.4736e-2,
             CelestialBody::Saturn => 1.6298e-2,
+            CelestialBody::Uranus => 3.343e-3,
+            CelestialBody::Neptune => 3.411e-3,
             CelestialBody::Sun => 2.0e-7,
+            CelestialBody::Ceres => 0.0,
+            CelestialBody::Haumea => 0.0,
+            CelestialBody::Makemake => 0.0,
+            CelestialBody::Eris => 0.0,
         }
     }
 
@@ -203,7 +249,13 @@ impl CelestialBody {
             CelestialBody::Venus => 6051.8,
             CelestialBody::Jupiter => 71492.0,
             CelestialBody::Saturn => 60268.0,
+            CelestialBody::Uranus => 25559.0,
+            CelestialBody::Neptune => 24764.0,
             CelestialBody::Sun => 696000.0,
+            CelestialBody::Ceres => 473.0,
+            CelestialBody::Haumea => 960.0,
+            CelestialBody::Makemake => 715.0,
+            CelestialBody::Eris => 1163.0,
         }
     }
 
@@ -216,7 +268,13 @@ impl CelestialBody {
             CelestialBody::Venus => 0.0,
             CelestialBody::Jupiter => 1.0 / 15.41,
             CelestialBody::Saturn => 1.0 / 10.21,
+            CelestialBody::Uranus => 1.0 / 43.62,
+            CelestialBody::Neptune => 1.0 / 58.54,
             CelestialBody::Sun => 9.0e-6,
+            CelestialBody::Ceres => 0.0,
+            CelestialBody::Haumea => 0.19,
+            CelestialBody::Makemake => 0.0,
+            CelestialBody::Eris => 0.0,
         }
     }
 
@@ -229,7 +287,13 @@ impl CelestialBody {
             CelestialBody::Venus => -5832.5,
             CelestialBody::Jupiter => 9.925,
             CelestialBody::Saturn => 10.656,
+            CelestialBody::Uranus => -17.24,
+            CelestialBody::Neptune => 16.11,
             CelestialBody::Sun => 609.12,
+            CelestialBody::Ceres => 9.074,
+            CelestialBody::Haumea => 3.92,
+            CelestialBody::Makemake => 22.48,
+            CelestialBody::Eris => 25.9,
         }
     }
 }
@@ -254,8 +318,8 @@ struct EarthTexture {
 
 impl EarthTexture {
     fn load() -> Self {
-        let bytes = std::fs::read(asset_path("textures/earth_8k.jpg"))
-            .expect("Failed to read textures/earth_8k.jpg");
+        let bytes = std::fs::read(asset_path("textures/earth/earth_8k.jpg"))
+            .expect("Failed to read textures/earth/earth_8k.jpg");
         Self::from_bytes(&bytes).expect("Failed to load Earth texture")
     }
 
@@ -671,12 +735,16 @@ impl SphereRenderer {
             let cloud_tex = self.cloud_textures.get(&key.2);
             if let Some(ct) = cloud_tex {
                 gl.bind_texture(glow::TEXTURE_2D, Some(*ct));
+            } else {
+                gl.bind_texture(glow::TEXTURE_2D, Some(*texture));
             }
             gl.uniform_1_i32(gl.get_uniform_location(self.program, "u_clouds").as_ref(), 1);
 
             gl.active_texture(glow::TEXTURE2);
             if let Some(nt) = self.night_texture {
                 gl.bind_texture(glow::TEXTURE_2D, Some(nt));
+            } else {
+                gl.bind_texture(glow::TEXTURE_2D, Some(*texture));
             }
             gl.uniform_1_i32(gl.get_uniform_location(self.program, "u_night").as_ref(), 2);
 
@@ -1195,6 +1263,23 @@ impl ConstellationConfig {
 }
 
 #[derive(Clone)]
+struct GroundStation {
+    name: String,
+    lat: f64,
+    lon: f64,
+    color: egui::Color32,
+}
+
+#[derive(Clone)]
+struct AreaOfInterest {
+    name: String,
+    lat: f64,
+    lon: f64,
+    radius_km: f64,
+    color: egui::Color32,
+}
+
+#[derive(Clone)]
 struct PlanetConfig {
     name: String,
     constellations: Vec<ConstellationConfig>,
@@ -1205,7 +1290,10 @@ struct PlanetConfig {
     pending_cameras: Vec<SatelliteCamera>,
     cameras_to_remove: Vec<usize>,
     show_tle_window: bool,
+    show_gs_aoi_window: bool,
     tle_selections: HashMap<TlePreset, (bool, TleLoadState)>,
+    ground_stations: Vec<GroundStation>,
+    areas_of_interest: Vec<AreaOfInterest>,
 }
 
 impl PlanetConfig {
@@ -1224,7 +1312,10 @@ impl PlanetConfig {
             pending_cameras: Vec::new(),
             cameras_to_remove: Vec::new(),
             show_tle_window: false,
+            show_gs_aoi_window: false,
             tle_selections,
+            ground_stations: Vec::new(),
+            areas_of_interest: Vec::new(),
         }
     }
 
@@ -1703,6 +1794,7 @@ impl ViewerState {
 
         let show_stats = self.tabs[tab_idx].show_stats;
         let show_tle = self.tabs[tab_idx].planets[planet_idx].show_tle_window;
+        let show_places = self.tabs[tab_idx].planets[planet_idx].show_gs_aoi_window;
 
         ui.horizontal(|ui| {
             ui.strong(&planet_name);
@@ -1729,6 +1821,12 @@ impl ViewerState {
                         }
                     }
                 });
+            if ui.small_button("▶").clicked() {
+                let current_idx = CelestialBody::ALL.iter().position(|&b| b == current_body).unwrap_or(0);
+                let next_idx = (current_idx + 1) % CelestialBody::ALL.len();
+                new_body = CelestialBody::ALL[next_idx];
+                reset_skin = true;
+            }
 
             let available_skins = new_body.available_skins();
             if available_skins.len() > 1 {
@@ -1749,6 +1847,9 @@ impl ViewerState {
             if ui.selectable_label(show_tle, "Live").clicked() {
                 self.tabs[tab_idx].planets[planet_idx].show_tle_window = !show_tle;
             }
+            if ui.selectable_label(show_places, "Places").clicked() {
+                self.tabs[tab_idx].planets[planet_idx].show_gs_aoi_window = !show_places;
+            }
         });
 
         if remove_planet {
@@ -1762,6 +1863,108 @@ impl ViewerState {
                 planet.skin = Skin::Default;
             } else {
                 planet.skin = new_skin;
+            }
+        }
+
+        if show_places {
+            let planet = &self.tabs[tab_idx].planets[planet_idx];
+            let planet_name = planet.name.clone();
+            let mut ground_stations = planet.ground_stations.clone();
+            let mut areas_of_interest = planet.areas_of_interest.clone();
+            let mut gs_changed = false;
+            let mut aoi_changed = false;
+
+            egui::Window::new(format!("Places - {}", planet_name))
+                .open(&mut self.tabs[tab_idx].planets[planet_idx].show_gs_aoi_window)
+                .show(ui.ctx(), |ui| {
+                    ui.heading("Ground Stations");
+                    let mut gs_to_remove = None;
+                    for (idx, gs) in ground_stations.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            if ui.add_sized([80.0, 18.0], egui::TextEdit::singleline(&mut gs.name)).changed() {
+                                gs_changed = true;
+                            }
+                            ui.label("Lat:");
+                            if ui.add(egui::DragValue::new(&mut gs.lat).range(-90.0..=90.0).speed(0.5).suffix("°")).changed() {
+                                gs_changed = true;
+                            }
+                            ui.label("Lon:");
+                            if ui.add(egui::DragValue::new(&mut gs.lon).range(-180.0..=180.0).speed(0.5).suffix("°")).changed() {
+                                gs_changed = true;
+                            }
+                            if ui.color_edit_button_srgba(&mut gs.color).changed() {
+                                gs_changed = true;
+                            }
+                            if ui.small_button("×").clicked() {
+                                gs_to_remove = Some(idx);
+                            }
+                        });
+                    }
+                    if let Some(idx) = gs_to_remove {
+                        ground_stations.remove(idx);
+                        gs_changed = true;
+                    }
+                    if ui.button("+ Add ground station").clicked() {
+                        ground_stations.push(GroundStation {
+                            name: format!("GS{}", ground_stations.len() + 1),
+                            lat: 0.0,
+                            lon: 0.0,
+                            color: egui::Color32::from_rgb(255, 100, 100),
+                        });
+                        gs_changed = true;
+                    }
+
+                    ui.separator();
+                    ui.heading("Areas of Interest");
+                    let mut aoi_to_remove = None;
+                    for (idx, aoi) in areas_of_interest.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            if ui.add_sized([80.0, 18.0], egui::TextEdit::singleline(&mut aoi.name)).changed() {
+                                aoi_changed = true;
+                            }
+                            ui.label("Lat:");
+                            if ui.add(egui::DragValue::new(&mut aoi.lat).range(-90.0..=90.0).speed(0.5).suffix("°")).changed() {
+                                aoi_changed = true;
+                            }
+                            ui.label("Lon:");
+                            if ui.add(egui::DragValue::new(&mut aoi.lon).range(-180.0..=180.0).speed(0.5).suffix("°")).changed() {
+                                aoi_changed = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Radius:");
+                            if ui.add(egui::DragValue::new(&mut aoi.radius_km).range(1.0..=5000.0).speed(10.0).suffix(" km")).changed() {
+                                aoi_changed = true;
+                            }
+                            if ui.color_edit_button_srgba(&mut aoi.color).changed() {
+                                aoi_changed = true;
+                            }
+                            if ui.small_button("×").clicked() {
+                                aoi_to_remove = Some(idx);
+                            }
+                        });
+                    }
+                    if let Some(idx) = aoi_to_remove {
+                        areas_of_interest.remove(idx);
+                        aoi_changed = true;
+                    }
+                    if ui.button("+ Add area of interest").clicked() {
+                        areas_of_interest.push(AreaOfInterest {
+                            name: format!("AOI{}", areas_of_interest.len() + 1),
+                            lat: 0.0,
+                            lon: 0.0,
+                            radius_km: 500.0,
+                            color: egui::Color32::from_rgba_unmultiplied(100, 200, 100, 100),
+                        });
+                        aoi_changed = true;
+                    }
+                });
+
+            if gs_changed {
+                self.tabs[tab_idx].planets[planet_idx].ground_stations = ground_stations;
+            }
+            if aoi_changed {
+                self.tabs[tab_idx].planets[planet_idx].areas_of_interest = areas_of_interest;
             }
         }
 
@@ -2276,6 +2479,8 @@ impl ViewerState {
                             [sun_shader.x as f32, sun_shader.y as f32, sun_shader.z as f32]
                         },
                         self.time,
+                        &planet.ground_stations,
+                        &planet.areas_of_interest,
                     );
                     self.rotation = rot;
                     self.zoom = new_zoom;
@@ -2426,6 +2631,8 @@ impl ViewerState {
                     [sun_shader.x as f32, sun_shader.y as f32, sun_shader.z as f32]
                 },
                 self.time,
+                &planet.ground_stations,
+                &planet.areas_of_interest,
             );
             self.rotation = rot;
             self.zoom = new_zoom;
@@ -2648,36 +2855,45 @@ impl ViewerState {
         });
         let start = self.start_timestamp;
         let real_timestamp = start + Duration::seconds(self.real_time as i64);
+        let current_ts = start + Duration::seconds(self.time as i64);
         ui.horizontal(|ui| {
-            ui.label("Time (UTC):");
+            ui.label("Time:");
             ui.add(
                 egui::DragValue::new(&mut self.time)
                     .speed(1.0)
                     .custom_formatter(|secs, _| {
                         let ts = start + Duration::seconds(secs as i64);
-                        ts.format("%H:%M:%S %d/%m/%Y").to_string()
+                        ts.format("%H:%M:%S").to_string()
                     })
                     .custom_parser(|input| {
                         if let Ok(secs) = input.parse::<f64>() {
                             return Some(secs);
                         }
-                        let formats = [
-                            "%H:%M:%S %d/%m/%Y",
-                            "%H:%M %d/%m/%Y",
-                            "%d/%m/%Y %H:%M:%S",
-                            "%d/%m/%Y %H:%M",
-                            "%d/%m/%Y",
-                        ];
+                        let formats = ["%H:%M:%S", "%H:%M"];
                         for fmt in formats {
-                            if let Ok(parsed) = chrono::NaiveDateTime::parse_from_str(input, fmt) {
-                                let parsed_utc = parsed.and_utc();
-                                let diff = parsed_utc.signed_duration_since(start);
+                            if let Ok(parsed) = chrono::NaiveTime::parse_from_str(input, fmt) {
+                                let current = current_ts.date_naive();
+                                let new_dt = current.and_time(parsed).and_utc();
+                                let diff = new_dt.signed_duration_since(start);
                                 return Some(diff.num_seconds() as f64);
                             }
                         }
+                        None
+                    })
+            );
+            ui.label("Date:");
+            ui.add(
+                egui::DragValue::new(&mut self.time)
+                    .speed(86400.0)
+                    .custom_formatter(|secs, _| {
+                        let ts = start + Duration::seconds(secs as i64);
+                        ts.format("%d/%m/%Y").to_string()
+                    })
+                    .custom_parser(|input| {
                         if let Ok(parsed) = chrono::NaiveDate::parse_from_str(input, "%d/%m/%Y") {
-                            let parsed_utc = parsed.and_hms_opt(0, 0, 0).unwrap().and_utc();
-                            let diff = parsed_utc.signed_duration_since(start);
+                            let current_time = current_ts.time();
+                            let new_dt = parsed.and_time(current_time).and_utc();
+                            let diff = new_dt.signed_duration_since(start);
                             return Some(diff.num_seconds() as f64);
                         }
                         None
@@ -3858,6 +4074,8 @@ fn draw_3d_view(
     show_day_night: bool,
     sun_dir: [f32; 3],
     time: f64,
+    ground_stations: &[GroundStation],
+    areas_of_interest: &[AreaOfInterest],
 ) -> (Matrix3<f64>, f64) {
     let max_altitude = constellations.iter()
         .map(|(c, _, _, _, _)| c.altitude_km)
@@ -3908,7 +4126,7 @@ fn draw_3d_view(
         .show_grid(false)
         .show_x(false)
         .show_y(false)
-        .show_background(!use_gpu)  // Disable background when using GPU sphere
+        .show_background(!use_gpu)
         .allow_drag(false)
         .allow_zoom(false)
         .allow_scroll(false)
@@ -4143,6 +4361,95 @@ fn draw_3d_view(
                         }
                     }
                 }
+            }
+        }
+
+        let surface_rotation = if earth_fixed_camera {
+            rotation
+        } else {
+            rotation * *body_rotation
+        };
+
+        for aoi in areas_of_interest {
+            let lat = aoi.lat.to_radians();
+            let lon = aoi.lon.to_radians();
+            let angular_radius = aoi.radius_km / planet_radius;
+
+            let aoi_pts: Vec<([f64; 2], bool)> = (0..=32)
+                .map(|i| {
+                    let angle = 2.0 * PI * i as f64 / 32.0;
+                    let clat = (lat.sin() * angular_radius.cos()
+                        + lat.cos() * angular_radius.sin() * angle.cos())
+                    .asin();
+                    let clon = lon
+                        + (angular_radius.sin() * angle.sin())
+                            .atan2(lat.cos() * angular_radius.cos()
+                                - lat.sin() * angular_radius.sin() * angle.cos());
+
+                    let x = planet_radius * clat.cos() * clon.cos();
+                    let y = planet_radius * clat.sin();
+                    let z = planet_radius * clat.cos() * clon.sin();
+
+                    let (rx, ry, rz) = rotate_point_matrix(x, y, z, &surface_rotation);
+                    ([rx, ry], rz >= 0.0)
+                })
+                .collect();
+
+            let all_visible = aoi_pts.iter().all(|(_, vis)| *vis);
+            if all_visible {
+                let pts: Vec<[f64; 2]> = aoi_pts.iter().map(|(p, _)| *p).collect();
+                let fill = egui::Color32::from_rgba_unmultiplied(
+                    aoi.color.r(), aoi.color.g(), aoi.color.b(), aoi.color.a()
+                );
+                plot_ui.polygon(
+                    Polygon::new("", PlotPoints::new(pts))
+                        .fill_color(fill)
+                        .stroke(egui::Stroke::new(2.0, aoi.color)),
+                );
+            } else {
+                let mut segment: Vec<[f64; 2]> = Vec::new();
+                for (pt, visible) in &aoi_pts {
+                    if *visible {
+                        segment.push(*pt);
+                    } else if !segment.is_empty() {
+                        plot_ui.line(
+                            Line::new("", PlotPoints::new(std::mem::take(&mut segment)))
+                                .color(aoi.color)
+                                .width(2.0),
+                        );
+                    }
+                }
+                if !segment.is_empty() {
+                    plot_ui.line(
+                        Line::new("", PlotPoints::new(segment))
+                            .color(aoi.color)
+                            .width(2.0),
+                    );
+                }
+            }
+        }
+
+        for gs in ground_stations {
+            let lat = gs.lat.to_radians();
+            let lon = gs.lon.to_radians();
+            let x = planet_radius * lat.cos() * lon.cos();
+            let y = planet_radius * lat.sin();
+            let z = planet_radius * lat.cos() * lon.sin();
+            let (rx, ry, rz) = rotate_point_matrix(x, y, z, &surface_rotation);
+
+            if !hide_behind_earth || rz >= 0.0 {
+                let marker_size = (scaled_sat_radius * 1.5) as f64;
+                let pts = vec![
+                    [rx, ry + marker_size],
+                    [rx - marker_size * 0.866, ry - marker_size * 0.5],
+                    [rx + marker_size * 0.866, ry - marker_size * 0.5],
+                    [rx, ry + marker_size],
+                ];
+                plot_ui.polygon(
+                    Polygon::new("", PlotPoints::new(pts))
+                        .fill_color(gs.color)
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::WHITE)),
+                );
             }
         }
 
