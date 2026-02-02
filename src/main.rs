@@ -1,4 +1,5 @@
-use eframe::egui;
+use eframe::{egui, egui_glow, glow};
+use egui::mutex::Mutex;
 use egui_dock::{DockArea, DockState, NodeIndex, SurfaceIndex, TabViewer};
 use egui_dock::tab_viewer::OnCloseResponse;
 use egui_plot::{Line, Plot, PlotImage, PlotPoints, PlotPoint, Points, Polygon, Text};
@@ -8,6 +9,11 @@ use std::f64::consts::PI;
 use std::sync::{Arc, mpsc};
 use sgp4::Constants;
 use chrono::{DateTime, Utc, Duration};
+use glow::HasContext as _;
+
+fn asset_path(relative: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
+}
 
 #[cfg(target_arch = "wasm32")]
 use eframe::wasm_bindgen::JsCast;
@@ -32,6 +38,43 @@ enum Skin {
     Civilized,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum TextureResolution {
+    R512,
+    R1024,
+    R2048,
+    R8192,
+    R21504,
+}
+
+impl TextureResolution {
+    fn label(&self) -> &'static str {
+        match self {
+            TextureResolution::R512 => "512",
+            TextureResolution::R1024 => "1K",
+            TextureResolution::R2048 => "2K",
+            TextureResolution::R8192 => "8K",
+            TextureResolution::R21504 => "21K",
+        }
+    }
+
+    fn downscale_factor(&self, body: CelestialBody, skin: Skin) -> u32 {
+        match (body, skin, self) {
+            (CelestialBody::Earth, Skin::Default, TextureResolution::R512) => 1,
+            (_, _, TextureResolution::R512) => 4,
+            (_, _, TextureResolution::R1024) => 2,
+            _ => 1,
+        }
+    }
+
+    fn cpu_render_size(&self) -> usize {
+        match self {
+            TextureResolution::R512 => 512,
+            _ => 1024,
+        }
+    }
+}
+
 impl Skin {
     fn label(&self) -> &'static str {
         match self {
@@ -42,19 +85,31 @@ impl Skin {
         }
     }
 
-    fn filename(&self, body: CelestialBody) -> Option<&'static str> {
-        match (body, self) {
-            (CelestialBody::Earth, Skin::Default) => Some("textures/earth_2k.jpg"),
-            (CelestialBody::Earth, Skin::HellOnEarth) => Some("textures/hell_on_earth_2k.png"),
-            (CelestialBody::Moon, Skin::Default) => Some("textures/moon_2k.jpg"),
-            (CelestialBody::Mars, Skin::Default) => Some("textures/mars_2k.jpg"),
-            (CelestialBody::Mars, Skin::Terraformed) => Some("textures/mars_terraformed.png"),
-            (CelestialBody::Mars, Skin::Civilized) => Some("textures/mars_civilized.png"),
-            (CelestialBody::Mercury, Skin::Default) => Some("textures/mercury_2k.jpg"),
-            (CelestialBody::Venus, Skin::Default) => Some("textures/venus_2k.jpg"),
-            (CelestialBody::Jupiter, Skin::Default) => Some("textures/jupiter_2k.jpg"),
-            (CelestialBody::Saturn, Skin::Default) => Some("textures/saturn_2k.jpg"),
-            (CelestialBody::Sun, Skin::Default) => Some("textures/sun_2k.jpg"),
+    fn filename(&self, body: CelestialBody, resolution: TextureResolution) -> Option<&'static str> {
+        match (body, self, resolution) {
+            (CelestialBody::Earth, Skin::Default, TextureResolution::R21504) => Some("Earth16K/Earth_Diffuse_21k.jpg"),
+            (CelestialBody::Earth, Skin::Default, TextureResolution::R8192) => Some("textures/earth_8k.jpg"),
+            (CelestialBody::Earth, Skin::Default, TextureResolution::R512) => Some("textures/earth_512.jpg"),
+            (CelestialBody::Earth, Skin::Default, _) => Some("textures/earth_2k.jpg"),
+            (CelestialBody::Earth, Skin::HellOnEarth, _) => Some("textures/hell_on_earth_2k.png"),
+            (CelestialBody::Moon, Skin::Default, TextureResolution::R8192) => Some("textures/moon_8k.jpg"),
+            (CelestialBody::Moon, Skin::Default, _) => Some("textures/moon_2k.jpg"),
+            (CelestialBody::Mars, Skin::Default, TextureResolution::R8192) => Some("textures/mars_8k.jpg"),
+            (CelestialBody::Mars, Skin::Default, _) => Some("textures/mars_2k.jpg"),
+            (CelestialBody::Mars, Skin::Terraformed, _) => Some("textures/mars_terraformed.png"),
+            (CelestialBody::Mars, Skin::Civilized, _) => Some("textures/mars_civilized.png"),
+            (CelestialBody::Mercury, Skin::Default, TextureResolution::R21504) => Some("Mercury16K/Mercury_Diffuse_16k.jpg"),
+            (CelestialBody::Mercury, Skin::Default, TextureResolution::R8192) => Some("textures/mercury_8k.jpg"),
+            (CelestialBody::Mercury, Skin::Default, _) => Some("textures/mercury_2k.jpg"),
+            (CelestialBody::Venus, Skin::Default, TextureResolution::R21504) => Some("Venus16K/Venus_Diffuse_16k.jpg"),
+            (CelestialBody::Venus, Skin::Default, TextureResolution::R8192) => Some("textures/venus_8k.jpg"),
+            (CelestialBody::Venus, Skin::Default, _) => Some("textures/venus_2k.jpg"),
+            (CelestialBody::Jupiter, Skin::Default, TextureResolution::R8192) => Some("textures/jupiter_8k.jpg"),
+            (CelestialBody::Jupiter, Skin::Default, _) => Some("textures/jupiter_2k.jpg"),
+            (CelestialBody::Saturn, Skin::Default, TextureResolution::R8192) => Some("textures/saturn_8k.jpg"),
+            (CelestialBody::Saturn, Skin::Default, _) => Some("textures/saturn_2k.jpg"),
+            (CelestialBody::Sun, Skin::Default, TextureResolution::R8192) => Some("textures/sun_8k.jpg"),
+            (CelestialBody::Sun, Skin::Default, _) => Some("textures/sun_2k.jpg"),
             _ => None,
         }
     }
@@ -183,6 +238,7 @@ enum TextureLoadState {
 const COLOR_ASCENDING: egui::Color32 = egui::Color32::from_rgb(200, 120, 50);
 const COLOR_DESCENDING: egui::Color32 = egui::Color32::from_rgb(50, 100, 180);
 
+#[derive(Clone)]
 struct EarthTexture {
     width: u32,
     height: u32,
@@ -191,19 +247,60 @@ struct EarthTexture {
 
 impl EarthTexture {
     fn load() -> Self {
-        let bytes = std::fs::read("textures/earth_2k.jpg")
-            .expect("Failed to read textures/earth_2k.jpg");
+        let bytes = std::fs::read(asset_path("textures/earth_8k.jpg"))
+            .expect("Failed to read textures/earth_8k.jpg");
         Self::from_bytes(&bytes).expect("Failed to load Earth texture")
     }
 
     fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
-        let img = image::load_from_memory(bytes)
+        use std::io::Cursor;
+        let cursor = Cursor::new(bytes);
+        let mut reader = image::ImageReader::new(cursor)
+            .with_guessed_format()
+            .map_err(|e| format!("Failed to guess format: {}", e))?;
+        reader.no_limits();
+        let img = reader.decode()
             .map_err(|e| format!("Failed to decode image: {}", e))?
             .to_rgb8();
         let width = img.width();
         let height = img.height();
         let pixels: Vec<[u8; 3]> = img.pixels().map(|p| p.0).collect();
         Ok(Self { width, height, pixels })
+    }
+
+    fn downscale(&self, factor: u32) -> Self {
+        if factor <= 1 {
+            return self.clone();
+        }
+        let new_width = self.width / factor;
+        let new_height = self.height / factor;
+        let mut pixels = Vec::with_capacity((new_width * new_height) as usize);
+
+        for y in 0..new_height {
+            for x in 0..new_width {
+                let mut r_sum = 0u32;
+                let mut g_sum = 0u32;
+                let mut b_sum = 0u32;
+                for dy in 0..factor {
+                    for dx in 0..factor {
+                        let sx = x * factor + dx;
+                        let sy = y * factor + dy;
+                        let idx = (sy * self.width + sx) as usize;
+                        let [r, g, b] = self.pixels[idx];
+                        r_sum += r as u32;
+                        g_sum += g as u32;
+                        b_sum += b as u32;
+                    }
+                }
+                let count = (factor * factor) as u32;
+                pixels.push([
+                    (r_sum / count) as u8,
+                    (g_sum / count) as u8,
+                    (b_sum / count) as u8,
+                ]);
+            }
+        }
+        Self { width: new_width, height: new_height, pixels }
     }
 
     fn sample(&self, u: f64, v: f64) -> [u8; 3] {
@@ -256,6 +353,213 @@ impl EarthTexture {
             size: [size, size],
             pixels,
             source_size: egui::Vec2::ZERO,
+        }
+    }
+}
+
+struct SphereRenderer {
+    program: glow::Program,
+    vertex_array: glow::VertexArray,
+    textures: HashMap<(CelestialBody, Skin, TextureResolution), glow::Texture>,
+}
+
+impl SphereRenderer {
+    fn new(gl: &glow::Context) -> Self {
+        let shader_version = if cfg!(target_arch = "wasm32") {
+            "#version 300 es"
+        } else {
+            "#version 330"
+        };
+
+        unsafe {
+            let program = gl.create_program().expect("Cannot create program");
+
+            let vertex_shader_source = r#"
+                const vec2 verts[4] = vec2[4](
+                    vec2(-1.0, -1.0),
+                    vec2( 1.0, -1.0),
+                    vec2(-1.0,  1.0),
+                    vec2( 1.0,  1.0)
+                );
+                out vec2 v_uv;
+                void main() {
+                    v_uv = verts[gl_VertexID] * 0.5 + 0.5;
+                    gl_Position = vec4(verts[gl_VertexID], 0.0, 1.0);
+                }
+            "#;
+
+            let fragment_shader_source = r#"
+                precision highp float;
+                in vec2 v_uv;
+                out vec4 out_color;
+
+                uniform sampler2D u_texture;
+                uniform mat3 u_inv_rotation;
+                uniform float u_flattening;
+                uniform float u_aspect;
+                uniform float u_scale;
+
+                const float PI = 3.14159265359;
+
+                void main() {
+                    vec2 centered = (v_uv - 0.5) * 2.0;
+                    centered.x *= u_aspect;
+                    centered /= u_scale;
+
+                    float polar_scale = 1.0 - u_flattening;
+                    float dy_scaled = centered.y / polar_scale;
+                    float dist_sq = centered.x * centered.x + dy_scaled * dy_scaled;
+
+                    if (dist_sq >= 1.0) {
+                        out_color = vec4(0.0, 0.0, 0.0, 0.0);
+                        return;
+                    }
+
+                    float z = sqrt(1.0 - dist_sq);
+                    vec3 surface_pt = vec3(centered.x, dy_scaled, z);
+
+                    vec3 world_pt = u_inv_rotation * surface_pt;
+
+                    float lat = asin(clamp(world_pt.y, -1.0, 1.0));
+                    float lon = atan(-world_pt.z, world_pt.x);
+
+                    float tex_u = (lon + PI) / (2.0 * PI);
+                    float tex_v = (PI / 2.0 - lat) / PI;
+
+                    vec3 color = texture(u_texture, vec2(tex_u, tex_v)).rgb;
+
+                    float shade = 0.3 + 0.7 * max(z, 0.0);
+                    color *= shade;
+
+                    out_color = vec4(color, 1.0);
+                }
+            "#;
+
+            let shader_sources = [
+                (glow::VERTEX_SHADER, vertex_shader_source),
+                (glow::FRAGMENT_SHADER, fragment_shader_source),
+            ];
+
+            let shaders: Vec<_> = shader_sources
+                .iter()
+                .map(|(shader_type, shader_source)| {
+                    let shader = gl.create_shader(*shader_type).expect("Cannot create shader");
+                    gl.shader_source(shader, &format!("{shader_version}\n{shader_source}"));
+                    gl.compile_shader(shader);
+                    assert!(
+                        gl.get_shader_compile_status(shader),
+                        "Failed to compile shader: {}",
+                        gl.get_shader_info_log(shader)
+                    );
+                    gl.attach_shader(program, shader);
+                    shader
+                })
+                .collect();
+
+            gl.link_program(program);
+            assert!(
+                gl.get_program_link_status(program),
+                "Failed to link program: {}",
+                gl.get_program_info_log(program)
+            );
+
+            for shader in shaders {
+                gl.detach_shader(program, shader);
+                gl.delete_shader(shader);
+            }
+
+            let vertex_array = gl.create_vertex_array().expect("Cannot create vertex array");
+
+            Self {
+                program,
+                vertex_array,
+                textures: HashMap::new(),
+            }
+        }
+    }
+
+    fn upload_texture(&mut self, gl: &glow::Context, key: (CelestialBody, Skin, TextureResolution), earth_tex: &EarthTexture) {
+        unsafe {
+            if self.textures.contains_key(&key) {
+                return;
+            }
+
+            let texture = gl.create_texture().expect("Cannot create texture");
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+
+            let pixels: Vec<u8> = earth_tex.pixels.iter()
+                .flat_map(|&[r, g, b]| [r, g, b])
+                .collect();
+
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGB as i32,
+                earth_tex.width as i32,
+                earth_tex.height as i32,
+                0,
+                glow::RGB,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(&pixels)),
+            );
+
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::REPEAT as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+
+            self.textures.insert(key, texture);
+        }
+    }
+
+    fn paint(
+        &self,
+        gl: &glow::Context,
+        key: (CelestialBody, Skin, TextureResolution),
+        inv_rotation: &Matrix3<f64>,
+        flattening: f64,
+        aspect: f32,
+        scale: f32,
+    ) {
+        let Some(texture) = self.textures.get(&key) else { return };
+
+        unsafe {
+            gl.use_program(Some(self.program));
+            gl.bind_vertex_array(Some(self.vertex_array));
+
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(*texture));
+            gl.uniform_1_i32(gl.get_uniform_location(self.program, "u_texture").as_ref(), 0);
+
+            let rot_data: [f32; 9] = [
+                inv_rotation[(0, 0)] as f32, inv_rotation[(1, 0)] as f32, inv_rotation[(2, 0)] as f32,
+                inv_rotation[(0, 1)] as f32, inv_rotation[(1, 1)] as f32, inv_rotation[(2, 1)] as f32,
+                inv_rotation[(0, 2)] as f32, inv_rotation[(1, 2)] as f32, inv_rotation[(2, 2)] as f32,
+            ];
+            gl.uniform_matrix_3_f32_slice(
+                gl.get_uniform_location(self.program, "u_inv_rotation").as_ref(),
+                false,
+                &rot_data,
+            );
+
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_flattening").as_ref(), flattening as f32);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_aspect").as_ref(), aspect);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_scale").as_ref(), scale);
+
+            gl.enable(glow::BLEND);
+            gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+
+            gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+        }
+    }
+
+    fn destroy(&self, gl: &glow::Context) {
+        unsafe {
+            gl.delete_program(self.program);
+            gl.delete_vertex_array(self.vertex_array);
+            for texture in self.textures.values() {
+                gl.delete_texture(*texture);
+            }
         }
     }
 }
@@ -896,13 +1200,14 @@ struct ViewerState {
     sat_radius: f32,
     rotation: Matrix3<f64>,
     torus_rotation: Matrix3<f64>,
-    planet_textures: HashMap<(CelestialBody, Skin), Arc<EarthTexture>>,
-    planet_image_handles: HashMap<(CelestialBody, Skin), egui::TextureHandle>,
+    planet_textures: HashMap<(CelestialBody, Skin, TextureResolution), Arc<EarthTexture>>,
+    planet_image_handles: HashMap<(CelestialBody, Skin, TextureResolution), egui::TextureHandle>,
+    texture_resolution: TextureResolution,
     last_rotation: Option<Matrix3<f64>>,
     earth_resolution: usize,
     last_resolution: usize,
     texture_load_state: TextureLoadState,
-    pending_body: Option<(CelestialBody, Skin)>,
+    pending_body: Option<(CelestialBody, Skin, TextureResolution)>,
     dark_mode: bool,
     show_info: bool,
     follow_satellite: bool,
@@ -924,6 +1229,8 @@ struct ViewerState {
     auto_cycle_tabs: bool,
     cycle_interval: f64,
     last_cycle_time: f64,
+    use_gpu_rendering: bool,
+    sphere_renderer: Option<Arc<Mutex<SphereRenderer>>>,
     #[cfg(not(target_arch = "wasm32"))]
     tle_fetch_tx: mpsc::Sender<(TlePreset, Result<Vec<TleSatellite>, String>)>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -935,8 +1242,11 @@ struct App {
     viewer: ViewerState,
 }
 
-impl Default for App {
-    fn default() -> Self {
+impl App {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let gl = cc.gl.as_ref().expect("glow backend required");
+        let sphere_renderer = Arc::new(Mutex::new(SphereRenderer::new(gl)));
+
         let torus_initial = Matrix3::new(
             1.0, 0.0, 0.0,
             0.0, 0.0, -1.0,
@@ -945,6 +1255,12 @@ impl Default for App {
         let builtin_texture = Arc::new(EarthTexture::load());
         #[cfg(not(target_arch = "wasm32"))]
         let (tle_fetch_tx, tle_fetch_rx) = mpsc::channel();
+
+        {
+            let mut renderer = sphere_renderer.lock();
+            renderer.upload_texture(gl, (CelestialBody::Earth, Skin::Default, TextureResolution::R8192), &builtin_texture);
+        }
+
         Self {
             dock_state: DockState::new(vec![0]),
             viewer: ViewerState {
@@ -972,10 +1288,11 @@ impl Default for App {
                 torus_rotation: torus_initial,
                 planet_textures: {
                     let mut map = HashMap::new();
-                    map.insert((CelestialBody::Earth, Skin::Default), builtin_texture.clone());
+                    map.insert((CelestialBody::Earth, Skin::Default, TextureResolution::R8192), builtin_texture.clone());
                     map
                 },
                 planet_image_handles: HashMap::new(),
+                texture_resolution: TextureResolution::R8192,
                 last_rotation: None,
                 earth_resolution: 512,
                 last_resolution: 0,
@@ -997,11 +1314,13 @@ impl Default for App {
                 pending_add_tab: None,
                 link_width: 1.0,
                 fixed_sizes: false,
-                earth_fixed_camera: true,
+                earth_fixed_camera: false,
                 current_gmst: 0.0,
                 auto_cycle_tabs: false,
                 cycle_interval: 5.0,
                 last_cycle_time: 0.0,
+                use_gpu_rendering: true,
+                sphere_renderer: Some(sphere_renderer),
                 #[cfg(not(target_arch = "wasm32"))]
                 tle_fetch_tx,
                 #[cfg(not(target_arch = "wasm32"))]
@@ -1643,7 +1962,8 @@ impl ViewerState {
             let show_manhattan_path = if use_local { local.show_manhattan_path } else { self.show_manhattan_path };
             let show_shortest_path = if use_local { local.show_shortest_path } else { self.show_shortest_path };
             let render_planet = if use_local { local.render_planet } else { self.render_planet };
-            let planet_handle = self.planet_image_handles.get(&(celestial_body, skin));
+            let tex_res = self.texture_resolution;
+            let planet_handle = self.planet_image_handles.get(&(celestial_body, skin, tex_res));
             let time = self.time;
             let torus_rotation = self.torus_rotation;
             let torus_zoom = self.torus_zoom;
@@ -1688,6 +2008,11 @@ impl ViewerState {
                         fixed_sizes,
                         flattening,
                         show_polar_circle,
+                        self.sphere_renderer.as_ref(),
+                        (celestial_body, skin, tex_res),
+                        &body_y_rotation,
+                        self.earth_fixed_camera,
+                        self.use_gpu_rendering,
                     );
                     self.rotation = rot;
                     self.zoom = new_zoom;
@@ -1772,7 +2097,8 @@ impl ViewerState {
             let show_manhattan_path = if use_local { local.show_manhattan_path } else { self.show_manhattan_path };
             let show_shortest_path = if use_local { local.show_shortest_path } else { self.show_shortest_path };
             let render_planet = if use_local { local.render_planet } else { self.render_planet };
-            let planet_handle = self.planet_image_handles.get(&(celestial_body, skin));
+            let tex_res = self.texture_resolution;
+            let planet_handle = self.planet_image_handles.get(&(celestial_body, skin, tex_res));
             let link_width = self.link_width;
             let fixed_sizes = self.fixed_sizes;
             let flattening = celestial_body.flattening();
@@ -1812,6 +2138,11 @@ impl ViewerState {
                 fixed_sizes,
                 flattening,
                 show_polar_circle,
+                self.sphere_renderer.as_ref(),
+                (celestial_body, skin, tex_res),
+                &body_y_rotation,
+                self.earth_fixed_camera,
+                self.use_gpu_rendering,
             );
             self.rotation = rot;
             self.zoom = new_zoom;
@@ -1980,10 +2311,20 @@ impl ViewerState {
             }
         });
         let was_earth_fixed = self.earth_fixed_camera;
-        ui.checkbox(&mut self.earth_fixed_camera, "Earth-fixed (Lat/Lon tracks ground)");
+        ui.checkbox(&mut self.earth_fixed_camera, "Fixed Lat/Lon");
         if self.earth_fixed_camera != was_earth_fixed {
-            let new_rotation = lat_lon_to_matrix(lat, geo_lon + if self.earth_fixed_camera { 0.0 } else { body_rotation });
-            self.rotation = new_rotation;
+            let cos_a = body_rotation.cos();
+            let sin_a = body_rotation.sin();
+            let body_y_rot = Matrix3::new(
+                cos_a, 0.0, sin_a,
+                0.0, 1.0, 0.0,
+                -sin_a, 0.0, cos_a,
+            );
+            if self.earth_fixed_camera {
+                self.rotation = self.rotation * body_y_rot;
+            } else {
+                self.rotation = self.rotation * body_y_rot.transpose();
+            }
         }
         ui.horizontal(|ui| {
             if ui.button("N/S view").clicked() {
@@ -2079,6 +2420,19 @@ impl ViewerState {
             self.hide_behind_earth = !show_behind;
         }
         ui.checkbox(&mut self.render_planet, "Render planet");
+        ui.horizontal(|ui| {
+            ui.label("Texture:");
+            egui::ComboBox::from_id_salt("tex_res")
+                .selected_text(self.texture_resolution.label())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R512, "512");
+                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R1024, "1K");
+                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R2048, "2K");
+                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R8192, "8K");
+                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R21504, "21K");
+                });
+        });
+        ui.checkbox(&mut self.use_gpu_rendering, "GPU rendering");
         ui.checkbox(&mut self.show_polar_circle, "Show polar circle");
         ui.checkbox(&mut self.single_color_per_constellation, "Monochrome");
         ui.checkbox(&mut self.follow_satellite, "Follow satellite");
@@ -2129,12 +2483,13 @@ impl ViewerState {
 
     #[allow(unused_variables)]
     fn load_texture_for_body(&mut self, body: CelestialBody, skin: Skin, ctx: &egui::Context) {
-        let key = (body, skin);
+        let res = self.texture_resolution;
+        let key = (body, skin, res);
         if self.planet_textures.contains_key(&key) {
             return;
         }
 
-        let filename = match skin.filename(body) {
+        let filename = match skin.filename(body, res) {
             Some(f) => f,
             None => return,
         };
@@ -2143,9 +2498,19 @@ impl ViewerState {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            match std::fs::read(filename) {
+            match std::fs::read(asset_path(filename)) {
                 Ok(bytes) => match EarthTexture::from_bytes(&bytes) {
                     Ok(texture) => {
+                        let mut factor = res.downscale_factor(body, skin);
+                        let max_gpu_size = 16384u32;
+                        while texture.width / factor > max_gpu_size || texture.height / factor > max_gpu_size {
+                            factor += 1;
+                        }
+                        let texture = if factor > 1 {
+                            texture.downscale(factor)
+                        } else {
+                            texture
+                        };
                         let texture = Arc::new(texture);
                         self.planet_textures.insert(key, texture.clone());
                         self.texture_load_state = TextureLoadState::Loaded(texture);
@@ -2375,7 +2740,7 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let v = &mut self.viewer;
 
         ctx.set_visuals(if v.dark_mode {
@@ -2390,16 +2755,28 @@ impl eframe::App for App {
             .map(|(_, tab)| *tab)
             .unwrap_or(0);
 
-        let bodies_needed: Vec<(CelestialBody, Skin)> = {
+        let tex_res = v.texture_resolution;
+        let bodies_needed: Vec<(CelestialBody, Skin, TextureResolution)> = {
             let mut seen = std::collections::HashSet::new();
             v.tabs.get(active_tab_idx)
                 .into_iter()
-                .flat_map(|tab| tab.planets.iter().map(|p| (p.celestial_body, p.skin)))
+                .flat_map(|tab| tab.planets.iter().map(|p| (p.celestial_body, p.skin, tex_res)))
                 .filter(|key| seen.insert(*key))
                 .collect()
         };
-        for (body, skin) in &bodies_needed {
+        for (body, skin, _) in &bodies_needed {
             v.load_texture_for_body(*body, *skin, ctx);
+        }
+
+        if let Some(gl) = frame.gl() {
+            if let Some(ref sphere_renderer) = v.sphere_renderer {
+                let mut renderer = sphere_renderer.lock();
+                for (body, skin, res) in &bodies_needed {
+                    if let Some(tex) = v.planet_textures.get(&(*body, *skin, *res)) {
+                        renderer.upload_texture(gl, (*body, *skin, *res), tex);
+                    }
+                }
+            }
         }
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -2423,7 +2800,7 @@ impl eframe::App for App {
 
         let earth_radius = CelestialBody::Earth.radius_km();
         let max_planet_radius = bodies_needed.iter()
-            .map(|(b, _)| b.radius_km())
+            .map(|(b, _, _)| b.radius_km())
             .fold(earth_radius, |a, b| a.max(b));
         if max_planet_radius > v.last_max_planet_radius {
             let ideal_zoom = earth_radius / max_planet_radius;
@@ -2519,44 +2896,47 @@ impl eframe::App for App {
             }
         });
 
-        let rotation_changed = v.last_rotation.map_or(true, |r| r != v.rotation);
-        let resolution_changed = v.last_resolution != v.earth_resolution;
-        let time_changed = v.animate;
+        if !v.use_gpu_rendering {
+            let rotation_changed = v.last_rotation.map_or(true, |r| r != v.rotation);
+            let resolution_changed = v.last_resolution != v.earth_resolution;
+            let time_changed = v.animate;
 
-        for key in &bodies_needed {
-            let texture_missing = !v.planet_image_handles.contains_key(key);
-            let need_rerender = rotation_changed || resolution_changed || texture_missing || time_changed;
-            if need_rerender {
-                if let Some(texture) = v.planet_textures.get(key) {
-                    let body_rotation = body_rotation_angle(key.0, v.time, v.current_gmst);
-                    let cos_a = body_rotation.cos();
-                    let sin_a = body_rotation.sin();
-                    let body_y_rotation = Matrix3::new(
-                        cos_a, 0.0, sin_a,
-                        0.0, 1.0, 0.0,
-                        -sin_a, 0.0, cos_a,
-                    );
-                    let body_combined = if v.earth_fixed_camera {
-                        v.rotation
-                    } else {
-                        v.rotation * body_y_rotation
-                    };
-                    let flattening = key.0.flattening();
-                    let image = texture.render_sphere(v.earth_resolution, &body_combined, flattening);
-                    let handle = ctx.load_texture(
-                        &format!("planet_{:?}_{:?}", key.0, key.1),
-                        image,
-                        egui::TextureOptions::LINEAR,
-                    );
-                    v.planet_image_handles.insert(*key, handle);
+            for key in &bodies_needed {
+                let texture_missing = !v.planet_image_handles.contains_key(key);
+                let need_rerender = rotation_changed || resolution_changed || texture_missing || time_changed;
+                if need_rerender {
+                    if let Some(texture) = v.planet_textures.get(key) {
+                        let body_rotation = body_rotation_angle(key.0, v.time, v.current_gmst);
+                        let cos_a = body_rotation.cos();
+                        let sin_a = body_rotation.sin();
+                        let body_y_rotation = Matrix3::new(
+                            cos_a, 0.0, sin_a,
+                            0.0, 1.0, 0.0,
+                            -sin_a, 0.0, cos_a,
+                        );
+                        let body_combined = if v.earth_fixed_camera {
+                            v.rotation
+                        } else {
+                            v.rotation * body_y_rotation
+                        };
+                        let flattening = key.0.flattening();
+                        let render_size = key.2.cpu_render_size();
+                        let image = texture.render_sphere(render_size, &body_combined, flattening);
+                        let handle = ctx.load_texture(
+                            &format!("planet_{:?}_{:?}", key.0, key.1),
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        );
+                        v.planet_image_handles.insert(*key, handle);
+                    }
                 }
             }
-        }
-        if rotation_changed {
-            v.last_rotation = Some(v.rotation);
-        }
-        if resolution_changed {
-            v.last_resolution = v.earth_resolution;
+            if rotation_changed {
+                v.last_rotation = Some(v.rotation);
+            }
+            if resolution_changed {
+                v.last_resolution = v.earth_resolution;
+            }
         }
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
@@ -2768,7 +3148,7 @@ impl eframe::App for App {
                     let pm = planet.celestial_body.mu();
                     let pj2 = planet.celestial_body.j2();
                     let peq = planet.celestial_body.equatorial_radius_km();
-                    let texture = self.viewer.planet_textures.get(&(planet.celestial_body, planet.skin));
+                    let texture = self.viewer.planet_textures.get(&(planet.celestial_body, planet.skin, self.viewer.texture_resolution));
 
                     for camera in &planet.satellite_cameras {
                         let sat_data = planet.constellations.get(camera.constellation_idx).map(|cons| {
@@ -2815,6 +3195,14 @@ impl eframe::App for App {
                     }
                     }
                 }
+            }
+        }
+    }
+
+    fn on_exit(&mut self, gl: Option<&glow::Context>) {
+        if let Some(gl) = gl {
+            if let Some(ref renderer) = self.viewer.sphere_renderer {
+                renderer.lock().destroy(gl);
             }
         }
     }
@@ -3118,6 +3506,11 @@ fn draw_3d_view(
     fixed_sizes: bool,
     flattening: f64,
     show_polar_circle: bool,
+    sphere_renderer: Option<&Arc<Mutex<SphereRenderer>>>,
+    body_key: (CelestialBody, Skin, TextureResolution),
+    body_rotation: &Matrix3<f64>,
+    earth_fixed_camera: bool,
+    use_gpu_rendering: bool,
 ) -> (Matrix3<f64>, f64) {
     let max_altitude = constellations.iter()
         .map(|(c, _, _, _, _)| c.altitude_km)
@@ -3130,6 +3523,32 @@ fn draw_3d_view(
     let scaled_sat_radius = sat_radius * zoom_factor;
     let scaled_link_width = (link_width * zoom_factor).max(0.5);
 
+    let use_gpu = sphere_renderer.is_some() && render_planet && use_gpu_rendering;
+
+    // Draw sphere FIRST (before plot) so it renders behind
+    if use_gpu {
+        let rect = egui::Rect::from_min_size(ui.cursor().min, egui::Vec2::new(width, height));
+        let renderer = sphere_renderer.unwrap().clone();
+        let combined_rotation = if earth_fixed_camera {
+            rotation
+        } else {
+            rotation * body_rotation
+        };
+        let inv_rotation = combined_rotation.transpose();
+        let flat = flattening as f32;
+        let aspect = width / height;
+        let key = body_key;
+        let scale = (planet_radius / margin) as f32;
+
+        let callback = egui::PaintCallback {
+            rect,
+            callback: Arc::new(egui_glow::CallbackFn::new(move |_info, painter| {
+                renderer.lock().paint(painter.gl(), key, &inv_rotation, flat as f64, aspect, scale);
+            })),
+        };
+        ui.painter().add(callback);
+    }
+
     let plot = Plot::new(id)
         .data_aspect(1.0)
         .width(width)
@@ -3138,6 +3557,7 @@ fn draw_3d_view(
         .show_grid(false)
         .show_x(false)
         .show_y(false)
+        .show_background(!use_gpu)  // Disable background when using GPU sphere
         .allow_drag(false)
         .allow_zoom(false)
         .allow_scroll(false)
@@ -3214,7 +3634,9 @@ fn draw_3d_view(
         }
 
         if render_planet {
-            if let Some(tex) = earth_texture {
+            if use_gpu {
+                // GPU rendering is handled by paint callback before the plot
+            } else if let Some(tex) = earth_texture {
                 let size = egui::Vec2::splat(planet_radius as f32 * 2.0);
                 plot_ui.image(PlotImage::new(
                     "",
@@ -4263,7 +4685,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "LEO Viz",
         options,
-        Box::new(|_cc| Ok(Box::new(App::default()))),
+        Box::new(|cc| Ok(Box::new(App::new(cc)))),
     )
 }
 
@@ -4288,7 +4710,7 @@ fn main() {
             .start(
                 canvas,
                 web_options,
-                Box::new(|_cc| Ok(Box::new(App::default()))),
+                Box::new(|cc| Ok(Box::new(App::new(cc)))),
             )
             .await
             .expect("Failed to start eframe");
