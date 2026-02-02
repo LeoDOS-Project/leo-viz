@@ -862,6 +862,7 @@ enum Preset {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum TlePreset {
+    Iss,
     Starlink,
     OneWeb,
     Iridium,
@@ -877,6 +878,7 @@ enum TlePreset {
 impl TlePreset {
     fn label(&self) -> &'static str {
         match self {
+            TlePreset::Iss => "ISS",
             TlePreset::Starlink => "Starlink",
             TlePreset::OneWeb => "OneWeb",
             TlePreset::Iridium => "Iridium",
@@ -892,6 +894,7 @@ impl TlePreset {
 
     fn url(&self) -> &'static str {
         match self {
+            TlePreset::Iss => "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=tle",
             TlePreset::Starlink => "https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle",
             TlePreset::OneWeb => "https://celestrak.org/NORAD/elements/gp.php?GROUP=oneweb&FORMAT=tle",
             TlePreset::Iridium => "https://celestrak.org/NORAD/elements/gp.php?GROUP=iridium&FORMAT=tle",
@@ -905,7 +908,8 @@ impl TlePreset {
         }
     }
 
-    const ALL: [TlePreset; 10] = [
+    const ALL: [TlePreset; 11] = [
+        TlePreset::Iss,
         TlePreset::Starlink,
         TlePreset::OneWeb,
         TlePreset::Iridium,
@@ -1797,7 +1801,9 @@ impl ViewerState {
                                                 ui.painter().rect_filled(rect, 2.0, color);
 
                                                 let is_loading = matches!(state, TleLoadState::Loading);
-                                                ui.checkbox(selected, preset.label());
+                                                if ui.selectable_label(*selected, preset.label()).clicked() {
+                                                    *selected = !*selected;
+                                                }
                                                 if is_loading {
                                                     ui.spinner();
                                                 }
@@ -2011,22 +2017,24 @@ impl ViewerState {
             })
             .collect();
 
-        let tle_positions = planet.tle_satellite_positions(self.time);
-        if !tle_positions.is_empty() {
-            let tle_wc = WalkerConstellation {
-                walker_type: WalkerType::Delta,
-                total_sats: tle_positions.len(),
-                num_planes: 1,
-                altitude_km: 550.0,
-                inclination_deg: 0.0,
-                phasing: 0.0,
-                planet_radius,
-                planet_mu,
-                planet_j2,
-                planet_equatorial_radius: planet_eq_radius,
-            };
-            let tle_color_offset = 0;
-            constellations_data.push((tle_wc, tle_positions, tle_color_offset, true, usize::MAX));
+        if planet.show_tle_window {
+            let tle_positions = planet.tle_satellite_positions(self.time);
+            if !tle_positions.is_empty() {
+                let tle_wc = WalkerConstellation {
+                    walker_type: WalkerType::Delta,
+                    total_sats: tle_positions.len(),
+                    num_planes: 1,
+                    altitude_km: 550.0,
+                    inclination_deg: 0.0,
+                    phasing: 0.0,
+                    planet_radius,
+                    planet_mu,
+                    planet_j2,
+                    planet_equatorial_radius: planet_eq_radius,
+                };
+                let tle_color_offset = 0;
+                constellations_data.push((tle_wc, tle_positions, tle_color_offset, true, usize::MAX));
+            }
         }
 
         let available = ui.available_size();
@@ -2460,12 +2468,50 @@ impl ViewerState {
             }
         });
 
+        ui.checkbox(&mut self.follow_satellite, "Follow satellite");
+        ui.checkbox(&mut self.show_camera_windows, "Show camera windows");
+
         ui.add_space(5.0);
+        ui.label(egui::RichText::new("Rendering").strong());
         ui.checkbox(&mut self.dark_mode, "Dark mode");
+        ui.checkbox(&mut self.render_planet, "Render planet");
+        ui.horizontal(|ui| {
+            ui.label("Texture:");
+            egui::ComboBox::from_id_salt("tex_res")
+                .selected_text(self.texture_resolution.label())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R512, "512");
+                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R1024, "1K");
+                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R2048, "2K");
+                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R8192, "8K");
+                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R21504, "21K");
+                });
+        });
+        ui.checkbox(&mut self.use_gpu_rendering, "GPU rendering");
+        let mut hide_clouds = !self.show_clouds;
+        if ui.checkbox(&mut hide_clouds, "Hide clouds").changed() {
+            self.show_clouds = !hide_clouds;
+        }
+        ui.checkbox(&mut self.show_axes, "Show axes");
+        ui.checkbox(&mut self.show_polar_circle, "Show polar circle");
+        let mut show_behind = !self.hide_behind_earth;
+        if ui.checkbox(&mut show_behind, "Show behind planet").changed() {
+            self.hide_behind_earth = !show_behind;
+        }
+        ui.checkbox(&mut self.single_color_per_constellation, "Monochrome");
+        ui.horizontal(|ui| {
+            ui.label("Sat:");
+            ui.add(egui::DragValue::new(&mut self.sat_radius).range(1.0..=15.0).speed(0.1));
+            ui.label("Link:");
+            ui.add(egui::DragValue::new(&mut self.link_width).range(0.1..=5.0).speed(0.1));
+        });
+        ui.checkbox(&mut self.fixed_sizes, "Fixed sizes (ignore alt)");
+
+        ui.add_space(5.0);
+        ui.label(egui::RichText::new("Simulation").strong());
         let mut stop_time = !self.animate;
         ui.checkbox(&mut stop_time, "Stop time");
         self.animate = !stop_time;
-
         ui.horizontal(|ui| {
             ui.label("Speed:");
             ui.add(egui::DragValue::new(&mut self.speed).range(0.1..=1000.0).speed(1.0));
@@ -2512,8 +2558,16 @@ impl ViewerState {
         if ui.button("Sync time").clicked() {
             self.time = self.real_time;
         }
-
-        ui.checkbox(&mut self.show_axes, "Show axes");
+        ui.checkbox(&mut self.show_orbits, "Show orbits");
+        ui.checkbox(&mut self.show_intra_links, "Intra-plane links");
+        ui.checkbox(&mut self.show_links, "Inter-plane links");
+        ui.checkbox(&mut self.show_routing_paths, "Show routing paths");
+        if self.show_routing_paths {
+            ui.indent("routing_opts", |ui| {
+                ui.checkbox(&mut self.show_manhattan_path, "Manhattan (red)");
+                ui.checkbox(&mut self.show_shortest_path, "Shortest distance (green)");
+            });
+        }
         ui.checkbox(&mut self.show_coverage, "Show coverage");
         if self.show_coverage {
             ui.horizontal(|ui| {
@@ -2525,60 +2579,8 @@ impl ViewerState {
                     .suffix("°"));
             });
         }
-        ui.checkbox(&mut self.show_ground_track, "Show ground");
-        ui.checkbox(&mut self.show_camera_windows, "Show camera windows");
-        let mut show_behind = !self.hide_behind_earth;
-        if ui.checkbox(&mut show_behind, "Show behind planet").changed() {
-            self.hide_behind_earth = !show_behind;
-        }
-        ui.checkbox(&mut self.render_planet, "Render planet");
-        ui.horizontal(|ui| {
-            ui.label("Texture:");
-            egui::ComboBox::from_id_salt("tex_res")
-                .selected_text(self.texture_resolution.label())
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R512, "512");
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R1024, "1K");
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R2048, "2K");
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R8192, "8K");
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R21504, "21K");
-                });
-        });
-        ui.checkbox(&mut self.use_gpu_rendering, "GPU rendering");
-        let mut hide_clouds = !self.show_clouds;
-        if ui.checkbox(&mut hide_clouds, "Hide clouds").changed() {
-            self.show_clouds = !hide_clouds;
-        }
-        ui.checkbox(&mut self.show_polar_circle, "Show polar circle");
-        ui.checkbox(&mut self.single_color_per_constellation, "Monochrome");
-        ui.checkbox(&mut self.follow_satellite, "Follow satellite");
-
-        ui.add_space(5.0);
-        ui.label(egui::RichText::new("Simulation options").strong());
-        ui.checkbox(&mut self.show_orbits, "Show orbits");
-        ui.checkbox(&mut self.show_intra_links, "Intra-plane links");
-        ui.checkbox(&mut self.show_links, "Inter-plane links");
-        ui.checkbox(&mut self.show_routing_paths, "Show routing paths");
-        if self.show_routing_paths {
-            ui.indent("routing_opts", |ui| {
-                ui.checkbox(&mut self.show_manhattan_path, "Manhattan (red)");
-                ui.checkbox(&mut self.show_shortest_path, "Shortest distance (green)");
-            });
-        }
         ui.checkbox(&mut self.show_torus, "Show torus");
-
-        ui.add_space(10.0);
-
-        ui.horizontal(|ui| {
-            ui.label("Sat:");
-            ui.add(egui::DragValue::new(&mut self.sat_radius).range(1.0..=15.0).speed(0.1));
-            ui.label("Link:");
-            ui.add(egui::DragValue::new(&mut self.link_width).range(0.1..=5.0).speed(0.1));
-        });
-        ui.checkbox(&mut self.fixed_sizes, "Fixed sizes (ignore alt)");
-
-        ui.add_space(5.0);
-        ui.label(egui::RichText::new("Tab cycling").strong());
+        ui.checkbox(&mut self.show_ground_track, "Show ground");
         ui.checkbox(&mut self.auto_cycle_tabs, "Auto-cycle tabs");
         if self.auto_cycle_tabs {
             ui.horizontal(|ui| {
@@ -2996,7 +2998,7 @@ impl eframe::App for App {
                             let wc = cons.constellation(planet_radius, planet_mu, planet_j2, planet_eq_radius);
                             let positions = wc.satellite_positions(v.time);
                             if let Some(sat) = positions.iter().find(|s| s.plane == cam.plane && s.sat_index == cam.sat_index) {
-                                let forward: Vector3<f64> = Vector3::new(sat.x, sat.y, sat.z).normalize();
+                                let radial: Vector3<f64> = Vector3::new(sat.x, sat.y, sat.z).normalize();
                                 let raan_spread = match cons.walker_type {
                                     WalkerType::Delta => 2.0 * PI,
                                     WalkerType::Star => PI,
@@ -3008,9 +3010,10 @@ impl eframe::App for App {
                                     inc.cos(),
                                     -raan.cos() * inc.sin(),
                                 );
-                                let velocity_dir: Vector3<f64> = orbital_normal.cross(&forward).normalize();
-                                let up = -velocity_dir;
-                                let right = up.cross(&forward).normalize();
+                                let velocity_dir: Vector3<f64> = orbital_normal.cross(&radial).normalize();
+                                let forward = velocity_dir;
+                                let up = radial;
+                                let right = forward.cross(&up).normalize();
                                 v.rotation = Matrix3::new(
                                     right.x, right.y, right.z,
                                     up.x, up.y, up.z,
