@@ -73,6 +73,13 @@ impl TextureResolution {
             _ => 1024,
         }
     }
+
+    fn cloud_filename(&self) -> Option<&'static str> {
+        match self {
+            TextureResolution::R8192 | TextureResolution::R21504 => Some("textures/earth_clouds_8k.jpg"),
+            _ => Some("textures/earth_clouds_2k.jpg"),
+        }
+    }
 }
 
 impl Skin {
@@ -361,6 +368,7 @@ struct SphereRenderer {
     program: glow::Program,
     vertex_array: glow::VertexArray,
     textures: HashMap<(CelestialBody, Skin, TextureResolution), glow::Texture>,
+    cloud_textures: HashMap<TextureResolution, glow::Texture>,
 }
 
 impl SphereRenderer {
@@ -394,11 +402,13 @@ impl SphereRenderer {
                 out vec4 out_color;
 
                 uniform sampler2D u_texture;
+                uniform sampler2D u_clouds;
                 uniform mat3 u_inv_rotation;
                 uniform float u_flattening;
                 uniform float u_aspect;
                 uniform float u_scale;
                 uniform float u_atmosphere;
+                uniform float u_show_clouds;
 
                 const float PI = 3.14159265359;
                 const vec3 ATMO_COLOR = vec3(0.4, 0.7, 1.0);
@@ -409,33 +419,43 @@ impl SphereRenderer {
                     centered.x *= u_aspect;
                     centered /= u_scale;
 
-                    float polar_scale = 1.0 - u_flattening;
-                    float dy_scaled = centered.y / polar_scale;
-                    float dist_sq = centered.x * centered.x + dy_scaled * dy_scaled;
-                    float dist = sqrt(dist_sq);
+                    float b = 1.0 - u_flattening;
+                    float b2 = b * b;
 
+                    vec3 O = u_inv_rotation * vec3(centered.x, centered.y, 0.0);
+                    vec3 D = u_inv_rotation * vec3(0.0, 0.0, -1.0);
+
+                    float A = D.x*D.x + D.y*D.y/b2 + D.z*D.z;
+                    float B = 2.0 * (O.x*D.x + O.y*D.y/b2 + O.z*D.z);
+                    float C = O.x*O.x + O.y*O.y/b2 + O.z*O.z - 1.0;
+
+                    float discriminant = B*B - 4.0*A*C;
+
+                    float screen_dist = length(centered);
                     float atmo_outer = 1.0 + ATMO_THICKNESS * u_atmosphere;
 
-                    if (dist >= atmo_outer) {
+                    if (discriminant < 0.0) {
+                        if (u_atmosphere > 0.0 && screen_dist < atmo_outer) {
+                            float C_atmo = O.x*O.x + O.y*O.y + O.z*O.z - 1.0;
+                            float disc_atmo = B*B - 4.0*A*C_atmo;
+                            if (disc_atmo >= 0.0) {
+                                float atmo_depth = (screen_dist - 1.0) / (ATMO_THICKNESS * u_atmosphere);
+                                atmo_depth = clamp(atmo_depth, 0.0, 1.0);
+                                float atmo_falloff = 1.0 - atmo_depth;
+                                atmo_falloff = pow(atmo_falloff, 2.0);
+                                float glow = atmo_falloff * 0.8;
+                                out_color = vec4(ATMO_COLOR * glow, glow);
+                                return;
+                            }
+                        }
                         out_color = vec4(0.0, 0.0, 0.0, 0.0);
                         return;
                     }
 
-                    if (dist >= 1.0 && u_atmosphere > 0.0) {
-                        float atmo_depth = (dist - 1.0) / (ATMO_THICKNESS * u_atmosphere);
-                        float atmo_falloff = 1.0 - atmo_depth;
-                        atmo_falloff = pow(atmo_falloff, 2.0);
-                        float glow = atmo_falloff * 0.8;
-                        out_color = vec4(ATMO_COLOR * glow, glow);
-                        return;
-                    }
+                    float t = (-B - sqrt(discriminant)) / (2.0 * A);
+                    vec3 world_pt = O + t * D;
 
-                    float z = sqrt(1.0 - dist_sq);
-                    vec3 surface_pt = vec3(centered.x, dy_scaled, z);
-
-                    vec3 world_pt = u_inv_rotation * surface_pt;
-
-                    float lat = asin(clamp(world_pt.y, -1.0, 1.0));
+                    float lat = asin(clamp(world_pt.y / b, -1.0, 1.0));
                     float lon = atan(-world_pt.z, world_pt.x);
 
                     float tex_u = (lon + PI) / (2.0 * PI);
@@ -443,11 +463,17 @@ impl SphereRenderer {
 
                     vec3 color = texture(u_texture, vec2(tex_u, tex_v)).rgb;
 
-                    float shade = 0.3 + 0.7 * max(z, 0.0);
+                    if (u_show_clouds > 0.5) {
+                        float cloud = texture(u_clouds, vec2(tex_u, tex_v)).r;
+                        color = mix(color, vec3(1.0), cloud);
+                    }
+
+                    vec3 normal = normalize(vec3(world_pt.x, world_pt.y / b2, world_pt.z));
+                    float shade = 0.3 + 0.7 * max(dot(normal, -D), 0.0);
                     color *= shade;
 
                     if (u_atmosphere > 0.0) {
-                        float fresnel = 1.0 - z;
+                        float fresnel = 1.0 - max(dot(normal, -D), 0.0);
                         fresnel = pow(fresnel, 3.0);
                         float rim = fresnel * 0.6 * u_atmosphere;
                         color = mix(color, ATMO_COLOR, rim);
@@ -496,6 +522,7 @@ impl SphereRenderer {
                 program,
                 vertex_array,
                 textures: HashMap::new(),
+                cloud_textures: HashMap::new(),
             }
         }
     }
@@ -534,6 +561,40 @@ impl SphereRenderer {
         }
     }
 
+    fn upload_cloud_texture(&mut self, gl: &glow::Context, res: TextureResolution, cloud_tex: &EarthTexture) {
+        unsafe {
+            if self.cloud_textures.contains_key(&res) {
+                return;
+            }
+
+            let texture = gl.create_texture().expect("Cannot create cloud texture");
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+
+            let pixels: Vec<u8> = cloud_tex.pixels.iter()
+                .flat_map(|&[r, g, b]| [r, g, b])
+                .collect();
+
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGB as i32,
+                cloud_tex.width as i32,
+                cloud_tex.height as i32,
+                0,
+                glow::RGB,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(&pixels)),
+            );
+
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::REPEAT as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+
+            self.cloud_textures.insert(res, texture);
+        }
+    }
+
     fn paint(
         &self,
         gl: &glow::Context,
@@ -543,6 +604,7 @@ impl SphereRenderer {
         aspect: f32,
         scale: f32,
         atmosphere: f32,
+        show_clouds: bool,
     ) {
         let Some(texture) = self.textures.get(&key) else { return };
 
@@ -553,6 +615,13 @@ impl SphereRenderer {
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(*texture));
             gl.uniform_1_i32(gl.get_uniform_location(self.program, "u_texture").as_ref(), 0);
+
+            gl.active_texture(glow::TEXTURE1);
+            let cloud_tex = self.cloud_textures.get(&key.2);
+            if let Some(ct) = cloud_tex {
+                gl.bind_texture(glow::TEXTURE_2D, Some(*ct));
+            }
+            gl.uniform_1_i32(gl.get_uniform_location(self.program, "u_clouds").as_ref(), 1);
 
             let rot_data: [f32; 9] = [
                 inv_rotation[(0, 0)] as f32, inv_rotation[(1, 0)] as f32, inv_rotation[(2, 0)] as f32,
@@ -569,6 +638,8 @@ impl SphereRenderer {
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_aspect").as_ref(), aspect);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_scale").as_ref(), scale);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_atmosphere").as_ref(), atmosphere);
+            let clouds_enabled = show_clouds && cloud_tex.is_some() && key.0 == CelestialBody::Earth;
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_show_clouds").as_ref(), if clouds_enabled { 1.0 } else { 0.0 });
 
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
@@ -582,6 +653,9 @@ impl SphereRenderer {
             gl.delete_program(self.program);
             gl.delete_vertex_array(self.vertex_array);
             for texture in self.textures.values() {
+                gl.delete_texture(*texture);
+            }
+            for texture in self.cloud_textures.values() {
                 gl.delete_texture(*texture);
             }
         }
@@ -1225,6 +1299,7 @@ struct ViewerState {
     rotation: Matrix3<f64>,
     torus_rotation: Matrix3<f64>,
     planet_textures: HashMap<(CelestialBody, Skin, TextureResolution), Arc<EarthTexture>>,
+    cloud_textures: HashMap<TextureResolution, Arc<EarthTexture>>,
     planet_image_handles: HashMap<(CelestialBody, Skin, TextureResolution), egui::TextureHandle>,
     texture_resolution: TextureResolution,
     last_rotation: Option<Matrix3<f64>>,
@@ -1254,6 +1329,7 @@ struct ViewerState {
     cycle_interval: f64,
     last_cycle_time: f64,
     use_gpu_rendering: bool,
+    show_clouds: bool,
     sphere_renderer: Option<Arc<Mutex<SphereRenderer>>>,
     #[cfg(not(target_arch = "wasm32"))]
     tle_fetch_tx: mpsc::Sender<(TlePreset, Result<Vec<TleSatellite>, String>)>,
@@ -1315,6 +1391,7 @@ impl App {
                     map.insert((CelestialBody::Earth, Skin::Default, TextureResolution::R8192), builtin_texture.clone());
                     map
                 },
+                cloud_textures: HashMap::new(),
                 planet_image_handles: HashMap::new(),
                 texture_resolution: TextureResolution::R8192,
                 last_rotation: None,
@@ -1344,6 +1421,7 @@ impl App {
                 cycle_interval: 5.0,
                 last_cycle_time: 0.0,
                 use_gpu_rendering: true,
+                show_clouds: true,
                 sphere_renderer: Some(sphere_renderer),
                 #[cfg(not(target_arch = "wasm32"))]
                 tle_fetch_tx,
@@ -2037,6 +2115,7 @@ impl ViewerState {
                         &body_y_rotation,
                         self.earth_fixed_camera,
                         self.use_gpu_rendering,
+                        self.show_clouds,
                     );
                     self.rotation = rot;
                     self.zoom = new_zoom;
@@ -2167,6 +2246,7 @@ impl ViewerState {
                 &body_y_rotation,
                 self.earth_fixed_camera,
                 self.use_gpu_rendering,
+                self.show_clouds,
             );
             self.rotation = rot;
             self.zoom = new_zoom;
@@ -2457,6 +2537,10 @@ impl ViewerState {
                 });
         });
         ui.checkbox(&mut self.use_gpu_rendering, "GPU rendering");
+        let mut hide_clouds = !self.show_clouds;
+        if ui.checkbox(&mut hide_clouds, "Hide clouds").changed() {
+            self.show_clouds = !hide_clouds;
+        }
         ui.checkbox(&mut self.show_polar_circle, "Show polar circle");
         ui.checkbox(&mut self.single_color_per_constellation, "Monochrome");
         ui.checkbox(&mut self.follow_satellite, "Follow satellite");
@@ -2557,6 +2641,27 @@ impl ViewerState {
                 });
                 ctx.request_repaint();
             });
+        }
+    }
+
+    fn load_cloud_texture(&mut self, _ctx: &egui::Context) {
+        let res = self.texture_resolution;
+        if self.cloud_textures.contains_key(&res) {
+            return;
+        }
+
+        let filename = match res.cloud_filename() {
+            Some(f) => f,
+            None => return,
+        };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Ok(bytes) = std::fs::read(asset_path(filename)) {
+                if let Ok(texture) = EarthTexture::from_bytes(&bytes) {
+                    self.cloud_textures.insert(res, Arc::new(texture));
+                }
+            }
         }
     }
 }
@@ -2792,12 +2897,21 @@ impl eframe::App for App {
             v.load_texture_for_body(*body, *skin, ctx);
         }
 
+        if v.show_clouds {
+            v.load_cloud_texture(ctx);
+        }
+
         if let Some(gl) = frame.gl() {
             if let Some(ref sphere_renderer) = v.sphere_renderer {
                 let mut renderer = sphere_renderer.lock();
                 for (body, skin, res) in &bodies_needed {
                     if let Some(tex) = v.planet_textures.get(&(*body, *skin, *res)) {
                         renderer.upload_texture(gl, (*body, *skin, *res), tex);
+                    }
+                }
+                if v.show_clouds {
+                    if let Some(cloud_tex) = v.cloud_textures.get(&tex_res) {
+                        renderer.upload_cloud_texture(gl, tex_res, cloud_tex);
                     }
                 }
             }
@@ -3535,6 +3649,7 @@ fn draw_3d_view(
     body_rotation: &Matrix3<f64>,
     earth_fixed_camera: bool,
     use_gpu_rendering: bool,
+    show_clouds: bool,
 ) -> (Matrix3<f64>, f64) {
     let max_altitude = constellations.iter()
         .map(|(c, _, _, _, _)| c.altitude_km)
@@ -3571,7 +3686,7 @@ fn draw_3d_view(
         let callback = egui::PaintCallback {
             rect,
             callback: Arc::new(egui_glow::CallbackFn::new(move |_info, painter| {
-                renderer.lock().paint(painter.gl(), key, &inv_rotation, flat as f64, aspect, scale, atmosphere);
+                renderer.lock().paint(painter.gl(), key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds);
             })),
         };
         ui.painter().add(callback);
