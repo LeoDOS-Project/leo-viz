@@ -739,6 +739,8 @@ struct WalkerConstellation {
     altitude_km: f64,
     inclination_deg: f64,
     phasing: f64,
+    raan_offset_deg: f64,
+    raan_spacing_deg: Option<f64>,
     planet_radius: f64,
     planet_mu: f64,
     planet_j2: f64,
@@ -751,9 +753,21 @@ impl WalkerConstellation {
     }
 
     fn raan_spread(&self) -> f64 {
-        match self.walker_type {
-            WalkerType::Delta => 2.0 * PI,
-            WalkerType::Star => PI,
+        if let Some(spacing) = self.raan_spacing_deg {
+            spacing.to_radians() * (self.num_planes - 1) as f64
+        } else {
+            match self.walker_type {
+                WalkerType::Delta => 2.0 * PI,
+                WalkerType::Star => PI,
+            }
+        }
+    }
+
+    fn raan_step(&self) -> f64 {
+        if let Some(spacing) = self.raan_spacing_deg {
+            spacing.to_radians()
+        } else {
+            self.raan_spread() / self.num_planes as f64
         }
     }
 
@@ -763,11 +777,11 @@ impl WalkerConstellation {
         let orbit_radius = self.planet_radius + self.altitude_km;
         let period = 2.0 * PI * (orbit_radius.powi(3) / self.planet_mu).sqrt();
         let mean_motion = 2.0 * PI / period;
-        let raan_spread = self.raan_spread();
         let inc = self.inclination_deg.to_radians();
         let inc_cos = inc.cos();
         let inc_sin = inc.sin();
-        let raan_step = raan_spread / self.num_planes as f64;
+        let raan_step = self.raan_step();
+        let raan_offset = -self.raan_offset_deg.to_radians();
         let sat_step = 2.0 * PI / sats_per_plane as f64;
         let is_star = self.walker_type == WalkerType::Star;
 
@@ -776,8 +790,13 @@ impl WalkerConstellation {
         let r_ratio = self.planet_equatorial_radius / orbit_radius;
         let raan_drift_rate = -1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion * inc_cos;
 
+        let center_offset = if self.raan_spacing_deg.is_some() {
+            raan_step * (self.num_planes - 1) as f64 / 2.0
+        } else {
+            0.0
+        };
         for plane in 0..self.num_planes {
-            let raan_initial = raan_step * plane as f64;
+            let raan_initial = raan_offset + raan_step * plane as f64 - center_offset;
             let raan = raan_initial + raan_drift_rate * time;
             let raan_cos = raan.cos();
             let raan_sin = raan.sin();
@@ -811,9 +830,10 @@ impl WalkerConstellation {
             }
         }
 
+        let no_wrap = is_star || self.raan_spacing_deg.is_some();
         for i in 0..positions.len() {
             let sat = &positions[i];
-            if is_star && sat.plane == self.num_planes - 1 {
+            if no_wrap && sat.plane == self.num_planes - 1 {
                 continue;
             }
             let next_plane = (sat.plane + 1) % self.num_planes;
@@ -840,7 +860,13 @@ impl WalkerConstellation {
         let inc = self.inclination_deg.to_radians();
         let raan_drift_rate = -1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion * inc.cos();
 
-        let raan_initial = (self.raan_spread() / self.num_planes as f64) * plane as f64;
+        let raan_step = self.raan_step();
+        let center_offset = if self.raan_spacing_deg.is_some() {
+            raan_step * (self.num_planes - 1) as f64 / 2.0
+        } else {
+            0.0
+        };
+        let raan_initial = -self.raan_offset_deg.to_radians() + raan_step * plane as f64 - center_offset;
         let raan = raan_initial + raan_drift_rate * time;
         let inc_cos = inc.cos();
         let inc_sin = inc.sin();
@@ -1110,6 +1136,8 @@ struct ConstellationConfig {
     inclination: f64,
     walker_type: WalkerType,
     phasing: f64,
+    raan_offset: f64,
+    raan_spacing: Option<f64>,
     preset: Preset,
     color_offset: usize,
     hidden: bool,
@@ -1124,6 +1152,8 @@ impl ConstellationConfig {
             inclination: 90.0,
             walker_type: WalkerType::Delta,
             phasing: 0.0,
+            raan_offset: 0.0,
+            raan_spacing: None,
             preset: Preset::None,
             color_offset,
             hidden: false,
@@ -1142,6 +1172,8 @@ impl ConstellationConfig {
             altitude_km: self.altitude_km,
             inclination_deg: self.inclination,
             phasing: self.phasing,
+            raan_offset_deg: self.raan_offset,
+            raan_spacing_deg: self.raan_spacing,
             planet_radius,
             planet_mu,
             planet_j2,
@@ -1994,6 +2026,29 @@ impl ViewerState {
                     });
 
                     ui.horizontal(|ui| {
+                        ui.label("RAAN₀:");
+                        if ui.add(egui::DragValue::new(&mut cons.raan_offset).range(-180.0..=180.0).suffix("°").speed(1.0)).changed() {
+                            cons.preset = Preset::None;
+                        }
+                        let default_spacing = match cons.walker_type {
+                            WalkerType::Delta => 360.0 / cons.num_planes as f64,
+                            WalkerType::Star => 180.0 / cons.num_planes as f64,
+                        };
+                        let mut custom_spacing = cons.raan_spacing.is_some();
+                        if ui.checkbox(&mut custom_spacing, "Δ:").changed() {
+                            cons.raan_spacing = if custom_spacing { Some(default_spacing) } else { None };
+                            cons.preset = Preset::None;
+                        }
+                        if let Some(ref mut spacing) = cons.raan_spacing {
+                            if ui.add(egui::DragValue::new(spacing).range(0.1..=180.0).suffix("°").speed(0.5)).changed() {
+                                cons.preset = Preset::None;
+                            }
+                        } else {
+                            ui.weak(format!("{:.1}°", default_spacing));
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
                         let old_type = cons.walker_type;
                         ui.selectable_value(&mut cons.walker_type, WalkerType::Delta, "Delta");
                         ui.selectable_value(&mut cons.walker_type, WalkerType::Star, "Star");
@@ -2097,6 +2152,8 @@ impl ViewerState {
                     altitude_km: 550.0,
                     inclination_deg: 0.0,
                     phasing: 0.0,
+                    raan_offset_deg: 0.0,
+                    raan_spacing_deg: None,
                     planet_radius,
                     planet_mu,
                     planet_j2,
