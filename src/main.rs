@@ -369,6 +369,7 @@ struct SphereRenderer {
     vertex_array: glow::VertexArray,
     textures: HashMap<(CelestialBody, Skin, TextureResolution), glow::Texture>,
     cloud_textures: HashMap<TextureResolution, glow::Texture>,
+    night_texture: Option<glow::Texture>,
 }
 
 impl SphereRenderer {
@@ -403,12 +404,15 @@ impl SphereRenderer {
 
                 uniform sampler2D u_texture;
                 uniform sampler2D u_clouds;
+                uniform sampler2D u_night;
                 uniform mat3 u_inv_rotation;
                 uniform float u_flattening;
                 uniform float u_aspect;
                 uniform float u_scale;
                 uniform float u_atmosphere;
                 uniform float u_show_clouds;
+                uniform float u_show_day_night;
+                uniform vec3 u_sun_dir;
 
                 const float PI = 3.14159265359;
                 const vec3 ATMO_COLOR = vec3(0.4, 0.7, 1.0);
@@ -461,22 +465,34 @@ impl SphereRenderer {
                     float tex_u = (lon + PI) / (2.0 * PI);
                     float tex_v = (PI / 2.0 - lat) / PI;
 
-                    vec3 color = texture(u_texture, vec2(tex_u, tex_v)).rgb;
+                    vec3 day_color = texture(u_texture, vec2(tex_u, tex_v)).rgb;
 
                     if (u_show_clouds > 0.5) {
                         float cloud = texture(u_clouds, vec2(tex_u, tex_v)).r;
-                        color = mix(color, vec3(1.0), cloud);
+                        day_color = mix(day_color, vec3(1.0), cloud);
                     }
 
                     vec3 normal = normalize(vec3(world_pt.x, world_pt.y / b2, world_pt.z));
-                    float shade = 0.3 + 0.7 * max(dot(normal, -D), 0.0);
-                    color *= shade;
+
+                    vec3 color;
+                    float sun_dot = dot(normal, u_sun_dir);
+                    if (u_show_day_night > 0.5) {
+                        float day_factor = smoothstep(-0.1, 0.1, sun_dot);
+                        float shade = 0.2 + 0.8 * max(sun_dot, 0.0);
+                        vec3 lit_day = day_color * shade;
+                        vec3 night_lights = texture(u_night, vec2(tex_u, tex_v)).rgb;
+                        color = mix(night_lights, lit_day, day_factor);
+                    } else {
+                        float shade = 0.3 + 0.7 * max(dot(normal, -D), 0.0);
+                        color = day_color * shade;
+                    }
 
                     if (u_atmosphere > 0.0) {
                         float fresnel = 1.0 - max(dot(normal, -D), 0.0);
                         fresnel = pow(fresnel, 3.0);
                         float rim = fresnel * 0.6 * u_atmosphere;
-                        color = mix(color, ATMO_COLOR, rim);
+                        float atmo_sun = u_show_day_night > 0.5 ? max(sun_dot + 0.3, 0.0) : 1.0;
+                        color = mix(color, ATMO_COLOR * atmo_sun, rim);
                     }
 
                     out_color = vec4(color, 1.0);
@@ -523,7 +539,40 @@ impl SphereRenderer {
                 vertex_array,
                 textures: HashMap::new(),
                 cloud_textures: HashMap::new(),
+                night_texture: None,
             }
+        }
+    }
+
+    fn upload_night_texture(&mut self, gl: &glow::Context, night_tex: &EarthTexture) {
+        unsafe {
+            if self.night_texture.is_some() {
+                return;
+            }
+
+            let texture = gl.create_texture().expect("Cannot create texture");
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+
+            let pixels: Vec<u8> = night_tex.pixels.iter()
+                .flat_map(|&[r, g, b]| [r, g, b])
+                .collect();
+
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGB as i32,
+                night_tex.width as i32,
+                night_tex.height as i32,
+                0,
+                glow::RGB,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(&pixels)),
+            );
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::REPEAT as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+            self.night_texture = Some(texture);
         }
     }
 
@@ -605,6 +654,8 @@ impl SphereRenderer {
         scale: f32,
         atmosphere: f32,
         show_clouds: bool,
+        show_day_night: bool,
+        sun_dir: [f32; 3],
     ) {
         let Some(texture) = self.textures.get(&key) else { return };
 
@@ -622,6 +673,12 @@ impl SphereRenderer {
                 gl.bind_texture(glow::TEXTURE_2D, Some(*ct));
             }
             gl.uniform_1_i32(gl.get_uniform_location(self.program, "u_clouds").as_ref(), 1);
+
+            gl.active_texture(glow::TEXTURE2);
+            if let Some(nt) = self.night_texture {
+                gl.bind_texture(glow::TEXTURE_2D, Some(nt));
+            }
+            gl.uniform_1_i32(gl.get_uniform_location(self.program, "u_night").as_ref(), 2);
 
             let rot_data: [f32; 9] = [
                 inv_rotation[(0, 0)] as f32, inv_rotation[(1, 0)] as f32, inv_rotation[(2, 0)] as f32,
@@ -641,6 +698,10 @@ impl SphereRenderer {
             let clouds_enabled = show_clouds && cloud_tex.is_some() && key.0 == CelestialBody::Earth;
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_show_clouds").as_ref(), if clouds_enabled { 1.0 } else { 0.0 });
 
+            let day_night_enabled = show_day_night && self.night_texture.is_some() && key.0 == CelestialBody::Earth;
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_show_day_night").as_ref(), if day_night_enabled { 1.0 } else { 0.0 });
+            gl.uniform_3_f32(gl.get_uniform_location(self.program, "u_sun_dir").as_ref(), sun_dir[0], sun_dir[1], sun_dir[2]);
+
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
 
@@ -657,6 +718,9 @@ impl SphereRenderer {
             }
             for texture in self.cloud_textures.values() {
                 gl.delete_texture(*texture);
+            }
+            if let Some(nt) = self.night_texture {
+                gl.delete_texture(nt);
             }
         }
     }
@@ -1340,6 +1404,9 @@ struct ViewerState {
     last_cycle_time: f64,
     use_gpu_rendering: bool,
     show_clouds: bool,
+    show_day_night: bool,
+    show_terminator: bool,
+    night_texture: Option<Arc<EarthTexture>>,
     sphere_renderer: Option<Arc<Mutex<SphereRenderer>>>,
     #[cfg(not(target_arch = "wasm32"))]
     tle_fetch_tx: mpsc::Sender<(TlePreset, Result<Vec<TleSatellite>, String>)>,
@@ -1432,6 +1499,9 @@ impl App {
                 last_cycle_time: 0.0,
                 use_gpu_rendering: true,
                 show_clouds: true,
+                show_day_night: false,
+                show_terminator: false,
+                night_texture: None,
                 sphere_renderer: Some(sphere_renderer),
                 #[cfg(not(target_arch = "wasm32"))]
                 tle_fetch_tx,
@@ -2087,6 +2157,7 @@ impl ViewerState {
             let fixed_sizes = self.fixed_sizes;
             let flattening = celestial_body.flattening();
             let show_polar_circle = self.show_polar_circle;
+            let show_terminator = self.show_terminator && self.show_day_night;
 
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
@@ -2124,12 +2195,29 @@ impl ViewerState {
                         fixed_sizes,
                         flattening,
                         show_polar_circle,
+                        show_terminator,
                         self.sphere_renderer.as_ref(),
                         (celestial_body, skin, tex_res),
                         &body_y_rotation,
                         self.earth_fixed_camera,
                         self.use_gpu_rendering,
                         self.show_clouds,
+                        self.show_day_night,
+                        {
+                            use chrono::Datelike;
+                            let timestamp = self.start_timestamp + chrono::Duration::seconds(self.time as i64);
+                            let day_of_year = timestamp.ordinal() as f64;
+                            let declination: f64 = -23.45 * ((360.0_f64 / 365.0) * (day_of_year + 10.0)).to_radians().cos();
+                            let decl_rad = declination.to_radians();
+                            let sun_ra = ((day_of_year - 80.0) * 360.0 / 365.0).to_radians();
+                            let sun_inertial = Vector3::new(
+                                decl_rad.cos() * sun_ra.cos(),
+                                decl_rad.sin(),
+                                -decl_rad.cos() * sun_ra.sin(),
+                            );
+                            let sun_shader = body_y_rotation.transpose() * sun_inertial;
+                            [sun_shader.x as f32, sun_shader.y as f32, sun_shader.z as f32]
+                        },
                         self.time,
                     );
                     self.rotation = rot;
@@ -2221,6 +2309,7 @@ impl ViewerState {
             let fixed_sizes = self.fixed_sizes;
             let flattening = celestial_body.flattening();
             let show_polar_circle = self.show_polar_circle;
+            let show_terminator = self.show_terminator && self.show_day_night;
 
             let planet = &mut self.tabs[tab_idx].planets[planet_idx];
             let (rot, new_zoom) = draw_3d_view(
@@ -2256,12 +2345,29 @@ impl ViewerState {
                 fixed_sizes,
                 flattening,
                 show_polar_circle,
+                show_terminator,
                 self.sphere_renderer.as_ref(),
                 (celestial_body, skin, tex_res),
                 &body_y_rotation,
                 self.earth_fixed_camera,
                 self.use_gpu_rendering,
                 self.show_clouds,
+                self.show_day_night,
+                {
+                    use chrono::Datelike;
+                    let timestamp = self.start_timestamp + chrono::Duration::seconds(self.time as i64);
+                    let day_of_year = timestamp.ordinal() as f64;
+                    let declination: f64 = -23.45 * ((360.0_f64 / 365.0) * (day_of_year + 10.0)).to_radians().cos();
+                    let decl_rad = declination.to_radians();
+                    let sun_ra = ((day_of_year - 80.0) * 360.0 / 365.0).to_radians();
+                    let sun_inertial = Vector3::new(
+                        decl_rad.cos() * sun_ra.cos(),
+                        decl_rad.sin(),
+                        -decl_rad.cos() * sun_ra.sin(),
+                    );
+                    let sun_shader = body_y_rotation.transpose() * sun_inertial;
+                    [sun_shader.x as f32, sun_shader.y as f32, sun_shader.z as f32]
+                },
                 self.time,
             );
             self.rotation = rot;
@@ -2472,54 +2578,21 @@ impl ViewerState {
         ui.checkbox(&mut self.show_camera_windows, "Show camera windows");
 
         ui.add_space(5.0);
-        ui.label(egui::RichText::new("Rendering").strong());
-        ui.checkbox(&mut self.dark_mode, "Dark mode");
-        ui.checkbox(&mut self.render_planet, "Render planet");
-        ui.horizontal(|ui| {
-            ui.label("Texture:");
-            egui::ComboBox::from_id_salt("tex_res")
-                .selected_text(self.texture_resolution.label())
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R512, "512");
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R1024, "1K");
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R2048, "2K");
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R8192, "8K");
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R21504, "21K");
-                });
-        });
-        ui.checkbox(&mut self.use_gpu_rendering, "GPU rendering");
-        let mut hide_clouds = !self.show_clouds;
-        if ui.checkbox(&mut hide_clouds, "Hide clouds").changed() {
-            self.show_clouds = !hide_clouds;
-        }
-        ui.checkbox(&mut self.show_axes, "Show axes");
-        ui.checkbox(&mut self.show_polar_circle, "Show polar circle");
-        let mut show_behind = !self.hide_behind_earth;
-        if ui.checkbox(&mut show_behind, "Show behind planet").changed() {
-            self.hide_behind_earth = !show_behind;
-        }
-        ui.checkbox(&mut self.single_color_per_constellation, "Monochrome");
-        ui.horizontal(|ui| {
-            ui.label("Sat:");
-            ui.add(egui::DragValue::new(&mut self.sat_radius).range(1.0..=15.0).speed(0.1));
-            ui.label("Link:");
-            ui.add(egui::DragValue::new(&mut self.link_width).range(0.1..=5.0).speed(0.1));
-        });
-        ui.checkbox(&mut self.fixed_sizes, "Fixed sizes (ignore alt)");
-
-        ui.add_space(5.0);
         ui.label(egui::RichText::new("Simulation").strong());
         let mut stop_time = !self.animate;
         ui.checkbox(&mut stop_time, "Stop time");
         self.animate = !stop_time;
         ui.horizontal(|ui| {
             ui.label("Speed:");
-            ui.add(egui::DragValue::new(&mut self.speed).range(0.1..=1000.0).speed(1.0));
+            ui.add(egui::DragValue::new(&mut self.speed).range(-1000.0..=1000.0).speed(1.0));
+            if ui.button("⏪").clicked() {
+                self.speed = -self.speed;
+            }
         });
         let start = self.start_timestamp;
         let real_timestamp = start + Duration::seconds(self.real_time as i64);
         ui.horizontal(|ui| {
-            ui.label("Time:");
+            ui.label("Time (UTC):");
             ui.add(
                 egui::DragValue::new(&mut self.time)
                     .speed(1.0)
@@ -2554,7 +2627,7 @@ impl ViewerState {
                     })
             );
         });
-        ui.label(format!("Real: {}", real_timestamp.format("%H:%M:%S %d/%m/%Y")));
+        ui.label(format!("Real (UTC): {}", real_timestamp.format("%H:%M:%S %d/%m/%Y")));
         if ui.button("Sync time").clicked() {
             self.time = self.real_time;
         }
@@ -2588,6 +2661,44 @@ impl ViewerState {
                 ui.add(egui::DragValue::new(&mut self.cycle_interval).range(1.0..=60.0).speed(0.5).suffix("s"));
             });
         }
+
+        ui.add_space(5.0);
+        ui.label(egui::RichText::new("Rendering").strong());
+        ui.checkbox(&mut self.dark_mode, "Dark mode");
+        ui.checkbox(&mut self.render_planet, "Render planet");
+        ui.horizontal(|ui| {
+            ui.label("Texture:");
+            egui::ComboBox::from_id_salt("tex_res")
+                .selected_text(self.texture_resolution.label())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R512, "512");
+                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R1024, "1K");
+                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R2048, "2K");
+                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R8192, "8K");
+                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R21504, "21K");
+                });
+        });
+        ui.checkbox(&mut self.use_gpu_rendering, "GPU rendering");
+        let mut hide_clouds = !self.show_clouds;
+        if ui.checkbox(&mut hide_clouds, "Hide clouds").changed() {
+            self.show_clouds = !hide_clouds;
+        }
+        ui.checkbox(&mut self.show_day_night, "Day/night cycle");
+        ui.add_enabled(self.show_day_night, egui::Checkbox::new(&mut self.show_terminator, "Show terminator"));
+        ui.checkbox(&mut self.show_axes, "Show axes");
+        ui.checkbox(&mut self.show_polar_circle, "Show polar circle");
+        let mut show_behind = !self.hide_behind_earth;
+        if ui.checkbox(&mut show_behind, "Show behind planet").changed() {
+            self.hide_behind_earth = !show_behind;
+        }
+        ui.checkbox(&mut self.single_color_per_constellation, "Monochrome");
+        ui.horizontal(|ui| {
+            ui.label("Sat:");
+            ui.add(egui::DragValue::new(&mut self.sat_radius).range(1.0..=15.0).speed(0.1));
+            ui.label("Link:");
+            ui.add(egui::DragValue::new(&mut self.link_width).range(0.1..=5.0).speed(0.1));
+        });
+        ui.checkbox(&mut self.fixed_sizes, "Fixed sizes (ignore alt)");
 
         ui.add_space(10.0);
         ui.separator();
@@ -2670,6 +2781,22 @@ impl ViewerState {
             if let Ok(bytes) = std::fs::read(asset_path(filename)) {
                 if let Ok(texture) = EarthTexture::from_bytes(&bytes) {
                     self.cloud_textures.insert(res, Arc::new(texture));
+                }
+            }
+        }
+    }
+
+    fn load_night_texture(&mut self, _ctx: &egui::Context) {
+        if self.night_texture.is_some() {
+            return;
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let filename = "Earth16K/Earth_Сities_16k.png";
+            if let Ok(bytes) = std::fs::read(asset_path(filename)) {
+                if let Ok(texture) = EarthTexture::from_bytes(&bytes) {
+                    self.night_texture = Some(Arc::new(texture));
                 }
             }
         }
@@ -2911,6 +3038,10 @@ impl eframe::App for App {
             v.load_cloud_texture(ctx);
         }
 
+        if v.show_day_night {
+            v.load_night_texture(ctx);
+        }
+
         if let Some(gl) = frame.gl() {
             if let Some(ref sphere_renderer) = v.sphere_renderer {
                 let mut renderer = sphere_renderer.lock();
@@ -2922,6 +3053,11 @@ impl eframe::App for App {
                 if v.show_clouds {
                     if let Some(cloud_tex) = v.cloud_textures.get(&tex_res) {
                         renderer.upload_cloud_texture(gl, tex_res, cloud_tex);
+                    }
+                }
+                if v.show_day_night {
+                    if let Some(night_tex) = &v.night_texture {
+                        renderer.upload_night_texture(gl, night_tex);
                     }
                 }
             }
@@ -3655,12 +3791,15 @@ fn draw_3d_view(
     fixed_sizes: bool,
     flattening: f64,
     show_polar_circle: bool,
+    show_terminator: bool,
     sphere_renderer: Option<&Arc<Mutex<SphereRenderer>>>,
     body_key: (CelestialBody, Skin, TextureResolution),
     body_rotation: &Matrix3<f64>,
     earth_fixed_camera: bool,
     use_gpu_rendering: bool,
     show_clouds: bool,
+    show_day_night: bool,
+    sun_dir: [f32; 3],
     time: f64,
 ) -> (Matrix3<f64>, f64) {
     let max_altitude = constellations.iter()
@@ -3698,7 +3837,7 @@ fn draw_3d_view(
         let callback = egui::PaintCallback {
             rect,
             callback: Arc::new(egui_glow::CallbackFn::new(move |_info, painter| {
-                renderer.lock().paint(painter.gl(), key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds);
+                renderer.lock().paint(painter.gl(), key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir);
             })),
         };
         ui.painter().add(callback);
@@ -3836,6 +3975,35 @@ fn draw_3d_view(
                 plot_ui.line(Line::new("", circle_pts)
                     .color(egui::Color32::from_rgb(255, 200, 50))
                     .width(1.0));
+            }
+
+            if show_terminator {
+                let sun = Vector3::new(sun_dir[0] as f64, sun_dir[1] as f64, sun_dir[2] as f64).normalize();
+                let up = if sun.y.abs() > 0.9 {
+                    Vector3::new(1.0, 0.0, 0.0)
+                } else {
+                    Vector3::new(0.0, 1.0, 0.0)
+                };
+                let u = sun.cross(&up).normalize();
+                let v = sun.cross(&u).normalize();
+                let term_rotation = if earth_fixed_camera {
+                    rotation
+                } else {
+                    rotation * *body_rotation
+                };
+                let terminator_pts: PlotPoints = (0..=100)
+                    .map(|i| {
+                        let theta = 2.0 * PI * i as f64 / 100.0;
+                        let x = planet_radius * (u.x * theta.cos() + v.x * theta.sin());
+                        let y = planet_radius * (u.y * theta.cos() + v.y * theta.sin());
+                        let z = planet_radius * (u.z * theta.cos() + v.z * theta.sin());
+                        let (sx, sy, _) = rotate_point_matrix(x, y, z, &term_rotation);
+                        [sx, sy]
+                    })
+                    .collect();
+                plot_ui.line(Line::new("", terminator_pts)
+                    .color(egui::Color32::from_rgb(255, 180, 0))
+                    .width(2.0));
             }
         } else {
             let earth_pts: PlotPoints = (0..=100)
