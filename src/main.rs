@@ -882,7 +882,7 @@ impl WalkerConstellation {
                 let y = -y_orbital * inc_sin;
 
                 let lat = (y / orbit_radius).asin().to_degrees();
-                let lon = z.atan2(x).to_degrees();
+                let lon = -z.atan2(x).to_degrees();
 
                 positions.push(SatelliteState {
                     plane,
@@ -1267,6 +1267,7 @@ struct GroundStation {
     name: String,
     lat: f64,
     lon: f64,
+    radius_km: f64,
     color: egui::Color32,
 }
 
@@ -1277,6 +1278,7 @@ struct AreaOfInterest {
     lon: f64,
     radius_km: f64,
     color: egui::Color32,
+    ground_station_idx: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -1349,7 +1351,7 @@ impl PlanetConfig {
 
                 let r = (x * x + y * y + z * z).sqrt();
                 let lat = (y / r).asin().to_degrees();
-                let lon = z.atan2(x).to_degrees();
+                let lon = -z.atan2(x).to_degrees();
 
                 let ascending = prediction.velocity[2] > 0.0;
 
@@ -1392,6 +1394,7 @@ struct TabSettings {
     show_routing_paths: bool,
     show_manhattan_path: bool,
     show_shortest_path: bool,
+    show_asc_desc_colors: bool,
     show_torus: bool,
     show_ground_track: bool,
     show_axes: bool,
@@ -1413,6 +1416,7 @@ impl Default for TabSettings {
             show_routing_paths: false,
             show_manhattan_path: true,
             show_shortest_path: true,
+            show_asc_desc_colors: false,
             show_torus: false,
             show_ground_track: false,
             show_axes: false,
@@ -1456,8 +1460,7 @@ impl TabConfig {
 
     fn add_planet(&mut self) {
         self.planet_counter += 1;
-        let mut planet = PlanetConfig::new(format!("Planet {}", self.planet_counter));
-        planet.add_constellation();
+        let planet = PlanetConfig::new(format!("Planet {}", self.planet_counter));
         self.planets.push(planet);
     }
 }
@@ -1510,6 +1513,7 @@ struct ViewerState {
     show_routing_paths: bool,
     show_manhattan_path: bool,
     show_shortest_path: bool,
+    show_asc_desc_colors: bool,
     show_camera_windows: bool,
     render_planet: bool,
     show_polar_circle: bool,
@@ -1583,7 +1587,7 @@ impl App {
                 zoom: 1.0,
                 torus_zoom: 1.0,
                 vertical_split: 0.6,
-                sat_radius: 5.0,
+                sat_radius: 1.5,
                 rotation: lat_lon_to_matrix(0.0, 0.0),
                 torus_rotation: torus_initial,
                 planet_textures: {
@@ -1605,6 +1609,7 @@ impl App {
                 show_routing_paths: false,
                 show_manhattan_path: true,
                 show_shortest_path: true,
+                show_asc_desc_colors: false,
                 show_camera_windows: false,
                 render_planet: true,
                 show_polar_circle: false,
@@ -1613,7 +1618,7 @@ impl App {
                 start_timestamp: Utc::now(),
                 show_side_panel: true,
                 pending_add_tab: None,
-                link_width: 1.0,
+                link_width: 0.25,
                 fixed_sizes: false,
                 earth_fixed_camera: false,
                 current_gmst: 0.0,
@@ -1716,6 +1721,7 @@ impl ViewerState {
                                 ui.checkbox(&mut s.show_shortest_path, "Shortest (green)");
                             });
                         }
+                        ui.checkbox(&mut s.show_asc_desc_colors, "Asc/Desc colors");
                         ui.checkbox(&mut s.show_torus, "Show torus");
                         ui.checkbox(&mut s.show_ground_track, "Show ground");
                         ui.checkbox(&mut s.show_axes, "Show axes");
@@ -1892,6 +1898,12 @@ impl ViewerState {
                             if ui.add(egui::DragValue::new(&mut gs.lon).range(-180.0..=180.0).speed(0.5).suffix("°")).changed() {
                                 gs_changed = true;
                             }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Radius:");
+                            if ui.add(egui::DragValue::new(&mut gs.radius_km).range(1.0..=5000.0).speed(10.0).suffix(" km")).changed() {
+                                gs_changed = true;
+                            }
                             if ui.color_edit_button_srgba(&mut gs.color).changed() {
                                 gs_changed = true;
                             }
@@ -1909,6 +1921,7 @@ impl ViewerState {
                             name: format!("GS{}", ground_stations.len() + 1),
                             lat: 0.0,
                             lon: 0.0,
+                            radius_km: 500.0,
                             color: egui::Color32::from_rgb(255, 100, 100),
                         });
                         gs_changed = true;
@@ -1943,6 +1956,27 @@ impl ViewerState {
                                 aoi_to_remove = Some(idx);
                             }
                         });
+                        ui.horizontal(|ui| {
+                            ui.label("GS:");
+                            let gs_label = aoi.ground_station_idx
+                                .and_then(|i| ground_stations.get(i))
+                                .map(|gs| gs.name.as_str())
+                                .unwrap_or("None");
+                            egui::ComboBox::from_id_salt(format!("aoi_gs_{}", idx))
+                                .selected_text(gs_label)
+                                .show_ui(ui, |ui| {
+                                    if ui.selectable_label(aoi.ground_station_idx.is_none(), "None").clicked() {
+                                        aoi.ground_station_idx = None;
+                                        aoi_changed = true;
+                                    }
+                                    for (gs_idx, gs) in ground_stations.iter().enumerate() {
+                                        if ui.selectable_label(aoi.ground_station_idx == Some(gs_idx), &gs.name).clicked() {
+                                            aoi.ground_station_idx = Some(gs_idx);
+                                            aoi_changed = true;
+                                        }
+                                    }
+                                });
+                        });
                     }
                     if let Some(idx) = aoi_to_remove {
                         areas_of_interest.remove(idx);
@@ -1955,6 +1989,7 @@ impl ViewerState {
                             lon: 0.0,
                             radius_km: 500.0,
                             color: egui::Color32::from_rgba_unmultiplied(100, 200, 100, 100),
+                            ground_station_idx: None,
                         });
                         aoi_changed = true;
                     }
@@ -2407,6 +2442,7 @@ impl ViewerState {
             let show_routing_paths = if use_local { local.show_routing_paths } else { self.show_routing_paths };
             let show_manhattan_path = if use_local { local.show_manhattan_path } else { self.show_manhattan_path };
             let show_shortest_path = if use_local { local.show_shortest_path } else { self.show_shortest_path };
+            let show_asc_desc_colors = if use_local { local.show_asc_desc_colors } else { self.show_asc_desc_colors };
             let render_planet = if use_local { local.render_planet } else { self.render_planet };
             let tex_res = self.texture_resolution;
             let planet_handle = self.planet_image_handles.get(&(celestial_body, skin, tex_res));
@@ -2449,6 +2485,7 @@ impl ViewerState {
                         show_routing_paths,
                         show_manhattan_path,
                         show_shortest_path,
+                        show_asc_desc_colors,
                         planet_radius,
                         render_planet,
                         link_width,
@@ -2481,6 +2518,7 @@ impl ViewerState {
                         self.time,
                         &planet.ground_stations,
                         &planet.areas_of_interest,
+                        body_rot_angle,
                     );
                     self.rotation = rot;
                     self.zoom = new_zoom;
@@ -2506,6 +2544,7 @@ impl ViewerState {
                         show_routing_paths,
                         show_manhattan_path,
                         show_shortest_path,
+                        show_asc_desc_colors,
                         planet_radius,
                         &mut planet.pending_cameras,
                         &mut self.camera_id_counter,
@@ -2564,6 +2603,7 @@ impl ViewerState {
             let show_routing_paths = if use_local { local.show_routing_paths } else { self.show_routing_paths };
             let show_manhattan_path = if use_local { local.show_manhattan_path } else { self.show_manhattan_path };
             let show_shortest_path = if use_local { local.show_shortest_path } else { self.show_shortest_path };
+            let show_asc_desc_colors = if use_local { local.show_asc_desc_colors } else { self.show_asc_desc_colors };
             let render_planet = if use_local { local.render_planet } else { self.render_planet };
             let tex_res = self.texture_resolution;
             let planet_handle = self.planet_image_handles.get(&(celestial_body, skin, tex_res));
@@ -2601,6 +2641,7 @@ impl ViewerState {
                 show_routing_paths,
                 show_manhattan_path,
                 show_shortest_path,
+                show_asc_desc_colors,
                 planet_radius,
                 render_planet,
                 link_width,
@@ -2633,6 +2674,7 @@ impl ViewerState {
                 self.time,
                 &planet.ground_stations,
                 &planet.areas_of_interest,
+                body_rot_angle,
             );
             self.rotation = rot;
             self.zoom = new_zoom;
@@ -2693,6 +2735,7 @@ impl ViewerState {
                     show_routing_paths,
                     show_manhattan_path,
                     show_shortest_path,
+                    show_asc_desc_colors,
                     planet_radius,
                     &mut planet.pending_cameras,
                     &mut self.camera_id_counter,
@@ -2735,6 +2778,7 @@ impl ViewerState {
                     show_routing_paths,
                     show_manhattan_path,
                     show_shortest_path,
+                    show_asc_desc_colors,
                     planet_radius,
                     &mut planet.pending_cameras,
                     &mut self.camera_id_counter,
@@ -2843,14 +2887,15 @@ impl ViewerState {
 
         ui.add_space(5.0);
         ui.label(egui::RichText::new("Simulation").strong());
-        let mut stop_time = !self.animate;
-        ui.checkbox(&mut stop_time, "Stop time");
-        self.animate = !stop_time;
         ui.horizontal(|ui| {
             ui.label("Speed:");
             ui.add(egui::DragValue::new(&mut self.speed).range(-1000.0..=1000.0).speed(1.0));
             if ui.button("⏪").clicked() {
                 self.speed = -self.speed;
+            }
+            let pause_label = if self.animate { "⏸" } else { "▶" };
+            if ui.button(pause_label).clicked() {
+                self.animate = !self.animate;
             }
         });
         let start = self.start_timestamp;
@@ -2914,6 +2959,7 @@ impl ViewerState {
                 ui.checkbox(&mut self.show_shortest_path, "Shortest distance (green)");
             });
         }
+        ui.checkbox(&mut self.show_asc_desc_colors, "Asc/Desc colors");
         ui.checkbox(&mut self.show_coverage, "Show coverage");
         if self.show_coverage {
             ui.horizontal(|ui| {
@@ -3066,7 +3112,7 @@ impl ViewerState {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let filename = "textures/Earth16K/Earth_Сities_16k.png";
+            let filename = "textures/earth/Earth_Сities_16k.png";
             if let Ok(bytes) = std::fs::read(asset_path(filename)) {
                 if let Ok(texture) = EarthTexture::from_bytes(&bytes) {
                     self.night_texture = Some(Arc::new(texture));
@@ -4058,6 +4104,7 @@ fn draw_3d_view(
     show_routing_paths: bool,
     show_manhattan_path: bool,
     show_shortest_path: bool,
+    show_asc_desc_colors: bool,
     planet_radius: f64,
     render_planet: bool,
     link_width: f32,
@@ -4076,6 +4123,7 @@ fn draw_3d_view(
     time: f64,
     ground_stations: &[GroundStation],
     areas_of_interest: &[AreaOfInterest],
+    body_rot_angle: f64,
 ) -> (Matrix3<f64>, f64) {
     let max_altitude = constellations.iter()
         .map(|(c, _, _, _, _)| c.altitude_km)
@@ -4372,7 +4420,7 @@ fn draw_3d_view(
 
         for aoi in areas_of_interest {
             let lat = aoi.lat.to_radians();
-            let lon = aoi.lon.to_radians();
+            let lon = (-aoi.lon).to_radians();
             let angular_radius = aoi.radius_km / planet_radius;
 
             let aoi_pts: Vec<([f64; 2], bool)> = (0..=32)
@@ -4431,7 +4479,62 @@ fn draw_3d_view(
 
         for gs in ground_stations {
             let lat = gs.lat.to_radians();
-            let lon = gs.lon.to_radians();
+            let lon = (-gs.lon).to_radians();
+            let angular_radius = gs.radius_km / planet_radius;
+
+            let gs_pts: Vec<([f64; 2], bool)> = (0..=32)
+                .map(|i| {
+                    let angle = 2.0 * PI * i as f64 / 32.0;
+                    let clat = (lat.sin() * angular_radius.cos()
+                        + lat.cos() * angular_radius.sin() * angle.cos())
+                    .asin();
+                    let clon = lon
+                        + (angular_radius.sin() * angle.sin())
+                            .atan2(lat.cos() * angular_radius.cos()
+                                - lat.sin() * angular_radius.sin() * angle.cos());
+
+                    let x = planet_radius * clat.cos() * clon.cos();
+                    let y = planet_radius * clat.sin();
+                    let z = planet_radius * clat.cos() * clon.sin();
+
+                    let (rx, ry, rz) = rotate_point_matrix(x, y, z, &surface_rotation);
+                    ([rx, ry], rz >= 0.0)
+                })
+                .collect();
+
+            let all_visible = gs_pts.iter().all(|(_, vis)| *vis);
+            if all_visible {
+                let pts: Vec<[f64; 2]> = gs_pts.iter().map(|(p, _)| *p).collect();
+                let fill = egui::Color32::from_rgba_unmultiplied(
+                    gs.color.r(), gs.color.g(), gs.color.b(), 50
+                );
+                plot_ui.polygon(
+                    Polygon::new("", PlotPoints::new(pts))
+                        .fill_color(fill)
+                        .stroke(egui::Stroke::new(2.0, gs.color)),
+                );
+            } else {
+                let mut segment: Vec<[f64; 2]> = Vec::new();
+                for (pt, visible) in &gs_pts {
+                    if *visible {
+                        segment.push(*pt);
+                    } else if !segment.is_empty() {
+                        plot_ui.line(
+                            Line::new("", PlotPoints::new(std::mem::take(&mut segment)))
+                                .color(gs.color)
+                                .width(2.0),
+                        );
+                    }
+                }
+                if !segment.is_empty() {
+                    plot_ui.line(
+                        Line::new("", PlotPoints::new(segment))
+                            .color(gs.color)
+                            .width(2.0),
+                    );
+                }
+            }
+
             let x = planet_radius * lat.cos() * lon.cos();
             let y = planet_radius * lat.sin();
             let z = planet_radius * lat.cos() * lon.sin();
@@ -4450,6 +4553,102 @@ fn draw_3d_view(
                         .fill_color(gs.color)
                         .stroke(egui::Stroke::new(1.0, egui::Color32::WHITE)),
                 );
+            }
+        }
+
+        for aoi in areas_of_interest {
+            if let Some(gs_idx) = aoi.ground_station_idx {
+                if let Some(gs) = ground_stations.get(gs_idx) {
+                    let find_nearest_sat = |center_lat: f64, center_lon: f64, radius_km: f64, ascending_filter: Option<bool>|
+                        -> Option<(usize, &WalkerConstellation, &Vec<SatelliteState>, &SatelliteState)>
+                    {
+                        let center_lat_rad = center_lat.to_radians();
+                        let center_lon_rad = (-center_lon).to_radians() + body_rot_angle;
+                        let max_angular_dist = radius_km / planet_radius;
+
+                        let haversine_dist = |sat: &SatelliteState| -> f64 {
+                            let sat_lat_rad = sat.lat.to_radians();
+                            let sat_lon_rad = sat.lon.to_radians();
+                            let dlat = sat_lat_rad - center_lat_rad;
+                            let dlon = sat_lon_rad - center_lon_rad;
+                            let a = (dlat / 2.0).sin().powi(2)
+                                + center_lat_rad.cos() * sat_lat_rad.cos() * (dlon / 2.0).sin().powi(2);
+                            2.0 * a.sqrt().asin()
+                        };
+
+                        let mut best: Option<(usize, &WalkerConstellation, &Vec<SatelliteState>, &SatelliteState, f64)> = None;
+
+                        for (cidx, (cons, positions, _, is_tle, _)) in constellations.iter().enumerate() {
+                            if *is_tle { continue; }
+                            for sat in positions.iter() {
+                                if let Some(asc) = ascending_filter {
+                                    if sat.ascending != asc { continue; }
+                                }
+                                let dist = haversine_dist(sat);
+                                if dist <= max_angular_dist {
+                                    if best.is_none() || dist < best.as_ref().unwrap().4 {
+                                        best = Some((cidx, cons, positions, sat, dist));
+                                    }
+                                }
+                            }
+                        }
+
+                        best.map(|(cidx, cons, positions, sat, _)| (cidx, cons, positions, sat))
+                    };
+
+                    let aoi_asc = find_nearest_sat(aoi.lat, aoi.lon, aoi.radius_km, Some(true));
+                    let gs_asc = find_nearest_sat(gs.lat, gs.lon, gs.radius_km, Some(true));
+                    let (aoi_result, gs_result) = if aoi_asc.is_some() && gs_asc.is_some() {
+                        (aoi_asc, gs_asc)
+                    } else {
+                        let aoi_desc = find_nearest_sat(aoi.lat, aoi.lon, aoi.radius_km, Some(false));
+                        let gs_desc = find_nearest_sat(gs.lat, gs.lon, gs.radius_km, Some(false));
+                        (aoi_desc, gs_desc)
+                    };
+
+                    if let (Some((gs_cidx, gs_cons, gs_positions, gs_sat)),
+                            Some((aoi_cidx, _, _, aoi_sat))) = (gs_result, aoi_result)
+                    {
+                        let path_color = egui::Color32::from_rgb(255, 255, 0);
+
+                        if gs_cidx == aoi_cidx {
+                            let path = compute_shortest_path(
+                                gs_sat.plane, gs_sat.sat_index,
+                                aoi_sat.plane, aoi_sat.sat_index,
+                                gs_cons.num_planes, gs_cons.sats_per_plane(),
+                                gs_positions,
+                                gs_cons.walker_type == WalkerType::Star,
+                            );
+                            draw_routing_path(
+                                plot_ui, &path, gs_positions, &satellite_rotation,
+                                path_color, scaled_link_width + 1.0, hide_behind_earth, earth_r_sq,
+                            );
+                        } else {
+                            let (rx1, ry1, rz1) = rotate_point_matrix(gs_sat.x, gs_sat.y, gs_sat.z, &satellite_rotation);
+                            let (rx2, ry2, rz2) = rotate_point_matrix(aoi_sat.x, aoi_sat.y, aoi_sat.z, &satellite_rotation);
+
+                            let visible1 = rz1 >= 0.0 || (rx1 * rx1 + ry1 * ry1) >= earth_r_sq;
+                            let visible2 = rz2 >= 0.0 || (rx2 * rx2 + ry2 * ry2) >= earth_r_sq;
+
+                            if !hide_behind_earth || (visible1 && visible2) {
+                                plot_ui.line(
+                                    Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
+                                        .color(path_color)
+                                        .width(2.0),
+                                );
+                            }
+                        }
+
+                        let dot_size = scaled_sat_radius as f64 * 1.2;
+                        let (rx1, ry1, _) = rotate_point_matrix(gs_sat.x, gs_sat.y, gs_sat.z, &satellite_rotation);
+                        let (rx2, ry2, _) = rotate_point_matrix(aoi_sat.x, aoi_sat.y, aoi_sat.z, &satellite_rotation);
+                        plot_ui.points(
+                            Points::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
+                                .radius(dot_size as f32)
+                                .color(path_color),
+                        );
+                    }
+                }
             }
         }
 
@@ -4487,7 +4686,7 @@ fn draw_3d_view(
                 if *is_tle { continue; }
                 for plane in 0..constellation.num_planes {
                     let orbit_pts = constellation.orbit_points_3d(plane, time);
-                    let color = if show_routing_paths {
+                    let color = if show_routing_paths || show_asc_desc_colors {
                         egui::Color32::from_rgb(80, 80, 80)
                     } else {
                         plane_color(if single_color { *color_offset } else { plane + color_offset })
@@ -4519,7 +4718,7 @@ fn draw_3d_view(
         }
 
         if show_links {
-            let base_link_color = if show_routing_paths {
+            let base_link_color = if show_routing_paths || show_asc_desc_colors {
                 egui::Color32::from_rgb(80, 80, 80)
             } else {
                 egui::Color32::from_rgb(200, 200, 200)
@@ -4549,7 +4748,7 @@ fn draw_3d_view(
         }
 
         if show_intra_links {
-            let base_link_color = if show_routing_paths {
+            let base_link_color = if show_routing_paths || show_asc_desc_colors {
                 egui::Color32::from_rgb(80, 80, 80)
             } else {
                 egui::Color32::from_rgb(200, 200, 200)
@@ -4636,7 +4835,7 @@ fn draw_3d_view(
                             );
                             draw_routing_path(
                                 plot_ui, &path, positions, &satellite_rotation,
-                                manhattan_color, 2.5, hide_behind_earth, earth_r_sq,
+                                manhattan_color, scaled_link_width + 1.5, hide_behind_earth, earth_r_sq,
                             );
                         }
 
@@ -4650,7 +4849,7 @@ fn draw_3d_view(
                             );
                             draw_routing_path(
                                 plot_ui, &path, positions, &satellite_rotation,
-                                shortest_color, 2.0, hide_behind_earth, earth_r_sq,
+                                shortest_color, scaled_link_width + 1.0, hide_behind_earth, earth_r_sq,
                             );
                         }
                     }
@@ -4713,7 +4912,7 @@ fn draw_3d_view(
                     let is_tracked = satellite_cameras.iter().any(|c|
                         c.constellation_idx == *orig_idx && c.plane == sat.plane && c.sat_index == sat.sat_index
                     );
-                    let color = if show_routing_paths {
+                    let color = if show_asc_desc_colors {
                         if is_tracked {
                             if sat.ascending { COLOR_ASCENDING } else { COLOR_DESCENDING }
                         } else {
@@ -4957,6 +5156,7 @@ fn draw_torus(
     show_routing_paths: bool,
     show_manhattan_path: bool,
     show_shortest_path: bool,
+    show_asc_desc_colors: bool,
     planet_radius: f64,
     pending_cameras: &mut Vec<SatelliteCamera>,
     camera_id_counter: &mut usize,
@@ -5033,7 +5233,7 @@ fn draw_torus(
 
             for plane in 0..constellation.num_planes {
                 let angle = 2.0 * PI * plane as f64 / constellation.num_planes as f64;
-                let color = if show_routing_paths {
+                let color = if show_routing_paths || show_asc_desc_colors {
                     egui::Color32::from_rgb(80, 80, 80)
                 } else {
                     plane_color(if single_color { *color_offset } else { plane + color_offset })
@@ -5079,7 +5279,7 @@ fn draw_torus(
             }
 
             if show_links {
-                let base_link_color = if show_routing_paths {
+                let base_link_color = if show_routing_paths || show_asc_desc_colors {
                     egui::Color32::from_rgb(80, 80, 80)
                 } else {
                     egui::Color32::from_rgb(150, 150, 150)
@@ -5115,7 +5315,7 @@ fn draw_torus(
                     let is_tracked = satellite_cameras.iter().any(|c|
                         c.constellation_idx == *orig_idx && c.plane == sat.plane && c.sat_index == sat.sat_index
                     );
-                    let color = if show_routing_paths {
+                    let color = if show_asc_desc_colors {
                         if is_tracked {
                             if sat.ascending { COLOR_ASCENDING } else { COLOR_DESCENDING }
                         } else {
