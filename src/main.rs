@@ -5812,17 +5812,19 @@ fn draw_3d_view(
             let lat = (orig.y / planet_radius).asin().to_degrees();
             let lon = -(orig.z.atan2(orig.x)).to_degrees();
             let text = format!("{:.1}° {:.1}°", lat, lon);
-            ui.painter().text(
-                hover_pos + egui::Vec2::new(15.0, -15.0),
-                egui::Align2::LEFT_BOTTOM,
-                text,
-                egui::FontId::proportional(12.0),
-                egui::Color32::WHITE,
-            );
+            let font = egui::FontId::proportional(12.0);
+            let text_pos = hover_pos + egui::Vec2::new(15.0, -15.0);
+            let galley = ui.painter().layout_no_wrap(text, font, egui::Color32::WHITE);
+            let rect = egui::Rect::from_min_size(
+                text_pos - egui::Vec2::new(0.0, galley.size().y),
+                galley.size(),
+            ).expand(3.0);
+            ui.painter().rect_filled(rect, 3.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180));
+            ui.painter().galley(text_pos - egui::Vec2::new(0.0, galley.size().y), galley, egui::Color32::WHITE);
         }
     }
 
-    if response.response.dragged() {
+    if response.response.is_pointer_button_down_on() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     } else if !hovering_satellite {
         if let Some(hover_pos) = response.response.hover_pos() {
