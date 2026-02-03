@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::sync::{Arc, mpsc};
 use sgp4::Constants;
-use chrono::{DateTime, Utc, Duration};
+use chrono::{DateTime, Utc, Local, Duration};
 use glow::HasContext as _;
 
 fn asset_path(relative: &str) -> std::path::PathBuf {
@@ -1296,6 +1296,7 @@ struct PlanetConfig {
     tle_selections: HashMap<TlePreset, (bool, TleLoadState)>,
     ground_stations: Vec<GroundStation>,
     areas_of_interest: Vec<AreaOfInterest>,
+    show_planet: bool,
 }
 
 impl PlanetConfig {
@@ -1318,6 +1319,7 @@ impl PlanetConfig {
             tle_selections,
             ground_stations: Vec::new(),
             areas_of_interest: Vec::new(),
+            show_planet: true,
         }
     }
 
@@ -1517,7 +1519,6 @@ struct ViewerState {
     show_camera_windows: bool,
     render_planet: bool,
     show_polar_circle: bool,
-    last_max_planet_radius: f64,
     real_time: f64,
     start_timestamp: DateTime<Utc>,
     show_side_panel: bool,
@@ -1613,7 +1614,6 @@ impl App {
                 show_camera_windows: false,
                 render_planet: true,
                 show_polar_circle: false,
-                last_max_planet_radius: CelestialBody::Earth.radius_km(),
                 real_time: 0.0,
                 start_timestamp: Utc::now(),
                 show_side_panel: true,
@@ -1856,6 +1856,10 @@ impl ViewerState {
             if ui.selectable_label(show_places, "Places").clicked() {
                 self.tabs[tab_idx].planets[planet_idx].show_gs_aoi_window = !show_places;
             }
+            let show_planet = self.tabs[tab_idx].planets[planet_idx].show_planet;
+            if ui.selectable_label(show_planet, "🌍").clicked() {
+                self.tabs[tab_idx].planets[planet_idx].show_planet = !show_planet;
+            }
         });
 
         if remove_planet {
@@ -1864,6 +1868,9 @@ impl ViewerState {
 
         {
             let planet = &mut self.tabs[tab_idx].planets[planet_idx];
+            if new_body != planet.celestial_body {
+                self.zoom = 1.0;
+            }
             planet.celestial_body = new_body;
             if reset_skin {
                 planet.skin = Skin::Default;
@@ -2443,7 +2450,8 @@ impl ViewerState {
             let show_manhattan_path = if use_local { local.show_manhattan_path } else { self.show_manhattan_path };
             let show_shortest_path = if use_local { local.show_shortest_path } else { self.show_shortest_path };
             let show_asc_desc_colors = if use_local { local.show_asc_desc_colors } else { self.show_asc_desc_colors };
-            let render_planet = if use_local { local.render_planet } else { self.render_planet };
+            let render_planet = (if use_local { local.render_planet } else { self.render_planet })
+                && self.tabs[tab_idx].planets[planet_idx].show_planet;
             let tex_res = self.texture_resolution;
             let planet_handle = self.planet_image_handles.get(&(celestial_body, skin, tex_res));
             let time = self.time;
@@ -2604,7 +2612,8 @@ impl ViewerState {
             let show_manhattan_path = if use_local { local.show_manhattan_path } else { self.show_manhattan_path };
             let show_shortest_path = if use_local { local.show_shortest_path } else { self.show_shortest_path };
             let show_asc_desc_colors = if use_local { local.show_asc_desc_colors } else { self.show_asc_desc_colors };
-            let render_planet = if use_local { local.render_planet } else { self.render_planet };
+            let render_planet = (if use_local { local.render_planet } else { self.render_planet })
+                && self.tabs[tab_idx].planets[planet_idx].show_planet;
             let tex_res = self.texture_resolution;
             let planet_handle = self.planet_image_handles.get(&(celestial_body, skin, tex_res));
             let link_width = self.link_width;
@@ -2862,14 +2871,12 @@ impl ViewerState {
         }
         ui.horizontal(|ui| {
             if ui.button("N/S view").clicked() {
-                self.rotation = Matrix3::identity();
+                let (_, lon) = matrix_to_lat_lon(&self.rotation);
+                self.rotation = lat_lon_to_matrix(0.0, lon);
             }
             if ui.button("E/W view").clicked() {
-                self.rotation = Matrix3::new(
-                    1.0, 0.0, 0.0,
-                    0.0, 0.0, 1.0,
-                    0.0, -1.0, 0.0,
-                );
+                let (lat, _) = matrix_to_lat_lon(&self.rotation);
+                self.rotation = lat_lon_to_matrix(lat, 0.0);
             }
             if ui.button("Reset").clicked() {
                 self.rotation = Matrix3::identity();
@@ -2907,7 +2914,7 @@ impl ViewerState {
                 egui::DragValue::new(&mut self.time)
                     .speed(1.0)
                     .custom_formatter(|secs, _| {
-                        let ts = start + Duration::seconds(secs as i64);
+                        let ts = (start + Duration::seconds(secs as i64)).with_timezone(&Local);
                         ts.format("%H:%M:%S").to_string()
                     })
                     .custom_parser(|input| {
@@ -2917,8 +2924,8 @@ impl ViewerState {
                         let formats = ["%H:%M:%S", "%H:%M"];
                         for fmt in formats {
                             if let Ok(parsed) = chrono::NaiveTime::parse_from_str(input, fmt) {
-                                let current = current_ts.date_naive();
-                                let new_dt = current.and_time(parsed).and_utc();
+                                let current = current_ts.with_timezone(&Local).date_naive();
+                                let new_dt = current.and_time(parsed).and_local_timezone(Local).single()?.with_timezone(&Utc);
                                 let diff = new_dt.signed_duration_since(start);
                                 return Some(diff.num_seconds() as f64);
                             }
@@ -2931,13 +2938,14 @@ impl ViewerState {
                 egui::DragValue::new(&mut self.time)
                     .speed(86400.0)
                     .custom_formatter(|secs, _| {
-                        let ts = start + Duration::seconds(secs as i64);
+                        let ts = (start + Duration::seconds(secs as i64)).with_timezone(&Local);
                         ts.format("%d/%m/%Y").to_string()
                     })
                     .custom_parser(|input| {
                         if let Ok(parsed) = chrono::NaiveDate::parse_from_str(input, "%d/%m/%Y") {
-                            let current_time = current_ts.time();
-                            let new_dt = parsed.and_time(current_time).and_utc();
+                            let current_time = current_ts.with_timezone(&Local).time();
+                            let new_dt = parsed.and_time(current_time).and_local_timezone(Local).single()?
+                                .with_timezone(&Utc);
                             let diff = new_dt.signed_duration_since(start);
                             return Some(diff.num_seconds() as f64);
                         }
@@ -2945,7 +2953,8 @@ impl ViewerState {
                     })
             );
         });
-        ui.label(format!("Real (UTC): {}", real_timestamp.format("%H:%M:%S %d/%m/%Y")));
+        let real_local = real_timestamp.with_timezone(&Local);
+        ui.label(format!("Real: {}", real_local.format("%H:%M:%S %d/%m/%Y %Z")));
         if ui.button("Sync time").clicked() {
             self.time = self.real_time;
         }
@@ -3399,18 +3408,6 @@ impl eframe::App for App {
                     }
                 }
             }
-        }
-
-        let earth_radius = CelestialBody::Earth.radius_km();
-        let max_planet_radius = bodies_needed.iter()
-            .map(|(b, _, _)| b.radius_km())
-            .fold(earth_radius, |a, b| a.max(b));
-        if max_planet_radius > v.last_max_planet_radius {
-            let ideal_zoom = earth_radius / max_planet_radius;
-            v.zoom = ideal_zoom.clamp(0.01, 1.0);
-            v.last_max_planet_radius = max_planet_radius;
-        } else if max_planet_radius < v.last_max_planet_radius {
-            v.last_max_planet_radius = max_planet_radius;
         }
 
         let dt = ctx.input(|i| i.stable_dt) as f64;
@@ -4181,6 +4178,8 @@ fn draw_3d_view(
         .allow_boxed_zoom(false)
         .cursor_color(egui::Color32::TRANSPARENT);
 
+    let mut surface_labels: Vec<([f64; 2], String, egui::Color32)> = Vec::new();
+
     let response = plot.show(ui, |plot_ui| {
         plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
             [-margin, -margin],
@@ -4475,6 +4474,14 @@ fn draw_3d_view(
                     );
                 }
             }
+
+            let cx = planet_radius * lat.cos() * lon.cos();
+            let cy = planet_radius * lat.sin();
+            let cz = planet_radius * lat.cos() * lon.sin();
+            let (crx, cry, crz) = rotate_point_matrix(cx, cy, cz, &surface_rotation);
+            if !hide_behind_earth || crz >= 0.0 {
+                surface_labels.push(([crx, cry], aoi.name.clone(), aoi.color));
+            }
         }
 
         for gs in ground_stations {
@@ -4541,114 +4548,7 @@ fn draw_3d_view(
             let (rx, ry, rz) = rotate_point_matrix(x, y, z, &surface_rotation);
 
             if !hide_behind_earth || rz >= 0.0 {
-                let marker_size = (scaled_sat_radius * 1.5) as f64;
-                let pts = vec![
-                    [rx, ry + marker_size],
-                    [rx - marker_size * 0.866, ry - marker_size * 0.5],
-                    [rx + marker_size * 0.866, ry - marker_size * 0.5],
-                    [rx, ry + marker_size],
-                ];
-                plot_ui.polygon(
-                    Polygon::new("", PlotPoints::new(pts))
-                        .fill_color(gs.color)
-                        .stroke(egui::Stroke::new(1.0, egui::Color32::WHITE)),
-                );
-            }
-        }
-
-        for aoi in areas_of_interest {
-            if let Some(gs_idx) = aoi.ground_station_idx {
-                if let Some(gs) = ground_stations.get(gs_idx) {
-                    let find_nearest_sat = |center_lat: f64, center_lon: f64, radius_km: f64, ascending_filter: Option<bool>|
-                        -> Option<(usize, &WalkerConstellation, &Vec<SatelliteState>, &SatelliteState)>
-                    {
-                        let center_lat_rad = center_lat.to_radians();
-                        let center_lon_rad = (-center_lon).to_radians() + body_rot_angle;
-                        let max_angular_dist = radius_km / planet_radius;
-
-                        let haversine_dist = |sat: &SatelliteState| -> f64 {
-                            let sat_lat_rad = sat.lat.to_radians();
-                            let sat_lon_rad = sat.lon.to_radians();
-                            let dlat = sat_lat_rad - center_lat_rad;
-                            let dlon = sat_lon_rad - center_lon_rad;
-                            let a = (dlat / 2.0).sin().powi(2)
-                                + center_lat_rad.cos() * sat_lat_rad.cos() * (dlon / 2.0).sin().powi(2);
-                            2.0 * a.sqrt().asin()
-                        };
-
-                        let mut best: Option<(usize, &WalkerConstellation, &Vec<SatelliteState>, &SatelliteState, f64)> = None;
-
-                        for (cidx, (cons, positions, _, is_tle, _)) in constellations.iter().enumerate() {
-                            if *is_tle { continue; }
-                            for sat in positions.iter() {
-                                if let Some(asc) = ascending_filter {
-                                    if sat.ascending != asc { continue; }
-                                }
-                                let dist = haversine_dist(sat);
-                                if dist <= max_angular_dist {
-                                    if best.is_none() || dist < best.as_ref().unwrap().4 {
-                                        best = Some((cidx, cons, positions, sat, dist));
-                                    }
-                                }
-                            }
-                        }
-
-                        best.map(|(cidx, cons, positions, sat, _)| (cidx, cons, positions, sat))
-                    };
-
-                    let aoi_asc = find_nearest_sat(aoi.lat, aoi.lon, aoi.radius_km, Some(true));
-                    let gs_asc = find_nearest_sat(gs.lat, gs.lon, gs.radius_km, Some(true));
-                    let (aoi_result, gs_result) = if aoi_asc.is_some() && gs_asc.is_some() {
-                        (aoi_asc, gs_asc)
-                    } else {
-                        let aoi_desc = find_nearest_sat(aoi.lat, aoi.lon, aoi.radius_km, Some(false));
-                        let gs_desc = find_nearest_sat(gs.lat, gs.lon, gs.radius_km, Some(false));
-                        (aoi_desc, gs_desc)
-                    };
-
-                    if let (Some((gs_cidx, gs_cons, gs_positions, gs_sat)),
-                            Some((aoi_cidx, _, _, aoi_sat))) = (gs_result, aoi_result)
-                    {
-                        let path_color = egui::Color32::from_rgb(255, 255, 0);
-
-                        if gs_cidx == aoi_cidx {
-                            let path = compute_shortest_path(
-                                gs_sat.plane, gs_sat.sat_index,
-                                aoi_sat.plane, aoi_sat.sat_index,
-                                gs_cons.num_planes, gs_cons.sats_per_plane(),
-                                gs_positions,
-                                gs_cons.walker_type == WalkerType::Star,
-                            );
-                            draw_routing_path(
-                                plot_ui, &path, gs_positions, &satellite_rotation,
-                                path_color, scaled_link_width + 1.0, hide_behind_earth, earth_r_sq,
-                            );
-                        } else {
-                            let (rx1, ry1, rz1) = rotate_point_matrix(gs_sat.x, gs_sat.y, gs_sat.z, &satellite_rotation);
-                            let (rx2, ry2, rz2) = rotate_point_matrix(aoi_sat.x, aoi_sat.y, aoi_sat.z, &satellite_rotation);
-
-                            let visible1 = rz1 >= 0.0 || (rx1 * rx1 + ry1 * ry1) >= earth_r_sq;
-                            let visible2 = rz2 >= 0.0 || (rx2 * rx2 + ry2 * ry2) >= earth_r_sq;
-
-                            if !hide_behind_earth || (visible1 && visible2) {
-                                plot_ui.line(
-                                    Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
-                                        .color(path_color)
-                                        .width(2.0),
-                                );
-                            }
-                        }
-
-                        let dot_size = scaled_sat_radius as f64 * 1.2;
-                        let (rx1, ry1, _) = rotate_point_matrix(gs_sat.x, gs_sat.y, gs_sat.z, &satellite_rotation);
-                        let (rx2, ry2, _) = rotate_point_matrix(aoi_sat.x, aoi_sat.y, aoi_sat.z, &satellite_rotation);
-                        plot_ui.points(
-                            Points::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
-                                .radius(dot_size as f32)
-                                .color(path_color),
-                        );
-                    }
-                }
+                surface_labels.push(([rx, ry], gs.name.clone(), gs.color));
             }
         }
 
@@ -4835,7 +4735,7 @@ fn draw_3d_view(
                             );
                             draw_routing_path(
                                 plot_ui, &path, positions, &satellite_rotation,
-                                manhattan_color, scaled_link_width + 1.5, hide_behind_earth, earth_r_sq,
+                                manhattan_color, (scaled_link_width + 3.0).max(3.0), hide_behind_earth, earth_r_sq,
                             );
                         }
 
@@ -4849,9 +4749,106 @@ fn draw_3d_view(
                             );
                             draw_routing_path(
                                 plot_ui, &path, positions, &satellite_rotation,
-                                shortest_color, scaled_link_width + 1.0, hide_behind_earth, earth_r_sq,
+                                shortest_color, (scaled_link_width + 3.0).max(3.0), hide_behind_earth, earth_r_sq,
                             );
                         }
+                    }
+                }
+            }
+        }
+
+        for aoi in areas_of_interest {
+            if let Some(gs_idx) = aoi.ground_station_idx {
+                if let Some(gs) = ground_stations.get(gs_idx) {
+                    let find_nearest_sat = |center_lat: f64, center_lon: f64, radius_km: f64, ascending_filter: Option<bool>|
+                        -> Option<(usize, &WalkerConstellation, &Vec<SatelliteState>, &SatelliteState)>
+                    {
+                        let center_lat_rad = center_lat.to_radians();
+                        let center_lon_rad = (-center_lon).to_radians() + body_rot_angle;
+                        let max_angular_dist = radius_km / planet_radius;
+
+                        let haversine_dist = |sat: &SatelliteState| -> f64 {
+                            let sat_lat_rad = sat.lat.to_radians();
+                            let sat_lon_rad = sat.lon.to_radians();
+                            let dlat = sat_lat_rad - center_lat_rad;
+                            let dlon = sat_lon_rad - center_lon_rad;
+                            let a = (dlat / 2.0).sin().powi(2)
+                                + center_lat_rad.cos() * sat_lat_rad.cos() * (dlon / 2.0).sin().powi(2);
+                            2.0 * a.sqrt().asin()
+                        };
+
+                        let mut best: Option<(usize, &WalkerConstellation, &Vec<SatelliteState>, &SatelliteState, f64)> = None;
+
+                        for (cidx, (cons, positions, _, is_tle, _)) in constellations.iter().enumerate() {
+                            if *is_tle { continue; }
+                            for sat in positions.iter() {
+                                if let Some(asc) = ascending_filter {
+                                    if sat.ascending != asc { continue; }
+                                }
+                                let dist = haversine_dist(sat);
+                                if dist <= max_angular_dist {
+                                    if best.is_none() || dist < best.as_ref().unwrap().4 {
+                                        best = Some((cidx, cons, positions, sat, dist));
+                                    }
+                                }
+                            }
+                        }
+
+                        best.map(|(cidx, cons, positions, sat, _)| (cidx, cons, positions, sat))
+                    };
+
+                    let aoi_asc = find_nearest_sat(aoi.lat, aoi.lon, aoi.radius_km, Some(true));
+                    let gs_asc = find_nearest_sat(gs.lat, gs.lon, gs.radius_km, Some(true));
+                    let (aoi_result, gs_result) = if aoi_asc.is_some() && gs_asc.is_some() {
+                        (aoi_asc, gs_asc)
+                    } else {
+                        let aoi_desc = find_nearest_sat(aoi.lat, aoi.lon, aoi.radius_km, Some(false));
+                        let gs_desc = find_nearest_sat(gs.lat, gs.lon, gs.radius_km, Some(false));
+                        (aoi_desc, gs_desc)
+                    };
+
+                    if let (Some((gs_cidx, gs_cons, gs_positions, gs_sat)),
+                            Some((aoi_cidx, _, _, aoi_sat))) = (gs_result, aoi_result)
+                    {
+                        let path_color = egui::Color32::from_rgb(255, 255, 0);
+                        let routing_width = (scaled_link_width + 3.0).max(3.0);
+
+                        if gs_cidx == aoi_cidx {
+                            let path = compute_shortest_path(
+                                gs_sat.plane, gs_sat.sat_index,
+                                aoi_sat.plane, aoi_sat.sat_index,
+                                gs_cons.num_planes, gs_cons.sats_per_plane(),
+                                gs_positions,
+                                gs_cons.walker_type == WalkerType::Star,
+                            );
+                            draw_routing_path(
+                                plot_ui, &path, gs_positions, &satellite_rotation,
+                                path_color, routing_width, hide_behind_earth, earth_r_sq,
+                            );
+                        } else {
+                            let (rx1, ry1, rz1) = rotate_point_matrix(gs_sat.x, gs_sat.y, gs_sat.z, &satellite_rotation);
+                            let (rx2, ry2, rz2) = rotate_point_matrix(aoi_sat.x, aoi_sat.y, aoi_sat.z, &satellite_rotation);
+
+                            let visible1 = rz1 >= 0.0 || (rx1 * rx1 + ry1 * ry1) >= earth_r_sq;
+                            let visible2 = rz2 >= 0.0 || (rx2 * rx2 + ry2 * ry2) >= earth_r_sq;
+
+                            if !hide_behind_earth || (visible1 && visible2) {
+                                plot_ui.line(
+                                    Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
+                                        .color(path_color)
+                                        .width(routing_width),
+                                );
+                            }
+                        }
+
+                        let dot_size = scaled_sat_radius as f64 * 1.2;
+                        let (rx1, ry1, _) = rotate_point_matrix(gs_sat.x, gs_sat.y, gs_sat.z, &satellite_rotation);
+                        let (rx2, ry2, _) = rotate_point_matrix(aoi_sat.x, aoi_sat.y, aoi_sat.z, &satellite_rotation);
+                        plot_ui.points(
+                            Points::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
+                                .radius(dot_size as f32)
+                                .color(path_color),
+                        );
                     }
                 }
             }
@@ -4975,6 +4972,21 @@ fn draw_3d_view(
         }
     });
 
+    let label_font_size = (14.0 * zoom as f32).clamp(10.0, 28.0);
+    for (pos, name, color) in &surface_labels {
+        let plot_pt = egui_plot::PlotPoint::new(pos[0], pos[1]);
+        let screen_pos = response.transform.position_from_point(&plot_pt);
+        let galley = ui.painter().layout_no_wrap(
+            name.clone(),
+            egui::FontId::proportional(label_font_size),
+            *color,
+        );
+        let text_pos = screen_pos + egui::Vec2::new(-(galley.size().x / 2.0), -galley.size().y - 4.0);
+        let bg_rect = egui::Rect::from_min_size(text_pos, galley.size()).expand(3.0);
+        ui.painter().rect_filled(bg_rect, 3.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180));
+        ui.painter().galley(text_pos, galley, *color);
+    }
+
     for (_constellation, positions, color_offset, _is_tle, orig_idx) in constellations {
         for sat in positions {
             for cam in satellite_cameras.iter_mut() {
@@ -5021,6 +5033,30 @@ fn draw_3d_view(
                     break 'hover;
                 }
             }
+        }
+
+        let px = plot_pos.x;
+        let py = plot_pos.y;
+        let r_sq = planet_radius * planet_radius;
+        if px * px + py * py <= r_sq {
+            let pz = (r_sq - px * px - py * py).sqrt();
+            let surface_rot = if earth_fixed_camera {
+                rotation
+            } else {
+                rotation * *body_rotation
+            };
+            let inv = surface_rot.transpose();
+            let orig = inv * Vector3::new(px, py, pz);
+            let lat = (orig.y / planet_radius).asin().to_degrees();
+            let lon = -(orig.z.atan2(orig.x)).to_degrees();
+            let text = format!("{:.1}° {:.1}°", lat, lon);
+            ui.painter().text(
+                hover_pos + egui::Vec2::new(15.0, -15.0),
+                egui::Align2::LEFT_BOTTOM,
+                text,
+                egui::FontId::proportional(12.0),
+                egui::Color32::WHITE,
+            );
         }
     }
 
