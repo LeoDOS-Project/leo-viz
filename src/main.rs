@@ -500,12 +500,16 @@ struct TileOverlayState {
     disk_cache_dir: std::path::PathBuf,
     detail_texture: Option<DetailTexture>,
     #[cfg(not(target_arch = "wasm32"))]
-    fetch_tx: mpsc::Sender<(TileCoord, std::path::PathBuf)>,
+    fetch_tx: mpsc::Sender<(TileCoord, std::path::PathBuf, u64)>,
     result_rx: mpsc::Receiver<TileFetchResult>,
     last_zoom: u8,
     pending_tiles: HashSet<TileCoord>,
     needed_tiles: Vec<TileCoord>,
     dirty: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    fetch_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    generation: u64,
+    tile_x_origin: u32,
 }
 
 impl TileOverlayState {
@@ -536,11 +540,13 @@ impl TileOverlayState {
 
 fn lon_lat_to_tile(lon: f64, lat: f64, z: u8) -> TileCoord {
     let n = (1u32 << z) as f64;
-    let x = ((lon + 180.0) / 360.0 * n).floor() as u32;
+    let x = ((lon + 180.0) / 360.0 * n).floor() as i64;
+    let ni = n as i64;
+    let x = (((x % ni) + ni) % ni) as u32;
     let lat_rad = lat.to_radians();
     let y = ((1.0 - lat_rad.tan().asinh() / PI) / 2.0 * n).floor() as u32;
     TileCoord {
-        x: x.min(n as u32 - 1),
+        x,
         y: y.min(n as u32 - 1),
         z,
     }
@@ -665,6 +671,7 @@ impl SphereRenderer {
                     vec3 day_color;
                     if (u_use_detail > 0.5) {
                         float lon_deg = lon * 180.0 / PI;
+                        if (lon_deg < u_detail_bounds.x) lon_deg += 360.0;
                         float merc_y = log(tan(PI / 4.0 + lat / 2.0));
                         float du = (lon_deg - u_detail_bounds.x) / (u_detail_bounds.y - u_detail_bounds.x);
                         float dv = (u_detail_bounds.w - merc_y) / (u_detail_bounds.w - u_detail_bounds.z);
@@ -674,11 +681,6 @@ impl SphereRenderer {
                         }
                         vec3 loading = vec3(0.04, 0.06, 0.12);
                         day_color = mix(loading, detail.rgb, detail.a);
-                        float bw = 0.003;
-                        float in_bounds = step(0.0, du) * step(du, 1.0) * step(0.0, dv) * step(dv, 1.0);
-                        float border = in_bounds * (1.0 - step(bw, du) * step(bw, 1.0 - du)
-                            * step(bw, dv) * step(bw, 1.0 - dv));
-                        day_color = mix(day_color, vec3(1.0, 0.8, 0.0), border * 0.7);
                     } else {
                         day_color = texture(u_texture, vec2(tex_u, tex_v)).rgb;
                     }
@@ -1695,6 +1697,7 @@ struct ViewerState {
     show_camera_windows: bool,
     render_planet: bool,
     show_polar_circle: bool,
+    show_equator: bool,
     real_time: f64,
     start_timestamp: DateTime<Utc>,
     show_side_panel: bool,
@@ -1795,6 +1798,7 @@ impl App {
                 show_camera_windows: false,
                 render_planet: true,
                 show_polar_circle: false,
+                show_equator: false,
                 real_time: 0.0,
                 start_timestamp: Utc::now(),
                 show_side_panel: true,
@@ -1819,25 +1823,30 @@ impl App {
                 tle_fetch_rx,
                 #[cfg(not(target_arch = "wasm32"))]
                 tile_overlay: {
-                    let (fetch_tx, fetch_rx) = mpsc::channel::<(TileCoord, std::path::PathBuf)>();
+                    let (fetch_tx, fetch_rx) = mpsc::channel::<(TileCoord, std::path::PathBuf, u64)>();
                     let (result_tx, result_rx) = mpsc::channel::<TileFetchResult>();
                     let disk_cache_dir = dirs_cache().join("leo-viz").join("tiles");
                     let _ = std::fs::create_dir_all(&disk_cache_dir);
 
+                    let fetch_generation = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
                     let fetch_rx = std::sync::Arc::new(std::sync::Mutex::new(fetch_rx));
                     for _ in 0..4 {
                         let rx = fetch_rx.clone();
                         let tx = result_tx.clone();
+                        let gen = fetch_generation.clone();
                         std::thread::spawn(move || {
                             loop {
                                 let msg = {
                                     let lock = rx.lock().unwrap();
                                     lock.recv()
                                 };
-                                let (coord, cache_dir) = match msg {
+                                let (coord, cache_dir, req_gen) = match msg {
                                     Ok(m) => m,
                                     Err(_) => break,
                                 };
+                                if gen.load(std::sync::atomic::Ordering::Relaxed) != req_gen {
+                                    continue;
+                                }
                                 let cache_path = cache_dir
                                     .join(coord.z.to_string())
                                     .join(coord.y.to_string())
@@ -1848,6 +1857,10 @@ impl App {
                                 } else {
                                     None
                                 };
+
+                                if gen.load(std::sync::atomic::Ordering::Relaxed) != req_gen {
+                                    continue;
+                                }
 
                                 let (pixels, w, h) = if let Some(p) = pixels_result {
                                     p
@@ -1860,11 +1873,33 @@ impl App {
                                         Ok(resp) => {
                                             let mut bytes = Vec::new();
                                             if std::io::Read::read_to_end(&mut resp.into_reader(), &mut bytes).is_ok() {
-                                                if let Some(parent) = cache_path.parent() {
-                                                    let _ = std::fs::create_dir_all(parent);
-                                                }
-                                                let _ = std::fs::write(&cache_path, &bytes);
                                                 if let Some(p) = decode_jpeg_pixels(&bytes) {
+                                                    let sample_count = p.0.len().min(256);
+                                                    let step = p.0.len() / sample_count;
+                                                    let (mut sr, mut sg, mut sb) = (0u64, 0u64, 0u64);
+                                                    for i in 0..sample_count {
+                                                        let px = p.0[i * step];
+                                                        sr += px[0] as u64;
+                                                        sg += px[1] as u64;
+                                                        sb += px[2] as u64;
+                                                    }
+                                                    let n = sample_count as u64;
+                                                    let (ar, ag, ab) = (sr / n, sg / n, sb / n);
+                                                    let mut var = 0u64;
+                                                    for i in 0..sample_count {
+                                                        let px = p.0[i * step];
+                                                        let dr = px[0] as i64 - ar as i64;
+                                                        let dg = px[1] as i64 - ag as i64;
+                                                        let db = px[2] as i64 - ab as i64;
+                                                        var += (dr*dr + dg*dg + db*db) as u64;
+                                                    }
+                                                    if var / n < 50 {
+                                                        continue;
+                                                    }
+                                                    if let Some(parent) = cache_path.parent() {
+                                                        let _ = std::fs::create_dir_all(parent);
+                                                    }
+                                                    let _ = std::fs::write(&cache_path, &bytes);
                                                     p
                                                 } else {
                                                     continue;
@@ -1891,6 +1926,9 @@ impl App {
                         fetch_tx,
                         result_rx,
                         last_zoom: 0,
+                        fetch_generation: fetch_generation.clone(),
+                        generation: 0,
+                        tile_x_origin: 0,
                         pending_tiles: HashSet::new(),
                         needed_tiles: Vec::new(),
                         dirty: false,
@@ -2660,15 +2698,20 @@ impl ViewerState {
         let skin = planet.skin;
         let view_name = planet.name.clone();
 
-        let mut constellations_data: Vec<_> = planet.constellations.iter()
-            .enumerate()
-            .filter(|(_, c)| !c.hidden)
-            .map(|(orig_idx, c)| {
-                let wc = c.constellation(planet_radius, planet_mu, planet_j2, planet_eq_radius);
-                let pos = wc.satellite_positions(self.time);
-                (wc, pos, c.color_offset, false, orig_idx)
-            })
-            .collect();
+        let hide_sats = self.zoom > 100.0;
+        let mut constellations_data: Vec<_> = if hide_sats {
+            Vec::new()
+        } else {
+            planet.constellations.iter()
+                .enumerate()
+                .filter(|(_, c)| !c.hidden)
+                .map(|(orig_idx, c)| {
+                    let wc = c.constellation(planet_radius, planet_mu, planet_j2, planet_eq_radius);
+                    let pos = wc.satellite_positions(self.time);
+                    (wc, pos, c.color_offset, false, orig_idx)
+                })
+                .collect()
+        };
 
         if planet.show_tle_window {
             let tle_positions = planet.tle_satellite_positions(self.time);
@@ -2744,6 +2787,7 @@ impl ViewerState {
             let fixed_sizes = self.fixed_sizes;
             let flattening = celestial_body.flattening();
             let show_polar_circle = self.show_polar_circle;
+            let show_equator = self.show_equator;
             let show_terminator = self.show_terminator && self.show_day_night;
             let detail_gl_info = self.tile_overlay_detail_gl_info(celestial_body);
             self.view_width = half_width;
@@ -2786,6 +2830,7 @@ impl ViewerState {
                         fixed_sizes,
                         flattening,
                         show_polar_circle,
+                        show_equator,
                         show_terminator,
                         self.sphere_renderer.as_ref(),
                         (celestial_body, skin, tex_res),
@@ -2909,6 +2954,7 @@ impl ViewerState {
             let fixed_sizes = self.fixed_sizes;
             let flattening = celestial_body.flattening();
             let show_polar_circle = self.show_polar_circle;
+            let show_equator = self.show_equator;
             let show_terminator = self.show_terminator && self.show_day_night;
             let detail_gl_info = self.tile_overlay_detail_gl_info(celestial_body);
             self.view_width = viz_width;
@@ -2949,6 +2995,7 @@ impl ViewerState {
                 fixed_sizes,
                 flattening,
                 show_polar_circle,
+                show_equator,
                 show_terminator,
                 self.sphere_renderer.as_ref(),
                 (celestial_body, skin, tex_res),
@@ -3133,8 +3180,8 @@ impl ViewerState {
             let lon_changed = ui.add(egui::DragValue::new(&mut lon_deg).speed(0.5).max_decimals(1).suffix("°")).changed();
             ui.label("Alt:");
             let mut alt_km = 10000.0 / self.zoom;
-            if ui.add(egui::DragValue::new(&mut alt_km).range(1.0..=1000000.0).speed(100.0).suffix(" km")).changed() {
-                self.zoom = (10000.0 / alt_km).clamp(0.01, 10000.0);
+            if ui.add(egui::DragValue::new(&mut alt_km).range(0.5..=1000000.0).speed(100.0).suffix(" km")).changed() {
+                self.zoom = (10000.0 / alt_km).clamp(0.01, 20000.0);
             }
             lat_deg = lat_deg.clamp(-90.0, 90.0);
             while lon_deg > 180.0 { lon_deg -= 360.0; }
@@ -3312,6 +3359,7 @@ impl ViewerState {
         ui.checkbox(&mut self.tile_overlay.enabled, "Satellite tiles (Esri)");
         ui.checkbox(&mut self.show_axes, "Show axes");
         ui.checkbox(&mut self.show_polar_circle, "Show polar circle");
+        ui.checkbox(&mut self.show_equator, "Show equator");
         let mut show_behind = !self.hide_behind_earth;
         if ui.checkbox(&mut show_behind, "Show behind planet").changed() {
             self.hide_behind_earth = !show_behind;
@@ -3804,7 +3852,7 @@ impl eframe::App for App {
                 max_lat = (lat_center + lat_half).min(85.0);
 
                 let mut tile_zoom = camera_zoom_to_tile_zoom(v.zoom).max(2);
-                let needed = loop {
+                let (needed, x_origin) = loop {
                     let tl = lon_lat_to_tile(min_lon, max_lat, tile_zoom);
                     let br = lon_lat_to_tile(max_lon, min_lat, tile_zoom);
                     let n = 1u32 << tile_zoom;
@@ -3829,7 +3877,14 @@ impl eframe::App for App {
                                 tiles.push(TileCoord { x: tx, y: ty, z: tile_zoom });
                             }
                         }
-                        break tiles;
+                        let cx = x_range.iter().map(|&x| x as f64).sum::<f64>() / x_range.len() as f64;
+                        let cy = (y_min as f64 + y_max as f64) / 2.0;
+                        tiles.sort_by(|a, b| {
+                            let da = (a.x as f64 - cx).powi(2) + (a.y as f64 - cy).powi(2);
+                            let db = (b.x as f64 - cx).powi(2) + (b.y as f64 - cy).powi(2);
+                            da.partial_cmp(&db).unwrap()
+                        });
+                        break (tiles, tl.x);
                     }
                     tile_zoom -= 1;
                 };
@@ -3838,10 +3893,21 @@ impl eframe::App for App {
                     || v.tile_overlay.needed_tiles != needed;
 
                 if bounds_changed && !needed.is_empty() {
+                    let zoom_changed = v.tile_overlay.last_zoom != tile_zoom;
+                    let needed_set: HashSet<TileCoord> = needed.iter().copied().collect();
+                    let has_stale = v.tile_overlay.pending_tiles.iter().any(|c| !needed_set.contains(c));
+                    if zoom_changed || has_stale {
+                        v.tile_overlay.generation = v.tile_overlay.generation.wrapping_add(1);
+                        v.tile_overlay.fetch_generation.store(
+                            v.tile_overlay.generation,
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                    }
                     v.tile_overlay.last_zoom = tile_zoom;
+                    v.tile_overlay.tile_x_origin = x_origin;
                     v.tile_overlay.needed_tiles = needed.clone();
                     v.tile_overlay.dirty = true;
-                    v.tile_overlay.pending_tiles.retain(|c| needed.contains(c));
+                    v.tile_overlay.pending_tiles.retain(|c| needed_set.contains(c));
 
                     for coord in &needed {
                         if !v.tile_overlay.cache_contains(coord)
@@ -3851,6 +3917,7 @@ impl eframe::App for App {
                             let _ = v.tile_overlay.fetch_tx.send((
                                 *coord,
                                 v.tile_overlay.disk_cache_dir.clone(),
+                                v.tile_overlay.generation,
                             ));
                         }
                     }
@@ -3859,11 +3926,15 @@ impl eframe::App for App {
                 if v.tile_overlay.dirty && !v.tile_overlay.needed_tiles.is_empty() {
                     v.tile_overlay.dirty = false;
                     let needed = v.tile_overlay.needed_tiles.clone();
-                    let x_min = needed.iter().map(|c| c.x).min().unwrap();
-                    let x_max = needed.iter().map(|c| c.x).max().unwrap();
                     let y_min = needed.iter().map(|c| c.y).min().unwrap();
                     let y_max = needed.iter().map(|c| c.y).max().unwrap();
-                    let cols = (x_max - x_min + 1) as u32;
+                    let x_org = v.tile_overlay.tile_x_origin;
+                    let z = needed[0].z;
+                    let n = 1u32 << z;
+                    let col_of = |x: u32| -> u32 {
+                        if x >= x_org { x - x_org } else { n - x_org + x }
+                    };
+                    let cols = needed.iter().map(|c| col_of(c.x)).max().unwrap() + 1;
                     let rows = (y_max - y_min + 1) as u32;
                     let tile_size = 256u32;
                     let tex_w = cols * tile_size;
@@ -3873,7 +3944,7 @@ impl eframe::App for App {
                     for coord in &needed {
                         let mut found = false;
                         if let Some(entry) = v.tile_overlay.cache_get(coord) {
-                            let ox = ((coord.x - x_min) * tile_size) as usize;
+                            let ox = (col_of(coord.x) * tile_size) as usize;
                             let oy = ((coord.y - y_min) * tile_size) as usize;
                             let tw = entry.width.min(tile_size) as usize;
                             let th = entry.height.min(tile_size) as usize;
@@ -3914,7 +3985,7 @@ impl eframe::App for App {
                                 let src_oy = sub_y as f64 * anc_h as f64 / scale as f64;
                                 let src_w = anc_w as f64 / scale as f64;
                                 let src_h = anc_h as f64 / scale as f64;
-                                let dst_ox = ((coord.x - x_min) * tile_size) as usize;
+                                let dst_ox = (col_of(coord.x) * tile_size) as usize;
                                 let dst_oy = ((coord.y - y_min) * tile_size) as usize;
                                 for row in 0..256usize {
                                     for col in 0..256usize {
@@ -3936,7 +4007,7 @@ impl eframe::App for App {
                                     TileCoord { x: coord.x * 2,     y: coord.y * 2 + 1, z: cz },
                                     TileCoord { x: coord.x * 2 + 1, y: coord.y * 2 + 1, z: cz },
                                 ];
-                                let dst_ox = ((coord.x - x_min) * tile_size) as usize;
+                                let dst_ox = (col_of(coord.x) * tile_size) as usize;
                                 let dst_oy = ((coord.y - y_min) * tile_size) as usize;
                                 for (ci, child) in children.iter().enumerate() {
                                     if let Some(ce) = v.tile_overlay.cache_get(child) {
@@ -3960,9 +4031,14 @@ impl eframe::App for App {
                         }
                     }
 
-                    let z = needed[0].z;
-                    let (top_left_lon, top_left_lat) = tile_to_lon_lat(&TileCoord { x: x_min, y: y_min, z });
-                    let (bot_right_lon, bot_right_lat) = tile_to_lon_lat(&TileCoord { x: x_max + 1, y: y_max + 1, z });
+                    let (top_left_lon, top_left_lat) = tile_to_lon_lat(&TileCoord { x: x_org, y: y_min, z });
+                    let right_x = x_org + cols;
+                    let (bot_right_lon, bot_right_lat) = if right_x <= n {
+                        tile_to_lon_lat(&TileCoord { x: right_x, y: y_max + 1, z })
+                    } else {
+                        let (lon, lat) = tile_to_lon_lat(&TileCoord { x: right_x - n, y: y_max + 1, z });
+                        (lon + 360.0, lat)
+                    };
 
                     let lat_to_merc = |lat_deg: f64| -> f64 {
                         let lat_rad = lat_deg.to_radians();
@@ -4725,6 +4801,7 @@ fn draw_3d_view(
     fixed_sizes: bool,
     flattening: f64,
     show_polar_circle: bool,
+    show_equator: bool,
     show_terminator: bool,
     sphere_renderer: Option<&Arc<Mutex<SphereRenderer>>>,
     body_key: (CelestialBody, Skin, TextureResolution),
@@ -5057,6 +5134,46 @@ fn draw_3d_view(
         } else {
             rotation * *body_rotation
         };
+
+        if show_equator {
+            let n_pts = 200;
+            let eq_color = egui::Color32::from_rgb(255, 100, 100);
+            let dim_eq = egui::Color32::from_rgba_unmultiplied(255, 100, 100, 60);
+            let mut front_seg: Vec<[f64; 2]> = Vec::new();
+            let mut back_seg: Vec<[f64; 2]> = Vec::new();
+            for i in 0..=n_pts {
+                let theta = 2.0 * PI * i as f64 / n_pts as f64;
+                let x = planet_radius * theta.cos();
+                let z = planet_radius * theta.sin();
+                let (rx, ry, rz) = rotate_point_matrix(x, 0.0, z, &surface_rotation);
+                let occluded = rz < 0.0 && (rx * rx + ry * ry) < earth_r_sq;
+                if occluded {
+                    if !front_seg.is_empty() {
+                        plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut front_seg)))
+                            .color(eq_color).width(1.5));
+                    }
+                    back_seg.push([rx, ry]);
+                } else {
+                    if !back_seg.is_empty() {
+                        if !hide_behind_earth {
+                            plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut back_seg)))
+                                .color(dim_eq).width(1.0));
+                        } else {
+                            back_seg.clear();
+                        }
+                    }
+                    front_seg.push([rx, ry]);
+                }
+            }
+            if !front_seg.is_empty() {
+                plot_ui.line(Line::new("", PlotPoints::new(front_seg))
+                    .color(eq_color).width(1.5));
+            }
+            if !back_seg.is_empty() && !hide_behind_earth {
+                plot_ui.line(Line::new("", PlotPoints::new(back_seg))
+                    .color(dim_eq).width(1.0));
+            }
+        }
 
         for (aoi_idx, aoi) in areas_of_interest.iter().enumerate() {
             let lat = aoi.lat.to_radians();
@@ -5405,7 +5522,7 @@ fn draw_3d_view(
                         -> Option<(usize, &WalkerConstellation, &Vec<SatelliteState>, &SatelliteState)>
                     {
                         let center_lat_rad = center_lat.to_radians();
-                        let center_lon_rad = (-center_lon).to_radians() + body_rot_angle;
+                        let center_lon_rad = center_lon.to_radians() + body_rot_angle;
                         let max_angular_dist = radius_km / planet_radius;
 
                         let haversine_dist = |sat: &SatelliteState| -> f64 {
@@ -5650,6 +5767,7 @@ fn draw_3d_view(
         }
     }
 
+    let mut hovering_satellite = false;
     if let Some(hover_pos) = response.response.hover_pos() {
         let plot_pos = response.transform.value_from_position(hover_pos);
         let hover_threshold = margin * 0.025;
@@ -5673,6 +5791,7 @@ fn draw_3d_view(
                         scaled_sat_radius * 2.0,
                         egui::Stroke::new(2.0, color),
                     );
+                    hovering_satellite = true;
                     break 'hover;
                 }
             }
@@ -5700,6 +5819,19 @@ fn draw_3d_view(
                 egui::FontId::proportional(12.0),
                 egui::Color32::WHITE,
             );
+        }
+    }
+
+    if response.response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if !hovering_satellite {
+        if let Some(hover_pos) = response.response.hover_pos() {
+            let plot_pos = response.transform.value_from_position(hover_pos);
+            let on_label = label_rects.iter().any(|(rect, _, _)| rect.contains(hover_pos));
+            let on_earth = plot_pos.x * plot_pos.x + plot_pos.y * plot_pos.y <= planet_radius * planet_radius;
+            if on_label || on_earth {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+            }
         }
     }
 
@@ -5816,11 +5948,11 @@ fn draw_3d_view(
         let scroll = ui.input(|i| i.raw_scroll_delta.y);
         if scroll != 0.0 {
             let factor = 1.0 + scroll as f64 * 0.001;
-            zoom = (zoom * factor).clamp(0.01, 10000.0);
+            zoom = (zoom * factor).clamp(0.01, 20000.0);
         }
         if let Some(touch) = ui.input(|i| i.multi_touch()) {
             let factor = touch.zoom_delta as f64;
-            zoom = (zoom * factor).clamp(0.01, 10000.0);
+            zoom = (zoom * factor).clamp(0.01, 20000.0);
         }
     }
 
@@ -6185,11 +6317,11 @@ fn draw_torus(
         let scroll = ui.input(|i| i.raw_scroll_delta.y);
         if scroll != 0.0 {
             let factor = 1.0 + scroll as f64 * 0.001;
-            zoom = (zoom * factor).clamp(0.01, 10000.0);
+            zoom = (zoom * factor).clamp(0.01, 20000.0);
         }
         if let Some(touch) = ui.input(|i| i.multi_touch()) {
             let factor = touch.zoom_delta as f64;
-            zoom = (zoom * factor).clamp(0.01, 10000.0);
+            zoom = (zoom * factor).clamp(0.01, 20000.0);
         }
     }
 
