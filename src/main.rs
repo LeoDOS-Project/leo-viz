@@ -5920,6 +5920,37 @@ fn draw_3d_view(
                 );
                 rotation = rot * rotation;
             }
+
+            let center = rotation.transpose() * Vector3::new(0.0, 0.0, 1.0);
+            let lat_limit = 85.0_f64.to_radians().sin();
+            if center.y.abs() > lat_limit {
+                let clamped_y = center.y.clamp(-lat_limit, lat_limit);
+                let horiz = (center.x * center.x + center.z * center.z).sqrt();
+                let new_horiz = (1.0 - clamped_y * clamped_y).sqrt();
+                let scale = if horiz > 1e-10 { new_horiz / horiz } else { 1.0 };
+                let c = Vector3::new(center.x * scale, clamped_y, center.z * scale).normalize();
+                let right_raw = Vector3::new(c.z, 0.0, -c.x);
+                let right_len = right_raw.norm();
+                if right_len > 0.01 {
+                    let right = right_raw / right_len;
+                    let up = c.cross(&right);
+                    let r0 = Matrix3::new(
+                        right.x, right.y, right.z,
+                        up.x, up.y, up.z,
+                        c.x, c.y, c.z,
+                    );
+                    let up_screen = rotation * Vector3::new(0.0, 1.0, 0.0);
+                    let bearing = up_screen.x.atan2(up_screen.y);
+                    let cb = bearing.cos();
+                    let sb = bearing.sin();
+                    let rz = Matrix3::new(
+                         cb, sb, 0.0,
+                        -sb, cb, 0.0,
+                        0.0, 0.0, 1.0,
+                    );
+                    rotation = rz * r0;
+                }
+            }
         }
     }
 
@@ -6009,6 +6040,48 @@ fn draw_3d_view(
                                 t*x*z-sa*y,  t*y*z+sa*x, t*z*z+ca,
                             );
                             rotation = rot * rotation;
+                        }
+                    }
+
+                    let center = rotation.transpose() * Vector3::new(0.0, 0.0, 1.0);
+                    let lat_limit = 85.0_f64.to_radians().sin();
+                    let clamped_y = center.y.clamp(-lat_limit, lat_limit);
+                    let needs_clamp = (center.y - clamped_y).abs() > 1e-8;
+                    let center = if needs_clamp {
+                        let horiz = (center.x * center.x + center.z * center.z).sqrt();
+                        let new_horiz = (1.0 - clamped_y * clamped_y).sqrt();
+                        let scale = if horiz > 1e-10 { new_horiz / horiz } else { 1.0 };
+                        Vector3::new(center.x * scale, clamped_y, center.z * scale).normalize()
+                    } else {
+                        center
+                    };
+                    let north_blend = (zoom.log2() / 4.0).clamp(0.0, 1.0);
+                    if north_blend > 0.0 || needs_clamp {
+                        let right_raw = Vector3::new(center.z, 0.0, -center.x);
+                        let right_len = right_raw.norm();
+                        if right_len > 0.01 {
+                            let right = right_raw / right_len;
+                            let up = center.cross(&right);
+                            let r0 = Matrix3::new(
+                                right.x, right.y, right.z,
+                                up.x, up.y, up.z,
+                                center.x, center.y, center.z,
+                            );
+                            let up_screen = rotation * Vector3::new(0.0, 1.0, 0.0);
+                            let bearing = up_screen.x.atan2(up_screen.y);
+                            let new_bearing = if north_blend > 0.0 {
+                                bearing * (1.0 - north_blend * 0.15)
+                            } else {
+                                bearing
+                            };
+                            let cb = new_bearing.cos();
+                            let sb = new_bearing.sin();
+                            let rz = Matrix3::new(
+                                 cb, sb, 0.0,
+                                -sb, cb, 0.0,
+                                0.0, 0.0, 1.0,
+                            );
+                            rotation = rz * r0;
                         }
                     }
                 }
