@@ -5884,11 +5884,40 @@ fn draw_3d_view(
                     }
                 }
             }
-        } else {
+        } else if let Some(pos) = response.response.interact_pointer_pos() {
             let drag = response.response.drag_delta();
-            let sens = 0.01 / zoom.max(1.0);
-            let delta_rot = rotation_from_drag(drag.x as f64 * sens, drag.y as f64 * sens);
-            rotation = delta_rot * rotation;
+            let prev_pos = pos - drag;
+            let cur = response.transform.value_from_position(pos);
+            let prev = response.transform.value_from_position(prev_pos);
+            let r = planet_radius;
+            let r_sq = r * r;
+            let to_sphere = |px: f64, py: f64| -> Vector3<f64> {
+                let d_sq = px * px + py * py;
+                if d_sq <= r_sq {
+                    Vector3::new(px, py, (r_sq - d_sq).sqrt())
+                } else {
+                    let s = r / d_sq.sqrt();
+                    Vector3::new(px * s, py * s, 0.0)
+                }
+            };
+            let a = to_sphere(prev.x, prev.y).normalize();
+            let b = to_sphere(cur.x, cur.y).normalize();
+            let cross = a.cross(&b);
+            let cross_len = cross.norm();
+            if cross_len > 1e-12 {
+                let axis = cross / cross_len;
+                let angle = cross_len.atan2(a.dot(&b));
+                let c = angle.cos();
+                let s = angle.sin();
+                let t = 1.0 - c;
+                let (x, y, z) = (axis.x, axis.y, axis.z);
+                let rot = Matrix3::new(
+                    t*x*x + c,   t*x*y - s*z, t*x*z + s*y,
+                    t*x*y + s*z, t*y*y + c,   t*y*z - s*x,
+                    t*x*z - s*y, t*y*z + s*x, t*z*z + c,
+                );
+                rotation = rot * rotation;
+            }
         }
     }
 
