@@ -5978,8 +5978,41 @@ fn draw_3d_view(
     if response.response.hovered() {
         let scroll = ui.input(|i| i.raw_scroll_delta.y);
         if scroll != 0.0 {
+            let old_zoom = zoom;
             let factor = 1.0 + scroll as f64 * 0.001;
             zoom = (zoom * factor).clamp(0.01, 20000.0);
+
+            if let Some(hover_pos) = response.response.hover_pos() {
+                let plot_pos = response.transform.value_from_position(hover_pos);
+                let cx = plot_pos.x;
+                let cy = plot_pos.y;
+                let r_sq = planet_radius * planet_radius;
+                if cx * cx + cy * cy <= r_sq {
+                    let ratio = old_zoom / zoom;
+                    let tx = cx * ratio;
+                    let ty = cy * ratio;
+                    if tx * tx + ty * ty <= r_sq {
+                        let a = Vector3::new(cx, cy, (r_sq - cx*cx - cy*cy).sqrt()).normalize();
+                        let b = Vector3::new(tx, ty, (r_sq - tx*tx - ty*ty).sqrt()).normalize();
+                        let cross = a.cross(&b);
+                        let cross_len = cross.norm();
+                        if cross_len > 1e-12 {
+                            let axis = cross / cross_len;
+                            let angle = cross_len.atan2(a.dot(&b));
+                            let ca = angle.cos();
+                            let sa = angle.sin();
+                            let t = 1.0 - ca;
+                            let (x, y, z) = (axis.x, axis.y, axis.z);
+                            let rot = Matrix3::new(
+                                t*x*x+ca,    t*x*y-sa*z, t*x*z+sa*y,
+                                t*x*y+sa*z,  t*y*y+ca,   t*y*z-sa*x,
+                                t*x*z-sa*y,  t*y*z+sa*x, t*z*z+ca,
+                            );
+                            rotation = rot * rotation;
+                        }
+                    }
+                }
+            }
         }
         if let Some(touch) = ui.input(|i| i.multi_touch()) {
             let factor = touch.zoom_delta as f64;
