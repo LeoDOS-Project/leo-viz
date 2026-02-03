@@ -1534,6 +1534,7 @@ struct ViewerState {
     show_clouds: bool,
     show_day_night: bool,
     show_terminator: bool,
+    dragging_place: Option<(usize, usize, bool, usize)>,
     night_texture: Option<Arc<EarthTexture>>,
     sphere_renderer: Option<Arc<Mutex<SphereRenderer>>>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -1629,6 +1630,7 @@ impl App {
                 show_clouds: true,
                 show_day_night: false,
                 show_terminator: false,
+                dragging_place: None,
                 night_texture: None,
                 sphere_renderer: Some(sphere_renderer),
                 #[cfg(not(target_arch = "wasm32"))]
@@ -2524,9 +2526,11 @@ impl ViewerState {
                             [sun_shader.x as f32, sun_shader.y as f32, sun_shader.z as f32]
                         },
                         self.time,
-                        &planet.ground_stations,
-                        &planet.areas_of_interest,
+                        &mut planet.ground_stations,
+                        &mut planet.areas_of_interest,
                         body_rot_angle,
+                        &mut self.dragging_place,
+                        (tab_idx, planet_idx),
                     );
                     self.rotation = rot;
                     self.zoom = new_zoom;
@@ -2681,9 +2685,11 @@ impl ViewerState {
                     [sun_shader.x as f32, sun_shader.y as f32, sun_shader.z as f32]
                 },
                 self.time,
-                &planet.ground_stations,
-                &planet.areas_of_interest,
+                &mut planet.ground_stations,
+                &mut planet.areas_of_interest,
                 body_rot_angle,
+                &mut self.dragging_place,
+                (tab_idx, planet_idx),
             );
             self.rotation = rot;
             self.zoom = new_zoom;
@@ -4118,9 +4124,11 @@ fn draw_3d_view(
     show_day_night: bool,
     sun_dir: [f32; 3],
     time: f64,
-    ground_stations: &[GroundStation],
-    areas_of_interest: &[AreaOfInterest],
+    ground_stations: &mut [GroundStation],
+    areas_of_interest: &mut [AreaOfInterest],
     body_rot_angle: f64,
+    dragging_place: &mut Option<(usize, usize, bool, usize)>,
+    drag_tab_planet: (usize, usize),
 ) -> (Matrix3<f64>, f64) {
     let max_altitude = constellations.iter()
         .map(|(c, _, _, _, _)| c.altitude_km)
@@ -4178,9 +4186,11 @@ fn draw_3d_view(
         .allow_boxed_zoom(false)
         .cursor_color(egui::Color32::TRANSPARENT);
 
-    let mut surface_labels: Vec<([f64; 2], String, egui::Color32)> = Vec::new();
+    let mut surface_labels: Vec<([f64; 2], String, egui::Color32, bool, usize)> = Vec::new();
 
     let response = plot.show(ui, |plot_ui| {
+        let ground_stations = &*ground_stations;
+        let areas_of_interest = &*areas_of_interest;
         plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
             [-margin, -margin],
             [margin, margin],
@@ -4417,7 +4427,7 @@ fn draw_3d_view(
             rotation * *body_rotation
         };
 
-        for aoi in areas_of_interest {
+        for (aoi_idx, aoi) in areas_of_interest.iter().enumerate() {
             let lat = aoi.lat.to_radians();
             let lon = (-aoi.lon).to_radians();
             let angular_radius = aoi.radius_km / planet_radius;
@@ -4480,11 +4490,11 @@ fn draw_3d_view(
             let cz = planet_radius * lat.cos() * lon.sin();
             let (crx, cry, crz) = rotate_point_matrix(cx, cy, cz, &surface_rotation);
             if !hide_behind_earth || crz >= 0.0 {
-                surface_labels.push(([crx, cry], aoi.name.clone(), aoi.color));
+                surface_labels.push(([crx, cry], aoi.name.clone(), aoi.color, false, aoi_idx));
             }
         }
 
-        for gs in ground_stations {
+        for (gs_idx, gs) in ground_stations.iter().enumerate() {
             let lat = gs.lat.to_radians();
             let lon = (-gs.lon).to_radians();
             let angular_radius = gs.radius_km / planet_radius;
@@ -4548,7 +4558,7 @@ fn draw_3d_view(
             let (rx, ry, rz) = rotate_point_matrix(x, y, z, &surface_rotation);
 
             if !hide_behind_earth || rz >= 0.0 {
-                surface_labels.push(([rx, ry], gs.name.clone(), gs.color));
+                surface_labels.push(([rx, ry], gs.name.clone(), gs.color, true, gs_idx));
             }
         }
 
@@ -4973,7 +4983,8 @@ fn draw_3d_view(
     });
 
     let label_font_size = (14.0 * zoom as f32).clamp(10.0, 28.0);
-    for (pos, name, color) in &surface_labels {
+    let mut label_rects: Vec<(egui::Rect, bool, usize)> = Vec::new();
+    for (pos, name, color, is_gs, idx) in &surface_labels {
         let plot_pt = egui_plot::PlotPoint::new(pos[0], pos[1]);
         let screen_pos = response.transform.position_from_point(&plot_pt);
         let galley = ui.painter().layout_no_wrap(
@@ -4985,6 +4996,7 @@ fn draw_3d_view(
         let bg_rect = egui::Rect::from_min_size(text_pos, galley.size()).expand(3.0);
         ui.painter().rect_filled(bg_rect, 3.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180));
         ui.painter().galley(text_pos, galley, *color);
+        label_rects.push((bg_rect, *is_gs, *idx));
     }
 
     for (_constellation, positions, color_offset, _is_tle, orig_idx) in constellations {
@@ -5060,10 +5072,66 @@ fn draw_3d_view(
         }
     }
 
+    if response.response.drag_started() {
+        if let Some(pos) = response.response.interact_pointer_pos() {
+            let mut found = false;
+            for (rect, is_gs, idx) in &label_rects {
+                if rect.contains(pos) {
+                    *dragging_place = Some((drag_tab_planet.0, drag_tab_planet.1, *is_gs, *idx));
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                *dragging_place = None;
+            }
+        }
+    }
+
+    let is_dragging_place = dragging_place.map_or(false, |(t, p, _, _)| t == drag_tab_planet.0 && p == drag_tab_planet.1);
+
     if response.response.dragged() && !response.response.drag_started() {
-        let drag = response.response.drag_delta();
-        let delta_rot = rotation_from_drag(drag.x as f64 * 0.01, drag.y as f64 * 0.01);
-        rotation = delta_rot * rotation;
+        if is_dragging_place {
+            if let Some(pos) = response.response.interact_pointer_pos() {
+                let plot_pos = response.transform.value_from_position(pos);
+                let px = plot_pos.x;
+                let py = plot_pos.y;
+                let r_sq = planet_radius * planet_radius;
+                if px * px + py * py <= r_sq {
+                    let pz = (r_sq - px * px - py * py).sqrt();
+                    let surface_rot = if earth_fixed_camera {
+                        rotation
+                    } else {
+                        rotation * *body_rotation
+                    };
+                    let inv = surface_rot.transpose();
+                    let orig = inv * Vector3::new(px, py, pz);
+                    let lat = (orig.y / planet_radius).asin().to_degrees();
+                    let lon = -(orig.z.atan2(orig.x)).to_degrees();
+                    if let Some((_, _, is_gs, idx)) = *dragging_place {
+                        if is_gs {
+                            if let Some(gs) = ground_stations.get_mut(idx) {
+                                gs.lat = lat;
+                                gs.lon = lon;
+                            }
+                        } else if let Some(aoi) = areas_of_interest.get_mut(idx) {
+                            aoi.lat = lat;
+                            aoi.lon = lon;
+                        }
+                    }
+                }
+            }
+        } else {
+            let drag = response.response.drag_delta();
+            let delta_rot = rotation_from_drag(drag.x as f64 * 0.01, drag.y as f64 * 0.01);
+            rotation = delta_rot * rotation;
+        }
+    }
+
+    if !response.response.dragged() {
+        if dragging_place.map_or(false, |(t, p, _, _)| t == drag_tab_planet.0 && p == drag_tab_planet.1) {
+            *dragging_place = None;
+        }
     }
 
     if response.response.clicked() {
