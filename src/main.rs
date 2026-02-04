@@ -1603,7 +1603,7 @@ struct TleSatellite {
 enum TleLoadState {
     NotLoaded,
     Loading,
-    Loaded { satellites: Vec<TleSatellite>, loaded_at: std::time::Instant },
+    Loaded { satellites: Vec<TleSatellite> },
     Failed(String),
 }
 
@@ -2073,7 +2073,7 @@ impl App {
                 },
                 cloud_textures: HashMap::new(),
                 planet_image_handles: HashMap::new(),
-                texture_resolution: if cfg!(target_arch = "wasm32") { TextureResolution::R2048 } else { TextureResolution::R8192 },
+                texture_resolution: TextureResolution::R8192,
                 last_rotation: None,
                 earth_resolution: 512,
                 last_resolution: 0,
@@ -2812,7 +2812,7 @@ impl ViewerState {
                                                         let ctx = ui.ctx().clone();
                                                         wasm_bindgen_futures::spawn_local(async move {
                                                             let result = match fetch_tle_text(&url).await {
-                                                                Ok(text) => parse_tle_data(&text),
+                                                                Ok(text) => parse_tle_data_async(&text).await,
                                                                 Err(e) => Err(e),
                                                             };
                                                             TLE_FETCH_RESULT.with(|cell| {
@@ -3977,11 +3977,10 @@ async fn fetch_texture(url: &str) -> Result<EarthTexture, String> {
 #[cfg(target_arch = "wasm32")]
 async fn fetch_tle_text(url: &str) -> Result<String, String> {
     use wasm_bindgen::JsCast as _;
-    use web_sys::{Request, RequestInit, RequestMode, Response};
+    use web_sys::{Request, RequestInit, Response};
 
     let opts = RequestInit::new();
     opts.set_method("GET");
-    opts.set_mode(RequestMode::Cors);
 
     let request = Request::new_with_str_and_init(url, &opts)
         .map_err(|e| format!("{:?}", e))?;
@@ -3998,13 +3997,64 @@ async fn fetch_tle_text(url: &str) -> Result<String, String> {
         return Err(format!("HTTP {}", resp.status()));
     }
 
-    let text = wasm_bindgen_futures::JsFuture::from(
-        resp.text().map_err(|e| format!("{:?}", e))?
+    let array_buffer = wasm_bindgen_futures::JsFuture::from(
+        resp.array_buffer().map_err(|e| format!("{:?}", e))?
     )
     .await
     .map_err(|e| format!("{:?}", e))?;
 
-    text.as_string().ok_or("Not a string".to_string())
+    let bytes = js_sys::Uint8Array::new(&array_buffer).to_vec();
+    String::from_utf8(bytes).map_err(|e| format!("{}", e))
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn yield_now() {
+    wasm_bindgen_futures::JsFuture::from(
+        js_sys::Promise::new(&mut |resolve, _| {
+            web_sys::window().unwrap()
+                .set_timeout_with_callback(&resolve).unwrap();
+        })
+    ).await.unwrap();
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn parse_tle_data_async(data: &str) -> Result<Vec<TleSatellite>, String> {
+    let lines: Vec<&str> = data.lines().collect();
+    let mut satellites = Vec::new();
+    let mut i = 0;
+    let mut batch = 0;
+    while i + 2 < lines.len() {
+        let name_line = lines[i].trim();
+        let line1 = lines[i + 1].trim();
+        let line2 = lines[i + 2].trim();
+        if !line1.starts_with('1') || !line2.starts_with('2') {
+            i += 1;
+            continue;
+        }
+        let tle = format!("{}\n{}\n{}", name_line, line1, line2);
+        if let Ok(elements_vec) = sgp4::parse_3les(&tle) {
+            for elements in elements_vec {
+                if let Ok(constants) = Constants::from_elements(&elements) {
+                    let epoch_minutes = datetime_to_minutes(&elements.datetime);
+                    satellites.push(TleSatellite {
+                        name: elements.object_name.unwrap_or_default(),
+                        constants,
+                        epoch_minutes,
+                    });
+                }
+            }
+        }
+        i += 3;
+        batch += 1;
+        if batch % 100 == 0 {
+            yield_now().await;
+        }
+    }
+    if satellites.is_empty() {
+        Err("No valid TLE data found".to_string())
+    } else {
+        Ok(satellites)
+    }
 }
 
 impl App {
@@ -4250,7 +4300,6 @@ impl eframe::App for App {
                             *state = match result.clone() {
                                 Ok(satellites) => TleLoadState::Loaded {
                                     satellites,
-                                    loaded_at: std::time::Instant::now(),
                                 },
                                 Err(e) => TleLoadState::Failed(e),
                             };
@@ -4826,7 +4875,6 @@ impl eframe::App for App {
                                     *state = match result.clone() {
                                         Ok(satellites) => TleLoadState::Loaded {
                                             satellites,
-                                            loaded_at: std::time::Instant::now(),
                                         },
                                         Err(e) => TleLoadState::Failed(e),
                                     };
