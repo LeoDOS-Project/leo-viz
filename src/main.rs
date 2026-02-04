@@ -1378,6 +1378,8 @@ impl WalkerConstellation {
                     ascending,
                     neighbor_idx: None,
                     name: None,
+                    tle_inclination_deg: None,
+                    tle_mean_motion: None,
                 });
             }
         }
@@ -1461,6 +1463,8 @@ struct SatelliteState {
     ascending: bool,
     neighbor_idx: Option<usize>,
     name: Option<String>,
+    tle_inclination_deg: Option<f64>,
+    tle_mean_motion: Option<f64>,
 }
 
 fn rotate_point_matrix(x: f64, y: f64, z: f64, rot: &Matrix3<f64>) -> (f64, f64, f64) {
@@ -1596,6 +1600,16 @@ struct TleSatellite {
     name: String,
     constants: Constants,
     epoch_minutes: f64,
+    inclination_deg: f64,
+    mean_motion: f64,
+}
+
+#[derive(Clone)]
+struct TleShell {
+    label: String,
+    satellite_indices: Vec<usize>,
+    color_offset: usize,
+    selected: bool,
 }
 
 #[derive(Clone)]
@@ -1605,6 +1619,14 @@ enum TleLoadState {
     Loading,
     Loaded { satellites: Vec<TleSatellite> },
     Failed(String),
+}
+
+fn mean_motion_to_altitude_km(n_revs_per_day: f64) -> f64 {
+    let mu = 398600.4418_f64;
+    let r_earth = 6371.0_f64;
+    let n_rad_s = n_revs_per_day * 2.0 * std::f64::consts::PI / 86400.0;
+    let a = (mu / (n_rad_s * n_rad_s)).powf(1.0 / 3.0);
+    a - r_earth
 }
 
 fn datetime_to_minutes(dt: &sgp4::chrono::NaiveDateTime) -> f64 {
@@ -1673,6 +1695,8 @@ fn parse_tle_data(data: &str) -> Result<Vec<TleSatellite>, String> {
                             let epoch_minutes = datetime_to_minutes(&elements.datetime);
                             satellites.push(TleSatellite {
                                 name: elements.object_name.unwrap_or_default(),
+                                inclination_deg: elements.inclination,
+                                mean_motion: elements.mean_motion,
                                 constants,
                                 epoch_minutes,
                             });
@@ -1802,7 +1826,7 @@ struct PlanetConfig {
     show_tle_window: bool,
     show_gs_aoi_window: bool,
     show_config_window: bool,
-    tle_selections: HashMap<TlePreset, (bool, TleLoadState)>,
+    tle_selections: HashMap<TlePreset, (bool, TleLoadState, Option<Vec<TleShell>>)>,
     ground_stations: Vec<GroundStation>,
     areas_of_interest: Vec<AreaOfInterest>,
 }
@@ -1811,7 +1835,7 @@ impl PlanetConfig {
     fn new(name: String) -> Self {
         let mut tle_selections = HashMap::new();
         for preset in TlePreset::ALL {
-            tle_selections.insert(preset, (false, TleLoadState::NotLoaded));
+            tle_selections.insert(preset, (false, TleLoadState::NotLoaded, None));
         }
         Self {
             name,
@@ -1996,9 +2020,13 @@ struct ViewerState {
     night_texture: Option<Arc<EarthTexture>>,
     star_texture: Option<Arc<EarthTexture>>,
     milky_way_texture: Option<Arc<EarthTexture>>,
+    #[allow(dead_code)]
     night_texture_loading: bool,
+    #[allow(dead_code)]
     star_texture_loading: bool,
+    #[allow(dead_code)]
     milky_way_texture_loading: bool,
+    #[allow(dead_code)]
     cloud_texture_loading: bool,
     sphere_renderer: Option<Arc<Mutex<SphereRenderer>>>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -2707,7 +2735,7 @@ impl ViewerState {
 
                     let live_data: Vec<_> = TlePreset::ALL.iter()
                         .filter_map(|preset| {
-                            if let Some((selected, state)) = tle_selections.get(preset) {
+                            if let Some((selected, state, _)) = tle_selections.get(preset) {
                                 if *selected {
                                     if let TleLoadState::Loaded { satellites, .. } = state {
                                         return Some((preset.label(), satellites.len()));
@@ -2749,22 +2777,37 @@ impl ViewerState {
         let planet = &mut self.tabs[tab_idx].planets[planet_idx];
         ui.horizontal(|ui| {
             if show_tle {
+                let selected_loaded: Vec<TlePreset> = planet.tle_selections.iter()
+                    .filter(|(_, (sel, state, _))| *sel && matches!(state, TleLoadState::Loaded { .. }))
+                    .map(|(p, _)| *p)
+                    .collect();
+                let can_split = selected_loaded.len() == 1;
+                let split_active = can_split && planet.tle_selections.get(&selected_loaded[0])
+                    .map(|(_, _, shells)| shells.is_some()).unwrap_or(false);
+
                 ui.vertical(|ui| {
                     let mut fetch_requested = false;
+                    let mut split_preset: Option<TlePreset> = None;
+                    let unsplit_preset: Option<TlePreset> = None;
                     ui.horizontal(|ui| {
                         ui.label("TLE");
                         if ui.small_button("All").clicked() {
-                            for (selected, _) in planet.tle_selections.values_mut() {
+                            for (selected, _, _) in planet.tle_selections.values_mut() {
                                 *selected = true;
                             }
                         }
                         if ui.small_button("None").clicked() {
-                            for (selected, _) in planet.tle_selections.values_mut() {
+                            for (selected, _, _) in planet.tle_selections.values_mut() {
                                 *selected = false;
                             }
                         }
                         if ui.small_button("Fetch").clicked() {
                             fetch_requested = true;
+                        }
+                        if can_split && !split_active {
+                            if ui.small_button("Cluster").clicked() {
+                                split_preset = Some(selected_loaded[0]);
+                            }
                         }
                         if ui.small_button("x").clicked() {
                             planet.show_tle_window = false;
@@ -2778,15 +2821,23 @@ impl ViewerState {
                                     let preset_idx = col * 7 + row;
                                     if preset_idx < TlePreset::ALL.len() {
                                         let preset = &TlePreset::ALL[preset_idx];
-                                        if let Some((selected, state)) = planet.tle_selections.get_mut(preset) {
+                                        if let Some((selected, state, _)) = planet.tle_selections.get_mut(preset) {
+                                            let is_clustered_other = split_active && !selected_loaded.contains(preset);
+                                            let is_clustered_selected = split_active && selected_loaded.contains(preset);
                                             ui.horizontal(|ui| {
-                                                let color = plane_color(preset.color_index());
-                                                let rect = ui.allocate_space(egui::vec2(10.0, 10.0)).1;
-                                                ui.painter().rect_filled(rect, 2.0, color);
-                                                ui.painter().rect_filled(rect.shrink(2.5), 1.0, egui::Color32::BLACK);
+                                                if !split_active {
+                                                    let color = plane_color(preset.color_index());
+                                                    let rect = ui.allocate_space(egui::vec2(10.0, 10.0)).1;
+                                                    ui.painter().rect_filled(rect, 2.0, color);
+                                                    ui.painter().rect_filled(rect.shrink(2.5), 1.0, egui::Color32::BLACK);
+                                                }
 
                                                 let is_loading = matches!(state, TleLoadState::Loading);
-                                                if ui.selectable_label(*selected, preset.label()).clicked() {
+                                                if is_clustered_other {
+                                                    ui.add_enabled(false, egui::Button::new(preset.label()).selected(*selected));
+                                                } else if is_clustered_selected {
+                                                    let _ = ui.selectable_label(true, preset.label());
+                                                } else if ui.selectable_label(*selected, preset.label()).clicked() {
                                                     *selected = !*selected;
                                                 }
                                                 if is_loading {
@@ -2832,8 +2883,120 @@ impl ViewerState {
                                 }
                             });
                         }
+
                     });
+
+                    if let Some(preset) = split_preset {
+                        if let Some((_, state, shells)) = planet.tle_selections.get_mut(&preset) {
+                            if let TleLoadState::Loaded { satellites } = state {
+                                let n = satellites.len();
+                                let (inc_bin_size, alt_bin_size) = if n < 50 {
+                                    (1.0, 10.0)
+                                } else if n < 500 {
+                                    (5.0, 50.0)
+                                } else {
+                                    (5.0, 100.0)
+                                };
+                                let mut groups: std::collections::HashMap<(i32, i32), Vec<usize>> = std::collections::HashMap::new();
+                                for (i, sat) in satellites.iter().enumerate() {
+                                    let alt = mean_motion_to_altitude_km(sat.mean_motion);
+                                    let inc_bin = (sat.inclination_deg / inc_bin_size).round() as i32 * inc_bin_size as i32;
+                                    let alt_bin = (alt / alt_bin_size).round() as i32 * alt_bin_size as i32;
+                                    groups.entry((inc_bin, alt_bin)).or_default().push(i);
+                                }
+                                let mut sorted: Vec<_> = groups.into_iter().collect();
+                                sorted.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+                                let min_sats = if n < 50 { 1 } else { (n / 50).max(10) };
+                                let mut new_shells = Vec::new();
+                                let mut other_indices = Vec::new();
+                                for ((inc, alt), indices) in sorted {
+                                    if indices.len() < min_sats {
+                                        other_indices.extend(indices);
+                                        continue;
+                                    }
+                                    let co = planet.constellation_counter;
+                                    planet.constellation_counter += 1;
+                                    new_shells.push(TleShell {
+                                        label: format!("{}°/{}km", inc, alt),
+                                        satellite_indices: indices,
+                                        color_offset: co,
+                                        selected: true,
+                                    });
+                                }
+                                if !other_indices.is_empty() {
+                                    let co = planet.constellation_counter;
+                                    planet.constellation_counter += 1;
+                                    new_shells.push(TleShell {
+                                        label: "Other".to_string(),
+                                        satellite_indices: other_indices,
+                                        color_offset: co,
+                                        selected: true,
+                                    });
+                                }
+                                *shells = Some(new_shells);
+                            }
+                        }
+                    }
+                    if let Some(preset) = unsplit_preset {
+                        if let Some((_, _, shells)) = planet.tle_selections.get_mut(&preset) {
+                            *shells = None;
+                        }
+                    }
                 });
+
+                if split_active {
+                    ui.separator();
+                    let mut close_cluster = false;
+                    ui.vertical(|ui| {
+                        let preset = selected_loaded[0];
+                        if let Some((_, _, Some(shells))) = planet.tle_selections.get_mut(&preset) {
+                            ui.horizontal(|ui| {
+                                ui.label(preset.label());
+                                if ui.small_button("All").clicked() {
+                                    for shell in shells.iter_mut() {
+                                        shell.selected = true;
+                                    }
+                                }
+                                if ui.small_button("None").clicked() {
+                                    for shell in shells.iter_mut() {
+                                        shell.selected = false;
+                                    }
+                                }
+                                if ui.small_button("x").clicked() {
+                                    close_cluster = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                let num_cols = (shells.len() + 6) / 7;
+                                for col in 0..num_cols {
+                                    ui.vertical(|ui| {
+                                        for row in 0..7 {
+                                            let idx = col * 7 + row;
+                                            if idx < shells.len() {
+                                                let shell = &mut shells[idx];
+                                                ui.horizontal(|ui| {
+                                                    let color = plane_color(shell.color_offset);
+                                                    let rect = ui.allocate_space(egui::vec2(10.0, 10.0)).1;
+                                                    ui.painter().rect_filled(rect, 2.0, color);
+                                                    ui.painter().rect_filled(rect.shrink(2.5), 1.0, egui::Color32::BLACK);
+                                                    if ui.selectable_label(shell.selected, &shell.label).clicked() {
+                                                        shell.selected = !shell.selected;
+                                                    }
+                                                });
+                                            }
+                                        }
+                                    });
+                                }
+                            });
+                        }
+                    });
+                    if close_cluster {
+                        let preset = selected_loaded[0];
+                        if let Some((_, _, shells)) = planet.tle_selections.get_mut(&preset) {
+                            *shells = None;
+                        }
+                    }
+                }
                 ui.separator();
             }
 
@@ -3075,10 +3238,10 @@ impl ViewerState {
         if planet.show_tle_window {
             let propagation_minutes = self.start_timestamp.timestamp() as f64 / 60.0 + self.time / 60.0;
             for preset in TlePreset::ALL.iter() {
-                let Some((selected, state)) = planet.tle_selections.get(preset) else { continue };
+                let Some((selected, state, shells)) = planet.tle_selections.get(preset) else { continue };
                 if !*selected { continue; }
                 let TleLoadState::Loaded { satellites, .. } = state else { continue };
-                let mut positions = Vec::new();
+                let mut all_positions: Vec<SatelliteState> = Vec::new();
                 for (idx, sat) in satellites.iter().enumerate() {
                     let minutes_since_epoch = propagation_minutes - sat.epoch_minutes;
                     let prediction = match sat.constants.propagate(sgp4::MinutesSinceEpoch(minutes_since_epoch)) {
@@ -3092,7 +3255,7 @@ impl ViewerState {
                     let lat = (y / r).asin().to_degrees();
                     let lon = -z.atan2(x).to_degrees();
                     let ascending = prediction.velocity[2] > 0.0;
-                    positions.push(SatelliteState {
+                    all_positions.push(SatelliteState {
                         plane: 0,
                         sat_index: idx,
                         x, y, z,
@@ -3100,26 +3263,70 @@ impl ViewerState {
                         ascending,
                         neighbor_idx: None,
                         name: Some(sat.name.clone()),
+                        tle_inclination_deg: Some(sat.inclination_deg),
+                        tle_mean_motion: Some(sat.mean_motion),
                     });
                 }
-                if positions.is_empty() { continue; }
-                let tle_wc = WalkerConstellation {
-                    walker_type: WalkerType::Delta,
-                    total_sats: positions.len(),
-                    num_planes: 1,
-                    altitude_km: 550.0,
-                    inclination_deg: 0.0,
-                    phasing: 0.0,
-                    raan_offset_deg: 0.0,
-                    raan_spacing_deg: None,
-                    eccentricity: 0.0,
-                    arg_periapsis_deg: 0.0,
-                    planet_radius,
-                    planet_mu,
-                    planet_j2,
-                    planet_equatorial_radius: planet_eq_radius,
-                };
-                constellations_data.push((tle_wc, positions, preset.color_index(), true, usize::MAX, preset.label().to_string()));
+                if all_positions.is_empty() { continue; }
+
+                if let Some(shells) = shells {
+                    let shell_indices: Vec<std::collections::HashSet<usize>> = shells.iter()
+                        .map(|s| s.satellite_indices.iter().copied().collect())
+                        .collect();
+                    for (si, shell) in shells.iter().enumerate() {
+                        if !shell.selected { continue; }
+                        let positions: Vec<SatelliteState> = all_positions.iter()
+                            .filter(|p| shell_indices[si].contains(&p.sat_index))
+                            .map(|p| SatelliteState {
+                                plane: p.plane, sat_index: p.sat_index,
+                                x: p.x, y: p.y, z: p.z,
+                                lat: p.lat, lon: p.lon,
+                                ascending: p.ascending,
+                                neighbor_idx: p.neighbor_idx,
+                                name: p.name.clone(),
+                                tle_inclination_deg: p.tle_inclination_deg,
+                                tle_mean_motion: p.tle_mean_motion,
+                            })
+                            .collect();
+                        if positions.is_empty() { continue; }
+                        let tle_wc = WalkerConstellation {
+                            walker_type: WalkerType::Delta,
+                            total_sats: positions.len(),
+                            num_planes: 1,
+                            altitude_km: 550.0,
+                            inclination_deg: 0.0,
+                            phasing: 0.0,
+                            raan_offset_deg: 0.0,
+                            raan_spacing_deg: None,
+                            eccentricity: 0.0,
+                            arg_periapsis_deg: 0.0,
+                            planet_radius,
+                            planet_mu,
+                            planet_j2,
+                            planet_equatorial_radius: planet_eq_radius,
+                        };
+                        let label = format!("{} {}", preset.label(), shell.label);
+                        constellations_data.push((tle_wc, positions, shell.color_offset, true, usize::MAX, label));
+                    }
+                } else {
+                    let tle_wc = WalkerConstellation {
+                        walker_type: WalkerType::Delta,
+                        total_sats: all_positions.len(),
+                        num_planes: 1,
+                        altitude_km: 550.0,
+                        inclination_deg: 0.0,
+                        phasing: 0.0,
+                        raan_offset_deg: 0.0,
+                        raan_spacing_deg: None,
+                        eccentricity: 0.0,
+                        arg_periapsis_deg: 0.0,
+                        planet_radius,
+                        planet_mu,
+                        planet_j2,
+                        planet_equatorial_radius: planet_eq_radius,
+                    };
+                    constellations_data.push((tle_wc, all_positions, preset.color_index(), true, usize::MAX, preset.label().to_string()));
+                }
             }
         }
 
@@ -4043,6 +4250,8 @@ async fn parse_tle_data_async(data: &str) -> Result<Vec<TleSatellite>, String> {
                     let epoch_minutes = datetime_to_minutes(&elements.datetime);
                     satellites.push(TleSatellite {
                         name: elements.object_name.unwrap_or_default(),
+                        inclination_deg: elements.inclination,
+                        mean_motion: elements.mean_motion,
                         constants,
                         epoch_minutes,
                     });
@@ -4165,7 +4374,7 @@ impl App {
             let mut planet = PlanetConfig::new("Earth".to_string());
             planet.celestial_body = CelestialBody::Earth;
             for preset in leo_tle {
-                planet.tle_selections.insert(preset, (true, TleLoadState::NotLoaded));
+                planet.tle_selections.insert(preset, (true, TleLoadState::NotLoaded, None));
             }
             tab.planets.push(planet);
             v.tabs.push(tab);
@@ -4179,7 +4388,7 @@ impl App {
             let mut planet = PlanetConfig::new("Earth".to_string());
             planet.celestial_body = CelestialBody::Earth;
             for preset in leo_tle.iter().chain(geo_tle.iter()) {
-                planet.tle_selections.insert(*preset, (true, TleLoadState::NotLoaded));
+                planet.tle_selections.insert(*preset, (true, TleLoadState::NotLoaded, None));
             }
             tab.planets.push(planet);
             v.tabs.push(tab);
@@ -4206,7 +4415,7 @@ impl App {
             tab.planet_counter += 1;
             let mut planet_real = PlanetConfig::new("Real TLE".to_string());
             planet_real.celestial_body = CelestialBody::Earth;
-            planet_real.tle_selections.insert(TlePreset::Starlink, (true, TleLoadState::NotLoaded));
+            planet_real.tle_selections.insert(TlePreset::Starlink, (true, TleLoadState::NotLoaded, None));
             tab.planets.push(planet_real);
             v.tabs.push(tab);
         }
@@ -4300,7 +4509,7 @@ impl eframe::App for App {
         while let Ok((preset, result)) = v.tle_fetch_rx.try_recv() {
             for tab in &mut v.tabs {
                 for planet in &mut tab.planets {
-                    if let Some((_, state)) = planet.tle_selections.get_mut(&preset) {
+                    if let Some((_, state, _)) = planet.tle_selections.get_mut(&preset) {
                         if matches!(state, TleLoadState::Loading) {
                             *state = match result.clone() {
                                 Ok(satellites) => TleLoadState::Loaded {
@@ -4875,7 +5084,7 @@ impl eframe::App for App {
                 for (preset, result) in cell.borrow_mut().drain(..) {
                     for tab in &mut v.tabs {
                         for planet in &mut tab.planets {
-                            if let Some((_, state)) = planet.tle_selections.get_mut(&preset) {
+                            if let Some((_, state, _)) = planet.tle_selections.get_mut(&preset) {
                                 if matches!(state, TleLoadState::Loading) {
                                     *state = match result.clone() {
                                         Ok(satellites) => TleLoadState::Loaded {
@@ -6534,12 +6743,25 @@ fn draw_3d_view(
                         Some(name) => name.clone(),
                         None => format!("P{}S{}", sat.plane, sat.sat_index),
                     };
-                    let text = format!(
-                        "{}  {:.1}° {:.1}°\n{:.0} km  {:.2} km/s",
-                        id,
-                        ground_lat, ground_lon,
-                        alt_km, vel_km_s,
-                    );
+                    let text = if let (Some(inc), Some(mm)) = (sat.tle_inclination_deg, sat.tle_mean_motion) {
+                        let revs_per_day = mm;
+                        let period_min = 1440.0 / revs_per_day;
+                        format!(
+                            "{}  {:.1}° {:.1}°\n{:.0} km  {:.2} km/s\nInc {:.1}°  {:.2} rev/day\nPeriod {:.1} min",
+                            id,
+                            ground_lat, ground_lon,
+                            alt_km, vel_km_s,
+                            inc, revs_per_day,
+                            period_min,
+                        )
+                    } else {
+                        format!(
+                            "{}  {:.1}° {:.1}°\n{:.0} km  {:.2} km/s",
+                            id,
+                            ground_lat, ground_lon,
+                            alt_km, vel_km_s,
+                        )
+                    };
                     let font = egui::FontId::proportional(12.0);
                     let galley = ui.painter().layout_no_wrap(text, font, egui::Color32::WHITE);
                     let text_pos = screen_pos + egui::Vec2::new(scaled_sat_radius * 3.0, -galley.size().y / 2.0);
