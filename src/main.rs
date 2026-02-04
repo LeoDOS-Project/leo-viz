@@ -1648,11 +1648,6 @@ fn fetch_tle_data(url: &str) -> Result<Vec<TleSatellite>, String> {
     parse_tle_data(&body)
 }
 
-#[cfg(target_arch = "wasm32")]
-fn fetch_tle_data(_url: &str) -> Result<Vec<TleSatellite>, String> {
-    Err("WASM fetch not yet implemented".to_string())
-}
-
 fn parse_tle_data(data: &str) -> Result<Vec<TleSatellite>, String> {
     let lines: Vec<&str> = data.lines().collect();
     let mut satellites = Vec::new();
@@ -1998,6 +1993,10 @@ struct ViewerState {
     night_texture: Option<Arc<EarthTexture>>,
     star_texture: Option<Arc<EarthTexture>>,
     milky_way_texture: Option<Arc<EarthTexture>>,
+    night_texture_loading: bool,
+    star_texture_loading: bool,
+    milky_way_texture_loading: bool,
+    cloud_texture_loading: bool,
     sphere_renderer: Option<Arc<Mutex<SphereRenderer>>>,
     #[cfg(not(target_arch = "wasm32"))]
     tle_fetch_tx: mpsc::Sender<(TlePreset, Result<Vec<TleSatellite>, String>)>,
@@ -2030,7 +2029,12 @@ impl App {
 
         {
             let mut renderer = sphere_renderer.lock();
-            renderer.upload_texture(gl, (CelestialBody::Earth, Skin::Default, TextureResolution::R8192), &builtin_texture);
+            let builtin_key = if cfg!(target_arch = "wasm32") {
+                (CelestialBody::Earth, Skin::Default, TextureResolution::R512)
+            } else {
+                (CelestialBody::Earth, Skin::Default, TextureResolution::R8192)
+            };
+            renderer.upload_texture(gl, builtin_key, &builtin_texture);
         }
 
         Self {
@@ -2059,12 +2063,17 @@ impl App {
                 torus_rotation: torus_initial,
                 planet_textures: {
                     let mut map = HashMap::new();
-                    map.insert((CelestialBody::Earth, Skin::Default, TextureResolution::R8192), builtin_texture.clone());
+                    let builtin_key = if cfg!(target_arch = "wasm32") {
+                        (CelestialBody::Earth, Skin::Default, TextureResolution::R512)
+                    } else {
+                        (CelestialBody::Earth, Skin::Default, TextureResolution::R8192)
+                    };
+                    map.insert(builtin_key, builtin_texture.clone());
                     map
                 },
                 cloud_textures: HashMap::new(),
                 planet_image_handles: HashMap::new(),
-                texture_resolution: TextureResolution::R8192,
+                texture_resolution: if cfg!(target_arch = "wasm32") { TextureResolution::R2048 } else { TextureResolution::R8192 },
                 last_rotation: None,
                 earth_resolution: 512,
                 last_resolution: 0,
@@ -2103,6 +2112,10 @@ impl App {
                 night_texture: None,
                 star_texture: None,
                 milky_way_texture: None,
+                night_texture_loading: false,
+                star_texture_loading: false,
+                milky_way_texture_loading: false,
+                cloud_texture_loading: false,
                 sphere_renderer: Some(sphere_renderer),
                 #[cfg(not(target_arch = "wasm32"))]
                 tle_fetch_tx,
@@ -2786,6 +2799,26 @@ impl ViewerState {
                                                         std::thread::spawn(move || {
                                                             let result = fetch_tle_data(&url);
                                                             let _ = tx.send((preset_copy, result));
+                                                        });
+                                                    }
+                                                }
+
+                                                #[cfg(target_arch = "wasm32")]
+                                                if fetch_requested && *selected {
+                                                    if matches!(state, TleLoadState::NotLoaded | TleLoadState::Failed(_)) {
+                                                        *state = TleLoadState::Loading;
+                                                        let url = preset.url().to_string();
+                                                        let preset_copy = *preset;
+                                                        let ctx = ui.ctx().clone();
+                                                        wasm_bindgen_futures::spawn_local(async move {
+                                                            let result = match fetch_tle_text(&url).await {
+                                                                Ok(text) => parse_tle_data(&text),
+                                                                Err(e) => Err(e),
+                                                            };
+                                                            TLE_FETCH_RESULT.with(|cell| {
+                                                                cell.borrow_mut().push((preset_copy, result));
+                                                            });
+                                                            ctx.request_repaint();
                                                         });
                                                     }
                                                 }
@@ -3695,6 +3728,7 @@ impl ViewerState {
                     ui.selectable_value(&mut self.texture_resolution, TextureResolution::R1024, "1K");
                     ui.selectable_value(&mut self.texture_resolution, TextureResolution::R2048, "2K");
                     ui.selectable_value(&mut self.texture_resolution, TextureResolution::R8192, "8K");
+                    #[cfg(not(target_arch = "wasm32"))]
                     ui.selectable_value(&mut self.texture_resolution, TextureResolution::R21504, "21K");
                 });
         });
@@ -3808,6 +3842,18 @@ impl ViewerState {
                 }
             }
         }
+
+        #[cfg(target_arch = "wasm32")]
+        if !self.cloud_texture_loading {
+            self.cloud_texture_loading = true;
+            let ctx = _ctx.clone();
+            let filename = filename.to_string();
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = fetch_texture(&filename).await;
+                CLOUD_TEXTURE_RESULT.with(|cell| { *cell.borrow_mut() = Some((res, result)); });
+                ctx.request_repaint();
+            });
+        }
     }
 
     fn load_night_texture(&mut self, _ctx: &egui::Context) {
@@ -3823,6 +3869,17 @@ impl ViewerState {
                     self.night_texture = Some(Arc::new(texture));
                 }
             }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        if !self.night_texture_loading {
+            self.night_texture_loading = true;
+            let ctx = _ctx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = fetch_texture("textures/earth/Earth_Сities_16k.png").await;
+                NIGHT_TEXTURE_RESULT.with(|cell| { *cell.borrow_mut() = Some(result); });
+                ctx.request_repaint();
+            });
         }
     }
 
@@ -3846,12 +3903,39 @@ impl ViewerState {
                 }
             }
         }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            if self.star_texture.is_none() && !self.star_texture_loading {
+                self.star_texture_loading = true;
+                let ctx = _ctx.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let result = fetch_texture("textures/stars/8k_stars.jpg").await;
+                    STAR_TEXTURE_RESULT.with(|cell| { *cell.borrow_mut() = Some(result); });
+                    ctx.request_repaint();
+                });
+            }
+            if self.milky_way_texture.is_none() && !self.milky_way_texture_loading {
+                self.milky_way_texture_loading = true;
+                let ctx = _ctx.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let result = fetch_texture("textures/stars/8k_stars_milky_way.jpg").await;
+                    MILKY_WAY_TEXTURE_RESULT.with(|cell| { *cell.borrow_mut() = Some(result); });
+                    ctx.request_repaint();
+                });
+            }
+        }
     }
 }
 
 #[cfg(target_arch = "wasm32")]
 thread_local! {
     static TEXTURE_RESULT: std::cell::RefCell<Option<Result<EarthTexture, String>>> = std::cell::RefCell::new(None);
+    static STAR_TEXTURE_RESULT: std::cell::RefCell<Option<Result<EarthTexture, String>>> = std::cell::RefCell::new(None);
+    static MILKY_WAY_TEXTURE_RESULT: std::cell::RefCell<Option<Result<EarthTexture, String>>> = std::cell::RefCell::new(None);
+    static NIGHT_TEXTURE_RESULT: std::cell::RefCell<Option<Result<EarthTexture, String>>> = std::cell::RefCell::new(None);
+    static CLOUD_TEXTURE_RESULT: std::cell::RefCell<Option<(TextureResolution, Result<EarthTexture, String>)>> = std::cell::RefCell::new(None);
+    static TLE_FETCH_RESULT: std::cell::RefCell<Vec<(TlePreset, Result<Vec<TleSatellite>, String>)>> = std::cell::RefCell::new(Vec::new());
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -3888,6 +3972,39 @@ async fn fetch_texture(url: &str) -> Result<EarthTexture, String> {
     let bytes: Vec<u8> = uint8_array.to_vec();
 
     EarthTexture::from_bytes(&bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn fetch_tle_text(url: &str) -> Result<String, String> {
+    use wasm_bindgen::JsCast as _;
+    use web_sys::{Request, RequestInit, RequestMode, Response};
+
+    let opts = RequestInit::new();
+    opts.set_method("GET");
+    opts.set_mode(RequestMode::Cors);
+
+    let request = Request::new_with_str_and_init(url, &opts)
+        .map_err(|e| format!("{:?}", e))?;
+
+    let window = web_sys::window().ok_or("No window")?;
+    let resp_value = wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| format!("Fetch failed: {:?}", e))?;
+
+    let resp: Response = resp_value.dyn_into()
+        .map_err(|_| "Response is not a Response")?;
+
+    if !resp.ok() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+
+    let text = wasm_bindgen_futures::JsFuture::from(
+        resp.text().map_err(|e| format!("{:?}", e))?
+    )
+    .await
+    .map_err(|e| format!("{:?}", e))?;
+
+    text.as_string().ok_or("Not a string".to_string())
 }
 
 impl App {
@@ -4665,6 +4782,61 @@ impl eframe::App for App {
                 }
             }
         });
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            CLOUD_TEXTURE_RESULT.with(|cell| {
+                if let Some((res, result)) = cell.borrow_mut().take() {
+                    if let Ok(texture) = result {
+                        v.cloud_textures.insert(res, Arc::new(texture));
+                    }
+                    v.cloud_texture_loading = false;
+                }
+            });
+            STAR_TEXTURE_RESULT.with(|cell| {
+                if let Some(result) = cell.borrow_mut().take() {
+                    if let Ok(texture) = result {
+                        v.star_texture = Some(Arc::new(texture));
+                    }
+                    v.star_texture_loading = false;
+                }
+            });
+            MILKY_WAY_TEXTURE_RESULT.with(|cell| {
+                if let Some(result) = cell.borrow_mut().take() {
+                    if let Ok(texture) = result {
+                        v.milky_way_texture = Some(Arc::new(texture));
+                    }
+                    v.milky_way_texture_loading = false;
+                }
+            });
+            NIGHT_TEXTURE_RESULT.with(|cell| {
+                if let Some(result) = cell.borrow_mut().take() {
+                    if let Ok(texture) = result {
+                        v.night_texture = Some(Arc::new(texture));
+                    }
+                    v.night_texture_loading = false;
+                }
+            });
+            TLE_FETCH_RESULT.with(|cell| {
+                for (preset, result) in cell.borrow_mut().drain(..) {
+                    for tab in &mut v.tabs {
+                        for planet in &mut tab.planets {
+                            if let Some((_, state)) = planet.tle_selections.get_mut(&preset) {
+                                if matches!(state, TleLoadState::Loading) {
+                                    *state = match result.clone() {
+                                        Ok(satellites) => TleLoadState::Loaded {
+                                            satellites,
+                                            loaded_at: std::time::Instant::now(),
+                                        },
+                                        Err(e) => TleLoadState::Failed(e),
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
 
         if !v.use_gpu_rendering {
             let rotation_changed = v.last_rotation.map_or(true, |r| r != v.rotation);
