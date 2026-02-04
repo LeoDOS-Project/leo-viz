@@ -17,7 +17,6 @@ image = "0.25"
 log = "0.4"
 sgp4 = "2.3"
 chrono = { version = "0.4", features = ["wasmbind"] }
-lru = "0.12"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 eframe = { version = "0.33", default-features = false, features = [
