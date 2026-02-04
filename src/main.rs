@@ -1214,15 +1214,16 @@ impl WalkerConstellation {
         } else {
             0.0
         };
+        let dead = self.altitude_km < 100.0;
         for plane in 0..self.num_planes {
             let raan_initial = raan_offset + raan_step * plane as f64 - center_offset;
-            let raan = raan_initial + raan_drift_rate * time;
+            let raan = raan_initial + if dead { 0.0 } else { raan_drift_rate * time };
             let raan_cos = raan.cos();
             let raan_sin = raan.sin();
             let phase_offset = phase_step * plane as f64;
 
             for sat in 0..sats_per_plane {
-                let mean_anomaly = sat_step * sat as f64 + mean_motion * time + phase_offset;
+                let mean_anomaly = sat_step * sat as f64 + if dead { 0.0 } else { mean_motion * time } + phase_offset;
 
                 let true_anomaly = if ecc < 1e-8 {
                     mean_anomaly
@@ -1583,6 +1584,8 @@ struct ConstellationConfig {
     raan_spacing: Option<f64>,
     eccentricity: f64,
     arg_periapsis: f64,
+    drag_enabled: bool,
+    ballistic_coeff: f64,
     preset: Preset,
     color_offset: usize,
     hidden: bool,
@@ -1601,6 +1604,8 @@ impl ConstellationConfig {
             raan_spacing: None,
             eccentricity: 0.0,
             arg_periapsis: 0.0,
+            drag_enabled: false,
+            ballistic_coeff: 100.0,
             preset: Preset::None,
             color_offset,
             hidden: false,
@@ -1786,6 +1791,7 @@ struct TabSettings {
     single_color: bool,
     follow_satellite: bool,
     render_planet: bool,
+    show_altitude_lines: bool,
     show_camera_windows: bool,
 }
 
@@ -1808,6 +1814,7 @@ impl Default for TabSettings {
             single_color: false,
             follow_satellite: false,
             render_planet: true,
+            show_altitude_lines: false,
             show_camera_windows: false,
         }
     }
@@ -1898,6 +1905,7 @@ struct ViewerState {
     show_manhattan_path: bool,
     show_shortest_path: bool,
     show_asc_desc_colors: bool,
+    show_altitude_lines: bool,
     show_camera_windows: bool,
     render_planet: bool,
     show_polar_circle: bool,
@@ -1999,6 +2007,7 @@ impl App {
                 show_manhattan_path: true,
                 show_shortest_path: true,
                 show_asc_desc_colors: false,
+                show_altitude_lines: false,
                 show_camera_windows: false,
                 render_planet: true,
                 show_polar_circle: false,
@@ -2255,6 +2264,7 @@ impl ViewerState {
                         ui.checkbox(&mut s.show_torus, "Show torus");
                         ui.checkbox(&mut s.show_ground_track, "Show ground");
                         ui.checkbox(&mut s.show_axes, "Show axes");
+                        ui.checkbox(&mut s.show_altitude_lines, "Altitude lines");
                         ui.checkbox(&mut s.show_coverage, "Show coverage");
                         if s.show_coverage {
                             ui.horizontal(|ui| {
@@ -2755,7 +2765,7 @@ impl ViewerState {
 
                     ui.horizontal(|ui| {
                         ui.label("Alt:");
-                        let alt_resp = ui.add(egui::DragValue::new(&mut cons.altitude_km).range(100.0..=50000.0).suffix(" km"));
+                        let alt_resp = ui.add(egui::DragValue::new(&mut cons.altitude_km).range(0.0..=50000.0).suffix(" km"));
                         let orbit_label = if cons.altitude_km < 450.0 { "VLEO" }
                             else if cons.altitude_km < 2000.0 { "LEO" }
                             else if cons.altitude_km < 35000.0 { "MEO" }
@@ -2831,6 +2841,15 @@ impl ViewerState {
                         ui.label("ω:");
                         if ui.add(egui::DragValue::new(&mut cons.arg_periapsis).range(0.0..=360.0).suffix("°").speed(1.0)).changed() {
                             cons.preset = Preset::None;
+                        }
+                        if ui.toggle_value(&mut cons.drag_enabled, "Drag").changed() {
+                            cons.preset = Preset::None;
+                        }
+                        if cons.drag_enabled {
+                            ui.label("BC:");
+                            if ui.add(egui::DragValue::new(&mut cons.ballistic_coeff).range(0.1..=500.0).suffix(" kg/m²").speed(1.0).max_decimals(1)).changed() {
+                                cons.preset = Preset::None;
+                            }
                         }
                     });
 
@@ -2998,6 +3017,7 @@ impl ViewerState {
             let show_manhattan_path = if use_local { local.show_manhattan_path } else { self.show_manhattan_path };
             let show_shortest_path = if use_local { local.show_shortest_path } else { self.show_shortest_path };
             let show_asc_desc_colors = if use_local { local.show_asc_desc_colors } else { self.show_asc_desc_colors };
+            let show_altitude_lines = if use_local { local.show_altitude_lines } else { self.show_altitude_lines };
             let render_planet = (if use_local { local.render_planet } else { self.render_planet })
                 && self.tabs[tab_idx].planets[planet_idx].show_planet;
             let tex_res = self.texture_resolution;
@@ -3046,6 +3066,7 @@ impl ViewerState {
                         show_manhattan_path,
                         show_shortest_path,
                         show_asc_desc_colors,
+                        show_altitude_lines,
                         planet_radius,
                         render_planet,
                         link_width,
@@ -3168,6 +3189,7 @@ impl ViewerState {
             let show_manhattan_path = if use_local { local.show_manhattan_path } else { self.show_manhattan_path };
             let show_shortest_path = if use_local { local.show_shortest_path } else { self.show_shortest_path };
             let show_asc_desc_colors = if use_local { local.show_asc_desc_colors } else { self.show_asc_desc_colors };
+            let show_altitude_lines = if use_local { local.show_altitude_lines } else { self.show_altitude_lines };
             let render_planet = (if use_local { local.render_planet } else { self.render_planet })
                 && self.tabs[tab_idx].planets[planet_idx].show_planet;
             let tex_res = self.texture_resolution;
@@ -3211,6 +3233,7 @@ impl ViewerState {
                 show_manhattan_path,
                 show_shortest_path,
                 show_asc_desc_colors,
+                show_altitude_lines,
                 planet_radius,
                 render_planet,
                 link_width,
@@ -3533,6 +3556,7 @@ impl ViewerState {
             });
         }
         ui.checkbox(&mut self.show_asc_desc_colors, "Asc/Desc colors");
+        ui.checkbox(&mut self.show_altitude_lines, "Altitude lines");
         ui.checkbox(&mut self.show_coverage, "Show coverage");
         if self.show_coverage {
             ui.horizontal(|ui| {
@@ -4399,6 +4423,27 @@ impl eframe::App for App {
         ctx.request_repaint();
         if v.animate {
             v.time += dt * v.speed;
+            let sim_seconds = dt * v.speed;
+            for tab in &mut v.tabs {
+                for planet in &mut tab.planets {
+                    let mu = planet.celestial_body.mu();
+                    let r_planet = planet.celestial_body.radius_km();
+                    for cons in &mut planet.constellations {
+                        if cons.drag_enabled && cons.altitude_km > 0.0 {
+                            let h = cons.altitude_km;
+                            let r = r_planet + h;
+                            let scale_height = 60.0;
+                            let rho_ref = 2.8e-12;
+                            let h_ref = 400.0;
+                            let rho = rho_ref * ((h_ref - h) / scale_height).exp();
+                            let v_ms = (mu / r).sqrt() * 1000.0;
+                            let a_m = r * 1000.0;
+                            let dh_ms = -rho * v_ms * a_m / cons.ballistic_coeff;
+                            cons.altitude_km = (h + dh_ms * sim_seconds / 1000.0).max(0.0);
+                        }
+                    }
+                }
+            }
         }
 
         if v.auto_cycle_tabs && v.tabs.len() > 1 {
@@ -5085,6 +5130,7 @@ fn draw_3d_view(
     show_manhattan_path: bool,
     show_shortest_path: bool,
     show_asc_desc_colors: bool,
+    show_altitude_lines: bool,
     planet_radius: f64,
     render_planet: bool,
     link_width: f32,
@@ -6018,6 +6064,33 @@ fn draw_3d_view(
                                     .filled(true),
                             );
                         }
+                    }
+
+                    if constellation.altitude_km < 100.0 && (in_front || !hide_behind_earth) {
+                        let d = scaled_sat_radius as f64 * 3.0 * margin / (width as f64 * 0.5);
+                        let red = egui::Color32::from_rgb(255, 60, 60);
+                        plot_ui.line(
+                            egui_plot::Line::new("", PlotPoints::new(vec![[rx - d, ry - d], [rx + d, ry + d]]))
+                                .color(red)
+                                .width(2.0 * zoom_factor),
+                        );
+                        plot_ui.line(
+                            egui_plot::Line::new("", PlotPoints::new(vec![[rx - d, ry + d], [rx + d, ry - d]]))
+                                .color(red)
+                                .width(2.0 * zoom_factor),
+                        );
+                    }
+
+                    if show_altitude_lines && (in_front || !hide_behind_earth) {
+                        let r = (sat.x * sat.x + sat.y * sat.y + sat.z * sat.z).sqrt();
+                        let scale = planet_radius / r;
+                        let (gx, gy, _) = rotate_point_matrix(sat.x * scale, sat.y * scale, sat.z * scale, &satellite_rotation);
+                        let alt_color = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 100);
+                        plot_ui.line(
+                            egui_plot::Line::new("", PlotPoints::new(vec![[rx, ry], [gx, gy]]))
+                                .color(alt_color)
+                                .width(0.5 * zoom_factor),
+                        );
                     }
                 }
             }
