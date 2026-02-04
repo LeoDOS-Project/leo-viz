@@ -729,6 +729,7 @@ impl SphereRenderer {
                 uniform float u_center_lat;
                 uniform float u_center_lon;
                 uniform float u_show_stars;
+                uniform vec3 u_bg_color;
 
                 const float PI = 3.14159265359;
                 const vec3 ATMO_COLOR = vec3(0.4, 0.7, 1.0);
@@ -808,7 +809,7 @@ impl SphereRenderer {
                                 }
                             }
 
-                            out_color = vec4(bg, bg_alpha);
+                            out_color = vec4(mix(u_bg_color, bg, bg_alpha), 1.0);
                             return;
                         }
                         lat = lat_ortho;
@@ -862,11 +863,11 @@ impl SphereRenderer {
                                 if (atmo_glow > 0.0) {
                                     bg = bg * (1.0 - atmo_glow / star_alpha) + ATMO_COLOR * atmo_glow;
                                 }
-                                out_color = vec4(bg, alpha);
+                                out_color = vec4(mix(u_bg_color, bg, alpha), 1.0);
                                 return;
                             }
                             if (atmo_glow > alpha) {
-                                out_color = vec4(ATMO_COLOR * atmo_glow, atmo_glow);
+                                out_color = vec4(mix(u_bg_color, ATMO_COLOR * atmo_glow, atmo_glow), 1.0);
                                 return;
                             }
                         }
@@ -918,7 +919,7 @@ impl SphereRenderer {
                         color = mix(color, ATMO_COLOR * atmo_sun, rim);
                     }
 
-                    out_color = vec4(color, alpha);
+                    out_color = vec4(mix(u_bg_color, color, alpha), 1.0);
                 }
             "#;
 
@@ -1131,6 +1132,7 @@ impl SphereRenderer {
         center_lon: f32,
         show_stars: bool,
         show_milky_way: bool,
+        bg_color: [f32; 3],
     ) {
         let Some(texture) = self.textures.get(&key) else { return };
 
@@ -1216,6 +1218,7 @@ impl SphereRenderer {
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_blend").as_ref(), blend);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_center_lat").as_ref(), center_lat);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_center_lon").as_ref(), center_lon);
+            gl.uniform_3_f32(gl.get_uniform_location(self.program, "u_bg_color").as_ref(), bg_color[0], bg_color[1], bg_color[2]);
 
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
@@ -1831,18 +1834,6 @@ impl PlanetConfig {
         self.constellation_counter += 1;
     }
 
-    fn tle_total_sats(&self) -> usize {
-        self.tle_selections.values()
-            .filter(|(selected, _)| *selected)
-            .map(|(_, state)| {
-                if let TleLoadState::Loaded { satellites, .. } = state {
-                    satellites.len()
-                } else {
-                    0
-                }
-            })
-            .sum()
-    }
 }
 
 #[derive(Clone)]
@@ -4749,8 +4740,8 @@ impl eframe::App for App {
                         egui::Grid::new("bodies_grid").striped(true).show(&mut cols[0], |ui| {
                             ui.strong("Body");
                             ui.strong("Radius (km)");
-                            ui.strong("μ (km³/s²)");
-                            ui.strong("J₂ (×10⁻³)");
+                            ui.strong("mu (km\u{00b3}/s\u{00b2})");
+                            ui.strong("J2 (x10\u{207b}\u{00b3})");
                             ui.strong("Rotation (h)");
                             ui.end_row();
                             for body in bodies {
@@ -4769,60 +4760,9 @@ impl eframe::App for App {
                         });
 
                         cols[0].add_space(10.0);
-                        cols[0].heading("Constants & Variables");
-                        egui::Grid::new("constants_grid").show(&mut cols[0], |ui| {
-                            ui.strong("Symbol");
-                            ui.strong("Meaning");
-                            ui.end_row();
-                            ui.monospace("G");
-                            ui.label("Gravitational constant (6.674×10⁻¹¹ m³/kg/s²)");
-                            ui.end_row();
-                            ui.monospace("M");
-                            ui.label("Mass of celestial body (kg)");
-                            ui.end_row();
-                            ui.monospace("μ");
-                            ui.label("Standard gravitational parameter = G × M");
-                            ui.end_row();
-                            ui.monospace("r");
-                            ui.label("Orbital radius = planet radius + altitude");
-                            ui.end_row();
-                            ui.monospace("v");
-                            ui.label("Orbital velocity (km/s)");
-                            ui.end_row();
-                            ui.monospace("T");
-                            ui.label("Orbital period (seconds)");
-                            ui.end_row();
-                            ui.monospace("c");
-                            ui.label("Speed of light (299,792 km/s)");
-                            ui.end_row();
-                            ui.monospace("J₂");
-                            ui.label("Second zonal harmonic (oblateness coefficient)");
-                            ui.end_row();
-                        });
-
-                        cols[0].add_space(10.0);
-                        cols[0].heading("J₂ Perturbation");
-                        cols[0].label("J₂ describes how oblate (flattened) a body is.");
-                        cols[0].label("It causes orbital planes (RAAN) to precess:");
-                        cols[0].monospace("  dΩ/dt = -1.5 J₂ (Rₑ/a)² n cos(i)");
-                        cols[0].label("where Rₑ = equatorial radius, a = semi-major axis,");
-                        cols[0].label("n = mean motion, i = inclination.");
-                        cols[0].add_space(5.0);
-                        cols[0].label("Higher J₂ = faster precession. Jupiter/Saturn");
-                        cols[0].label("have the highest J₂ due to rapid rotation.");
-
-                        cols[0].add_space(10.0);
-                        cols[0].heading("Orbital Mechanics");
-                        cols[0].label("Orbital velocity:");
-                        cols[0].monospace("  v = √(μ / r)");
-                        cols[0].label("Orbital period:");
-                        cols[0].monospace("  T = 2π √(r³ / μ)");
-                        cols[0].label("One-way latency:");
-                        cols[0].monospace("  t = distance / c");
-
-                        cols[1].heading("Walker Constellation");
-                        cols[1].label("Notation: i:T/P/F");
-                        egui::Grid::new("walker_grid").show(&mut cols[1], |ui| {
+                        cols[0].heading("Walker Constellation");
+                        cols[0].label("Notation: i:T/P/F");
+                        egui::Grid::new("walker_grid").show(&mut cols[0], |ui| {
                             ui.monospace("i");
                             ui.label("Inclination (degrees from equator)");
                             ui.end_row();
@@ -4836,12 +4776,44 @@ impl eframe::App for App {
                             ui.label("Phasing factor (0 to P-1)");
                             ui.end_row();
                         });
-                        cols[1].add_space(5.0);
-                        cols[1].label("Types:");
-                        cols[1].label("  Delta: 360° RAAN spread (co-rotating)");
-                        cols[1].label("  Star: 180° RAAN spread (counter-rotating)");
-                        cols[1].label("Phasing offset per plane:");
-                        cols[1].monospace("  Δ = F × 360° / T");
+                        cols[0].add_space(5.0);
+                        cols[0].label("Types:");
+                        cols[0].label("  Delta: 360\u{00b0} RAAN spread (co-rotating)");
+                        cols[0].label("  Star: 180\u{00b0} RAAN spread (counter-rotating)");
+                        cols[0].label("Phasing offset per plane:");
+                        cols[0].monospace("  d = F x 360 / T");
+
+                        cols[0].add_space(10.0);
+                        cols[0].heading("Orbital Parameters");
+                        egui::Grid::new("params_grid").show(&mut cols[0], |ui| {
+                            ui.monospace("RAAN0");
+                            ui.label("Right ascension of first plane");
+                            ui.end_row();
+                            ui.monospace("Delta");
+                            ui.label("RAAN spacing between planes");
+                            ui.end_row();
+                            ui.monospace("Ecc");
+                            ui.label("Eccentricity (0 = circular)");
+                            ui.end_row();
+                            ui.monospace("Omega");
+                            ui.label("Argument of periapsis");
+                            ui.end_row();
+                            ui.monospace("Drag");
+                            ui.label("Atmospheric drag coefficient");
+                            ui.end_row();
+                        });
+
+                        cols[1].heading("Orbital Mechanics");
+                        cols[1].label("Orbital velocity:");
+                        cols[1].monospace("  v = sqrt(mu / r)");
+                        cols[1].label("Orbital period:");
+                        cols[1].monospace("  T = 2pi sqrt(r^3 / mu)");
+                        cols[1].label("One-way latency:");
+                        cols[1].monospace("  t = distance / c");
+                        cols[1].label("J2 RAAN precession:");
+                        cols[1].monospace("  dO/dt = -1.5 J2 (Re/a)^2 n cos(i)");
+                        cols[1].label("where Re = equatorial radius, a = semi-major axis,");
+                        cols[1].label("n = mean motion, i = inclination.");
 
                         cols[1].add_space(10.0);
                         cols[1].heading("Satellite Constellations");
@@ -4852,42 +4824,51 @@ impl eframe::App for App {
                             ui.strong("Inc");
                             ui.end_row();
                             ui.label("Starlink");
-                            ui.label("22×72");
+                            ui.label("22x72");
                             ui.label("550km");
-                            ui.label("53°");
+                            ui.label("53\u{00b0}");
                             ui.end_row();
                             ui.label("OneWeb");
-                            ui.label("49×36");
+                            ui.label("49x36");
                             ui.label("1200km");
-                            ui.label("87.9°");
+                            ui.label("87.9\u{00b0}");
                             ui.end_row();
                             ui.label("Iridium");
-                            ui.label("11×6");
+                            ui.label("11x6");
                             ui.label("780km");
-                            ui.label("86.4°");
+                            ui.label("86.4\u{00b0}");
                             ui.end_row();
                             ui.label("Kuiper");
-                            ui.label("34×34");
+                            ui.label("34x34");
                             ui.label("630km");
-                            ui.label("51.9°");
-                            ui.end_row();
-                            ui.label("Iris²");
-                            ui.label("22×12");
-                            ui.label("7800km");
-                            ui.label("75°");
+                            ui.label("51.9\u{00b0}");
                             ui.end_row();
                             ui.label("Telesat");
-                            ui.label("13×6");
+                            ui.label("13x6");
                             ui.label("1015km");
-                            ui.label("99°");
+                            ui.label("99\u{00b0}");
+                            ui.end_row();
+                        });
+
+                        cols[1].add_space(10.0);
+                        cols[1].heading("Constants");
+                        egui::Grid::new("constants_grid").show(&mut cols[1], |ui| {
+                            ui.monospace("mu");
+                            ui.label("Gravitational parameter = G x M");
+                            ui.end_row();
+                            ui.monospace("J2");
+                            ui.label("Oblateness coefficient");
+                            ui.end_row();
+                            ui.monospace("c");
+                            ui.label("Speed of light (299,792 km/s)");
                             ui.end_row();
                         });
 
                         cols[1].add_space(10.0);
                         cols[1].heading("Live TLE Sources");
-                        cols[1].label("From CelesTrak: Starlink, OneWeb,");
-                        cols[1].label("Iridium, Globalstar, Orbcomm, GPS,");
-                        cols[1].label("Galileo, GLONASS, Beidou");
+                        cols[1].label("From CelesTrak: Starlink, OneWeb, Kuiper,");
+                        cols[1].label("Iridium, Iridium NEXT, Globalstar, Orbcomm,");
+                        cols[1].label("GPS, Galileo, GLONASS, Beidou, Molniya, Planet");
                     });
                 });
         }
@@ -5341,6 +5322,8 @@ fn draw_3d_view(
         let center_lat_val = center_world.y.asin() as f32;
         let center_lon_val = (-center_world.z).atan2(center_world.x) as f32;
 
+        let bg = ui.visuals().extreme_bg_color;
+        let bg_color = [bg.r() as f32 / 255.0, bg.g() as f32 / 255.0, bg.b() as f32 / 255.0];
         let detail_info = detail_gl_info;
         let callback = egui::PaintCallback {
             rect,
@@ -5359,9 +5342,9 @@ fn draw_3d_view(
                         },
                         gl_texture: Some(detail_tex),
                     };
-                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, Some(&dt), merc_blend, center_lat_val, center_lon_val, show_stars, show_milky_way);
+                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, Some(&dt), merc_blend, center_lat_val, center_lon_val, show_stars, show_milky_way, bg_color);
                 } else {
-                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, None, merc_blend, center_lat_val, center_lon_val, show_stars, show_milky_way);
+                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, None, merc_blend, center_lat_val, center_lon_val, show_stars, show_milky_way, bg_color);
                 }
             })),
         };
