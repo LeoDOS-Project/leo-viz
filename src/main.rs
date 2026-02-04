@@ -3563,22 +3563,15 @@ impl ViewerState {
             }
         }
         ui.horizontal(|ui| {
-            if ui.button("N/S view").clicked() {
-                let (_, lon) = matrix_to_lat_lon(&self.rotation);
-                self.rotation = lat_lon_to_matrix(0.0, lon);
-            }
-            if ui.button("E/W view").clicked() {
-                let (lat, _) = matrix_to_lat_lon(&self.rotation);
-                self.rotation = lat_lon_to_matrix(lat, 0.0);
-            }
-            if ui.button("Reset").clicked() {
-                self.rotation = Matrix3::identity();
-                self.torus_rotation = Matrix3::new(
-                    1.0, 0.0, 0.0,
-                    0.0, 0.0, -1.0,
-                    0.0, 1.0, 0.0,
-                );
-                self.zoom = 1.0;
+            for (label, lat, lon) in [("N", 90.0_f64, 0.0_f64), ("S", -90.0, 0.0), ("E", 0.0, 90.0), ("W", 0.0, -90.0)] {
+                if ui.button(label).clicked() {
+                    let target_lon = if self.earth_fixed_camera {
+                        lon.to_radians()
+                    } else {
+                        lon.to_radians() + body_rotation
+                    };
+                    self.rotation = lat_lon_to_matrix(lat.to_radians(), target_lon);
+                }
             }
         });
 
