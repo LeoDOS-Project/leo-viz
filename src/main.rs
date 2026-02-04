@@ -1155,6 +1155,8 @@ struct WalkerConstellation {
     phasing: f64,
     raan_offset_deg: f64,
     raan_spacing_deg: Option<f64>,
+    eccentricity: f64,
+    arg_periapsis_deg: f64,
     planet_radius: f64,
     planet_mu: f64,
     planet_j2: f64,
@@ -1188,8 +1190,10 @@ impl WalkerConstellation {
     fn satellite_positions(&self, time: f64) -> Vec<SatelliteState> {
         let mut positions = Vec::with_capacity(self.total_sats);
         let sats_per_plane = self.sats_per_plane();
-        let orbit_radius = self.planet_radius + self.altitude_km;
-        let period = 2.0 * PI * (orbit_radius.powi(3) / self.planet_mu).sqrt();
+        let perigee_radius = self.planet_radius + self.altitude_km;
+        let ecc = self.eccentricity;
+        let semi_major = perigee_radius / (1.0 - ecc);
+        let period = 2.0 * PI * (semi_major.powi(3) / self.planet_mu).sqrt();
         let mean_motion = 2.0 * PI / period;
         let inc = self.inclination_deg.to_radians();
         let inc_cos = inc.cos();
@@ -1198,10 +1202,11 @@ impl WalkerConstellation {
         let raan_offset = -self.raan_offset_deg.to_radians();
         let sat_step = 2.0 * PI / sats_per_plane as f64;
         let is_star = self.walker_type == WalkerType::Star;
+        let omega = self.arg_periapsis_deg.to_radians();
 
         let phase_step = self.phasing * 2.0 * PI / self.total_sats as f64;
 
-        let r_ratio = self.planet_equatorial_radius / orbit_radius;
+        let r_ratio = self.planet_equatorial_radius / semi_major;
         let raan_drift_rate = -1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion * inc_cos;
 
         let center_offset = if self.raan_spacing_deg.is_some() {
@@ -1217,17 +1222,31 @@ impl WalkerConstellation {
             let phase_offset = phase_step * plane as f64;
 
             for sat in 0..sats_per_plane {
-                let true_anomaly = sat_step * sat as f64 + mean_motion * time + phase_offset;
-                let ascending = true_anomaly.cos() > 0.0;
+                let mean_anomaly = sat_step * sat as f64 + mean_motion * time + phase_offset;
 
-                let x_orbital = orbit_radius * true_anomaly.cos();
-                let y_orbital = -orbit_radius * true_anomaly.sin();
+                let true_anomaly = if ecc < 1e-8 {
+                    mean_anomaly
+                } else {
+                    let mut ea = mean_anomaly;
+                    for _ in 0..10 {
+                        ea = ea - (ea - ecc * ea.sin() - mean_anomaly) / (1.0 - ecc * ea.cos());
+                    }
+                    2.0 * ((1.0 + ecc).sqrt() * (ea / 2.0).sin())
+                        .atan2((1.0 - ecc).sqrt() * (ea / 2.0).cos())
+                };
+
+                let r = semi_major * (1.0 - ecc * ecc) / (1.0 + ecc * true_anomaly.cos());
+                let ascending = (true_anomaly + omega).cos() > 0.0;
+
+                let angle = true_anomaly + omega;
+                let x_orbital = r * angle.cos();
+                let y_orbital = -r * angle.sin();
 
                 let x = x_orbital * raan_cos - y_orbital * inc_cos * raan_sin;
                 let z = x_orbital * raan_sin + y_orbital * inc_cos * raan_cos;
                 let y = -y_orbital * inc_sin;
 
-                let lat = (y / orbit_radius).asin().to_degrees();
+                let lat = (y / r).asin().to_degrees();
                 let lon = -z.atan2(x).to_degrees();
 
                 positions.push(SatelliteState {
@@ -1268,12 +1287,14 @@ impl WalkerConstellation {
     }
 
     fn orbit_points_3d(&self, plane: usize, time: f64) -> Vec<(f64, f64, f64)> {
-        let orbit_radius = self.planet_radius + self.altitude_km;
-        let period = 2.0 * PI * (orbit_radius.powi(3) / self.planet_mu).sqrt();
+        let ecc = self.eccentricity;
+        let semi_major = (self.planet_radius + self.altitude_km) / (1.0 - ecc);
+        let period = 2.0 * PI * (semi_major.powi(3) / self.planet_mu).sqrt();
         let mean_motion = 2.0 * PI / period;
-        let r_ratio = self.planet_equatorial_radius / orbit_radius;
+        let r_ratio = self.planet_equatorial_radius / semi_major;
         let inc = self.inclination_deg.to_radians();
         let raan_drift_rate = -1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion * inc.cos();
+        let omega = self.arg_periapsis_deg.to_radians();
 
         let raan_step = self.raan_step();
         let center_offset = if self.raan_spacing_deg.is_some() {
@@ -1288,11 +1309,18 @@ impl WalkerConstellation {
         let raan_cos = raan.cos();
         let raan_sin = raan.sin();
 
-        (0..=200)
+        let apogee = semi_major * (1.0 + ecc);
+        let perigee = semi_major * (1.0 - ecc);
+        let size_ratio = apogee / perigee;
+        let num_points = (200.0 * size_ratio).min(2000.0) as usize;
+
+        (0..=num_points)
             .map(|i| {
-                let theta = 2.0 * PI * i as f64 / 200.0;
-                let x_orbital = orbit_radius * theta.cos();
-                let y_orbital = -orbit_radius * theta.sin();
+                let true_anomaly = 2.0 * PI * i as f64 / num_points as f64;
+                let r = semi_major * (1.0 - ecc * ecc) / (1.0 + ecc * true_anomaly.cos());
+                let angle = true_anomaly + omega;
+                let x_orbital = r * angle.cos();
+                let y_orbital = -r * angle.sin();
 
                 let x = x_orbital * raan_cos - y_orbital * inc_cos * raan_sin;
                 let z = x_orbital * raan_sin + y_orbital * inc_cos * raan_cos;
@@ -1553,6 +1581,8 @@ struct ConstellationConfig {
     phasing: f64,
     raan_offset: f64,
     raan_spacing: Option<f64>,
+    eccentricity: f64,
+    arg_periapsis: f64,
     preset: Preset,
     color_offset: usize,
     hidden: bool,
@@ -1569,6 +1599,8 @@ impl ConstellationConfig {
             phasing: 0.0,
             raan_offset: 0.0,
             raan_spacing: None,
+            eccentricity: 0.0,
+            arg_periapsis: 0.0,
             preset: Preset::None,
             color_offset,
             hidden: false,
@@ -1589,6 +1621,8 @@ impl ConstellationConfig {
             phasing: self.phasing,
             raan_offset_deg: self.raan_offset,
             raan_spacing_deg: self.raan_spacing,
+            eccentricity: self.eccentricity,
+            arg_periapsis_deg: self.arg_periapsis,
             planet_radius,
             planet_mu,
             planet_j2,
@@ -2790,6 +2824,17 @@ impl ViewerState {
                     });
 
                     ui.horizontal(|ui| {
+                        ui.label("Ecc:");
+                        if ui.add(egui::DragValue::new(&mut cons.eccentricity).range(0.0..=0.99).speed(0.001).max_decimals(4)).changed() {
+                            cons.preset = Preset::None;
+                        }
+                        ui.label("ω:");
+                        if ui.add(egui::DragValue::new(&mut cons.arg_periapsis).range(0.0..=360.0).suffix("°").speed(1.0)).changed() {
+                            cons.preset = Preset::None;
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
                         let old_type = cons.walker_type;
                         ui.selectable_value(&mut cons.walker_type, WalkerType::Delta, "Delta");
                         ui.selectable_value(&mut cons.walker_type, WalkerType::Star, "Star");
@@ -2900,6 +2945,8 @@ impl ViewerState {
                     phasing: 0.0,
                     raan_offset_deg: 0.0,
                     raan_spacing_deg: None,
+                    eccentricity: 0.0,
+                    arg_periapsis_deg: 0.0,
                     planet_radius,
                     planet_mu,
                     planet_j2,
@@ -6158,7 +6205,8 @@ fn draw_3d_view(
             let prev_pos = pos - drag;
             let cur = response.transform.value_from_position(pos);
             let prev = response.transform.value_from_position(prev_pos);
-            let r = planet_radius;
+            let margin = (response.transform.bounds().width() / 2.0).max(planet_radius);
+            let r = margin;
             let r_sq = r * r;
             let to_sphere = |px: f64, py: f64| -> Vector3<f64> {
                 let d_sq = px * px + py * py;
