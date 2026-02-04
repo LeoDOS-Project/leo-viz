@@ -6970,9 +6970,15 @@ fn draw_torus(
             nz_rot >= 0.0
         };
 
-        let torus_point = |theta: f64, phi: f64| -> (f64, f64, f64) {
-            let r = major_radius + minor_radius * phi.cos();
-            let y = minor_radius * phi.sin();
+        let torus_point = |theta: f64, phi: f64, ecc: f64, omega: f64| -> (f64, f64, f64) {
+            let r_orbit = if ecc > 0.001 {
+                minor_radius * (1.0 - ecc * ecc) / (1.0 + ecc * phi.cos())
+            } else {
+                minor_radius
+            };
+            let angle = phi + omega;
+            let r = major_radius + r_orbit * angle.cos();
+            let y = r_orbit * angle.sin();
             let x = r * theta.cos();
             let z = r * theta.sin();
             rotate_point_matrix(x, y, z, &display_rotation)
@@ -6983,16 +6989,23 @@ fn draw_torus(
             let orbit_radius = constellation.planet_radius + constellation.altitude_km;
             let period = 2.0 * PI * (orbit_radius.powi(3) / constellation.planet_mu).sqrt();
             let mean_motion = 2.0 * PI / period;
+            let ecc = constellation.eccentricity;
+            let omega = constellation.arg_periapsis_deg.to_radians();
+            let raan_step = constellation.raan_step();
+            let raan_offset = constellation.raan_offset_deg.to_radians();
+            let plane_theta = |plane: usize| -> f64 {
+                raan_offset + raan_step * plane as f64
+            };
 
             let torus_pos = |plane: usize, sat_idx: usize| -> (f64, f64, f64) {
-                let angle = 2.0 * PI * plane as f64 / constellation.num_planes as f64;
+                let angle = plane_theta(plane);
                 let sat_spacing = 2.0 * PI * sat_idx as f64 / sats_per_plane as f64;
                 let phase = sat_spacing + mean_motion * time;
-                torus_point(angle, phase)
+                torus_point(angle, phase, ecc, omega)
             };
 
             for plane in 0..constellation.num_planes {
-                let angle = 2.0 * PI * plane as f64 / constellation.num_planes as f64;
+                let angle = plane_theta(plane);
                 let color = if show_routing_paths || show_asc_desc_colors {
                     egui::Color32::from_rgb(80, 80, 80)
                 } else {
@@ -7007,7 +7020,7 @@ fn draw_torus(
 
                 for i in 0..=50 {
                     let phase = 2.0 * PI * i as f64 / 50.0;
-                    let (rx, ry, _) = torus_point(angle, phase);
+                    let (rx, ry, _) = torus_point(angle, phase, ecc, omega);
                     let facing = is_facing_camera(angle, phase);
 
                     if facing {
@@ -7048,8 +7061,8 @@ fn draw_torus(
                 for sat in positions {
                     if let Some(neighbor_idx) = sat.neighbor_idx {
                         let neighbor = &positions[neighbor_idx];
-                        let angle1 = 2.0 * PI * sat.plane as f64 / constellation.num_planes as f64;
-                        let angle2 = 2.0 * PI * neighbor.plane as f64 / constellation.num_planes as f64;
+                        let angle1 = plane_theta(sat.plane);
+                        let angle2 = plane_theta(neighbor.plane);
                         let phase1 = 2.0 * PI * sat.sat_index as f64 / sats_per_plane as f64 + mean_motion * time;
                         let phase2 = 2.0 * PI * neighbor.sat_index as f64 / sats_per_plane as f64 + mean_motion * time;
 
@@ -7069,7 +7082,7 @@ fn draw_torus(
 
             for plane in 0..constellation.num_planes {
                 let base_color = plane_color(if single_color { *color_offset } else { plane + color_offset });
-                let angle = 2.0 * PI * plane as f64 / constellation.num_planes as f64;
+                let angle = plane_theta(plane);
 
                 for sat in positions.iter().filter(|s| s.plane == plane) {
                     let is_tracked = satellite_cameras.iter().any(|c|
@@ -7238,9 +7251,15 @@ fn draw_torus(
             let margin = (major_radius + minor_radius) * 1.3 / zoom;
             let click_threshold = margin * 0.05;
 
-            let torus_point = |theta: f64, phi: f64| -> (f64, f64, f64) {
-                let r = major_radius + minor_radius * phi.cos();
-                let y = minor_radius * phi.sin();
+            let torus_point_click = |theta: f64, phi: f64, ecc: f64, omega: f64| -> (f64, f64, f64) {
+                let r_orbit = if ecc > 0.001 {
+                    minor_radius * (1.0 - ecc * ecc) / (1.0 + ecc * phi.cos())
+                } else {
+                    minor_radius
+                };
+                let angle = phi + omega;
+                let r = major_radius + r_orbit * angle.cos();
+                let y = r_orbit * angle.sin();
                 let x = r * theta.cos();
                 let z = r * theta.sin();
                 rotate_point_matrix(x, y, z, &display_rotation)
@@ -7251,11 +7270,15 @@ fn draw_torus(
                 let orbit_radius = constellation.planet_radius + constellation.altitude_km;
                 let period = 2.0 * PI * (orbit_radius.powi(3) / constellation.planet_mu).sqrt();
                 let mean_motion = 2.0 * PI / period;
+                let ecc = constellation.eccentricity;
+                let omega = constellation.arg_periapsis_deg.to_radians();
+                let raan_step = constellation.raan_step();
+                let raan_offset = constellation.raan_offset_deg.to_radians();
 
                 for sat in positions {
-                    let angle = 2.0 * PI * sat.plane as f64 / constellation.num_planes as f64;
+                    let angle = raan_offset + raan_step * sat.plane as f64;
                     let phase = 2.0 * PI * sat.sat_index as f64 / sats_per_plane as f64 + mean_motion * time;
-                    let (tx, ty, _) = torus_point(angle, phase);
+                    let (tx, ty, _) = torus_point_click(angle, phase, ecc, omega);
 
                     let dx = tx - click_x;
                     let dy = ty - click_y;
