@@ -1814,7 +1814,7 @@ impl PlanetConfig {
         Self {
             name,
             constellations: Vec::new(),
-            constellation_counter: 0,
+            constellation_counter: TlePreset::ALL.len(),
             celestial_body: CelestialBody::Earth,
             skin: Skin::Default,
             satellite_cameras: Vec::new(),
@@ -2759,6 +2759,7 @@ impl ViewerState {
                                                 let color = plane_color(preset.color_index());
                                                 let rect = ui.allocate_space(egui::vec2(10.0, 10.0)).1;
                                                 ui.painter().rect_filled(rect, 2.0, color);
+                                                ui.painter().rect_filled(rect.shrink(2.5), 1.0, egui::Color32::BLACK);
 
                                                 let is_loading = matches!(state, TleLoadState::Loading);
                                                 if ui.selectable_label(*selected, preset.label()).clicked() {
@@ -2795,6 +2796,9 @@ impl ViewerState {
             for (cidx, cons) in planet.constellations.iter_mut().enumerate() {
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
+                        let color = plane_color(cons.color_offset);
+                        let rect = ui.allocate_space(egui::vec2(10.0, 10.0)).1;
+                        ui.painter().rect_filled(rect, 2.0, color);
                         ui.label(cons.preset_name());
                         let hide_btn = if cons.hidden {
                             egui::Button::new(egui::RichText::new("+").color(egui::Color32::WHITE))
@@ -6249,7 +6253,7 @@ fn draw_3d_view(
         let font = egui::FontId::proportional(12.0);
         let square_size = 10.0;
         let mut seen = std::collections::HashSet::new();
-        for (_, _, color_offset, _, _, name) in constellations {
+        for (_, _, color_offset, is_tle, _, name) in constellations {
             if !seen.insert((name.as_str(), *color_offset)) { continue; }
             let color = plane_color(*color_offset);
             let square_rect = egui::Rect::from_min_size(
@@ -6269,6 +6273,11 @@ fn draw_3d_view(
             );
             ui.painter().rect_filled(bg_rect, 3.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 160));
             ui.painter().rect_filled(square_rect, 2.0, color);
+            if *is_tle {
+                let inset = 2.5;
+                let inner = square_rect.shrink(inset);
+                ui.painter().rect_filled(inner, 1.0, egui::Color32::BLACK);
+            }
             ui.painter().galley(text_pos, galley, egui::Color32::WHITE);
             y += 16.0;
         }
@@ -7082,8 +7091,8 @@ const COLORS: [egui::Color32; 16] = [
     egui::Color32::from_rgb(240, 230, 140),
     egui::Color32::from_rgb(60, 179, 113),
     egui::Color32::from_rgb(233, 150, 122),
-    egui::Color32::from_rgb(135, 206, 235),
     egui::Color32::from_rgb(186, 85, 211),
+    egui::Color32::from_rgb(135, 206, 235),
 ];
 
 fn dim_color(color: egui::Color32) -> egui::Color32 {
