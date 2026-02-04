@@ -343,9 +343,16 @@ struct EarthTexture {
 
 impl EarthTexture {
     fn load() -> Self {
-        let bytes = std::fs::read(asset_path("textures/earth/earth_8k.jpg"))
-            .expect("Failed to read textures/earth/earth_8k.jpg");
-        Self::from_bytes(&bytes).expect("Failed to load Earth texture")
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let bytes = std::fs::read(asset_path("textures/earth/earth_8k.jpg"))
+                .expect("Failed to read textures/earth/earth_8k.jpg");
+            Self::from_bytes(&bytes).expect("Failed to load Earth texture")
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Self { width: 2, height: 1, pixels: vec![[30, 60, 120], [30, 60, 120]] }
+        }
     }
 
     fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
@@ -3029,8 +3036,7 @@ impl ViewerState {
         };
 
         if planet.show_tle_window {
-            let sim_timestamp = self.start_timestamp + chrono::Duration::seconds(self.time as i64);
-            let propagation_minutes = sim_timestamp.timestamp() as f64 / 60.0;
+            let propagation_minutes = self.start_timestamp.timestamp() as f64 / 60.0 + self.time / 60.0;
             for preset in TlePreset::ALL.iter() {
                 let Some((selected, state)) = planet.tle_selections.get(preset) else { continue };
                 if !*selected { continue; }
