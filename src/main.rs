@@ -3689,10 +3689,6 @@ impl ViewerState {
                 });
         });
         ui.checkbox(&mut self.use_gpu_rendering, "GPU rendering");
-        let mut hide_clouds = !self.show_clouds;
-        if ui.checkbox(&mut hide_clouds, "Hide clouds").changed() {
-            self.show_clouds = !hide_clouds;
-        }
         #[cfg(not(target_arch = "wasm32"))]
         ui.checkbox(&mut self.tile_overlay.enabled, "Satellite tiles (Esri)");
         ui.checkbox(&mut self.render_planet, "Show planet");
@@ -3702,6 +3698,7 @@ impl ViewerState {
                 self.hide_behind_earth = !show_behind;
             }
         }
+        ui.checkbox(&mut self.show_clouds, "Show clouds");
         ui.checkbox(&mut self.show_stars, "Show stars");
         ui.add_enabled(self.show_stars, egui::Checkbox::new(&mut self.show_milky_way, "Show Milky Way"));
         ui.checkbox(&mut self.show_day_night, "Day/night cycle");
