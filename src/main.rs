@@ -1679,10 +1679,10 @@ struct PlanetConfig {
     cameras_to_remove: Vec<usize>,
     show_tle_window: bool,
     show_gs_aoi_window: bool,
+    show_config_window: bool,
     tle_selections: HashMap<TlePreset, (bool, TleLoadState)>,
     ground_stations: Vec<GroundStation>,
     areas_of_interest: Vec<AreaOfInterest>,
-    show_planet: bool,
 }
 
 impl PlanetConfig {
@@ -1702,10 +1702,10 @@ impl PlanetConfig {
             cameras_to_remove: Vec::new(),
             show_tle_window: false,
             show_gs_aoi_window: false,
+            show_config_window: true,
             tle_selections,
             ground_stations: Vec::new(),
             areas_of_interest: Vec::new(),
-            show_planet: true,
         }
     }
 
@@ -2195,6 +2195,21 @@ impl TabViewer for ViewerState {
         self.tabs.push(tab);
         self.pending_add_tab = Some(new_idx);
     }
+
+    fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab, _surface: SurfaceIndex, _node: NodeIndex) {
+        if *tab < self.tabs.len() {
+            let t = &mut self.tabs[*tab];
+            if ui.checkbox(&mut t.use_local_settings, "Override global settings").changed() {
+                if t.use_local_settings {
+                    t.show_settings_window = true;
+                }
+            }
+            if ui.button("Tab Settings").clicked() {
+                t.show_settings_window = !t.show_settings_window;
+                ui.close();
+            }
+        }
+    }
 }
 
 
@@ -2227,17 +2242,6 @@ impl ViewerState {
             planet.satellite_cameras.retain(|c| !planet.cameras_to_remove.contains(&c.id));
             planet.cameras_to_remove.clear();
         }
-
-        ui.horizontal(|ui| {
-            let use_local = self.tabs[tab_idx].use_local_settings;
-            let btn_text = if use_local { "⚙ Local" } else { "⚙" };
-            if ui.small_button(btn_text).clicked() {
-                self.tabs[tab_idx].show_settings_window = !self.tabs[tab_idx].show_settings_window;
-            }
-            if self.tabs[tab_idx].show_settings_window {
-                ui.checkbox(&mut self.tabs[tab_idx].use_local_settings, "Use local settings");
-            }
-        });
 
         if self.tabs[tab_idx].show_settings_window {
             let tab = &mut self.tabs[tab_idx];
@@ -2278,7 +2282,7 @@ impl ViewerState {
                             s.hide_behind_earth = !show_behind;
                         }
                         ui.checkbox(&mut s.single_color, "Monochrome");
-                        ui.checkbox(&mut s.render_planet, "Render planet");
+                        ui.checkbox(&mut s.render_planet, "Show planet");
                         ui.checkbox(&mut s.follow_satellite, "Follow satellite");
                         ui.checkbox(&mut s.show_camera_windows, "Camera windows");
                     });
@@ -2341,6 +2345,7 @@ impl ViewerState {
         let show_stats = self.tabs[tab_idx].show_stats;
         let show_tle = self.tabs[tab_idx].planets[planet_idx].show_tle_window;
         let show_places = self.tabs[tab_idx].planets[planet_idx].show_gs_aoi_window;
+        let show_config = self.tabs[tab_idx].planets[planet_idx].show_config_window;
 
         ui.horizontal(|ui| {
             ui.strong(&planet_name);
@@ -2390,15 +2395,14 @@ impl ViewerState {
             if ui.selectable_label(show_stats, "Stats").clicked() {
                 self.tabs[tab_idx].show_stats = !show_stats;
             }
-            if ui.selectable_label(show_tle, "Live").clicked() {
-                self.tabs[tab_idx].planets[planet_idx].show_tle_window = !show_tle;
-            }
-            if ui.selectable_label(show_places, "Places").clicked() {
+            if ui.selectable_label(show_places, "Ground").clicked() {
                 self.tabs[tab_idx].planets[planet_idx].show_gs_aoi_window = !show_places;
             }
-            let show_planet = self.tabs[tab_idx].planets[planet_idx].show_planet;
-            if ui.selectable_label(show_planet, "🌍").clicked() {
-                self.tabs[tab_idx].planets[planet_idx].show_planet = !show_planet;
+            if ui.selectable_label(show_config, "Space").clicked() {
+                self.tabs[tab_idx].planets[planet_idx].show_config_window = !show_config;
+            }
+            if ui.add_enabled(show_config, egui::Button::new("Live").selected(show_tle)).clicked() {
+                self.tabs[tab_idx].planets[planet_idx].show_tle_window = !show_tle;
             }
         });
 
@@ -2427,7 +2431,7 @@ impl ViewerState {
             let mut gs_changed = false;
             let mut aoi_changed = false;
 
-            egui::Window::new(format!("Places - {}", planet_name))
+            egui::Window::new(format!("Ground - {}", planet_name))
                 .open(&mut self.tabs[tab_idx].planets[planet_idx].show_gs_aoi_window)
                 .show(ui.ctx(), |ui| {
                     ui.heading("Ground Stations");
@@ -2634,6 +2638,7 @@ impl ViewerState {
                 });
         }
 
+        if show_config {
         ui.separator();
 
         let mut const_to_remove: Option<usize> = None;
@@ -2924,9 +2929,10 @@ impl ViewerState {
                 self.tabs[tab_idx].planets[planet_idx].constellations.remove(cidx);
             }
         }
-        }); // end scroll area
+        });
 
         ui.separator();
+        }
 
         let planet = &self.tabs[tab_idx].planets[planet_idx];
         let planet_radius = planet.celestial_body.radius_km();
@@ -3018,8 +3024,7 @@ impl ViewerState {
             let show_shortest_path = if use_local { local.show_shortest_path } else { self.show_shortest_path };
             let show_asc_desc_colors = if use_local { local.show_asc_desc_colors } else { self.show_asc_desc_colors };
             let show_altitude_lines = if use_local { local.show_altitude_lines } else { self.show_altitude_lines };
-            let render_planet = (if use_local { local.render_planet } else { self.render_planet })
-                && self.tabs[tab_idx].planets[planet_idx].show_planet;
+            let render_planet = if use_local { local.render_planet } else { self.render_planet };
             let tex_res = self.texture_resolution;
             let planet_handle = self.planet_image_handles.get(&(celestial_body, skin, tex_res));
             let time = self.time;
@@ -3190,8 +3195,7 @@ impl ViewerState {
             let show_shortest_path = if use_local { local.show_shortest_path } else { self.show_shortest_path };
             let show_asc_desc_colors = if use_local { local.show_asc_desc_colors } else { self.show_asc_desc_colors };
             let show_altitude_lines = if use_local { local.show_altitude_lines } else { self.show_altitude_lines };
-            let render_planet = (if use_local { local.render_planet } else { self.render_planet })
-                && self.tabs[tab_idx].planets[planet_idx].show_planet;
+            let render_planet = if use_local { local.render_planet } else { self.render_planet };
             let tex_res = self.texture_resolution;
             let planet_handle = self.planet_image_handles.get(&(celestial_body, skin, tex_res));
             let link_width = self.link_width;
@@ -3581,7 +3585,7 @@ impl ViewerState {
         ui.add_space(5.0);
         ui.label(egui::RichText::new("Rendering").strong());
         ui.checkbox(&mut self.dark_mode, "Dark mode");
-        ui.checkbox(&mut self.render_planet, "Render planet");
+        ui.checkbox(&mut self.render_planet, "Show planet");
         ui.horizontal(|ui| {
             ui.label("Texture:");
             egui::ComboBox::from_id_salt("tex_res")
@@ -5226,7 +5230,7 @@ fn draw_3d_view(
         .show_grid(false)
         .show_x(false)
         .show_y(false)
-        .show_background(!use_gpu)
+        .show_background(sphere_renderer.is_none() || !use_gpu_rendering)
         .allow_drag(false)
         .allow_zoom(false)
         .allow_scroll(false)
@@ -5384,18 +5388,6 @@ fn draw_3d_view(
                     .color(egui::Color32::from_rgb(255, 180, 0))
                     .width(2.0));
             }
-        } else {
-            let earth_pts: PlotPoints = (0..=100)
-                .map(|i| {
-                    let theta = 2.0 * PI * i as f64 / 100.0;
-                    [planet_radius * theta.cos(), planet_radius * theta.sin()]
-                })
-                .collect();
-            plot_ui.polygon(
-                Polygon::new("", earth_pts)
-                    .fill_color(egui::Color32::from_rgb(30, 60, 120))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 100, 150))),
-            );
         }
 
         if show_coverage {
