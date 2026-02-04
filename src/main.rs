@@ -4907,13 +4907,21 @@ impl eframe::App for App {
                     let peq = planet.celestial_body.equatorial_radius_km();
                     let texture = self.viewer.planet_textures.get(&(planet.celestial_body, planet.skin, self.viewer.texture_resolution));
 
+                    let body_rot = body_rotation_angle(planet.celestial_body, self.viewer.time, self.viewer.current_gmst);
+                    let cos_a = body_rot.cos();
+                    let sin_a = body_rot.sin();
                     for camera in &planet.satellite_cameras {
                         let sat_data = planet.constellations.get(camera.constellation_idx).map(|cons| {
                             let wc = cons.constellation(pr, pm, pj2, peq);
                             let positions = wc.satellite_positions(self.viewer.time);
                             positions.iter()
                                 .find(|s| s.plane == camera.plane && s.sat_index == camera.sat_index)
-                                .map(|s| (s.lat, s.lon, cons.altitude_km, texture, pr))
+                                .map(|s| {
+                                    let bx = s.x * cos_a - s.z * sin_a;
+                                    let bz = s.x * sin_a + s.z * cos_a;
+                                    let ground_lon = (-bz).atan2(bx).to_degrees();
+                                    (s.lat, ground_lon, cons.altitude_km, texture, pr)
+                                })
                         }).flatten();
 
                     if let Some((lat, lon, altitude_km, texture, planet_radius)) = sat_data {
@@ -6285,6 +6293,10 @@ fn draw_3d_view(
                     let r = (sat.x * sat.x + sat.y * sat.y + sat.z * sat.z).sqrt();
                     let alt_km = r - constellation.planet_radius;
                     let vel_km_s = (constellation.planet_mu / r).sqrt();
+                    let inv_body = body_rotation.transpose();
+                    let body_pos = inv_body * Vector3::new(sat.x, sat.y, sat.z);
+                    let ground_lat = (body_pos.y / r).asin().to_degrees();
+                    let ground_lon = (-body_pos.z).atan2(body_pos.x).to_degrees();
                     let id = match &sat.name {
                         Some(name) => name.clone(),
                         None => format!("P{}S{}", sat.plane, sat.sat_index),
@@ -6292,7 +6304,7 @@ fn draw_3d_view(
                     let text = format!(
                         "{}  {:.1}° {:.1}°\n{:.0} km  {:.2} km/s",
                         id,
-                        sat.lat, sat.lon,
+                        ground_lat, ground_lon,
                         alt_km, vel_km_s,
                     );
                     let font = egui::FontId::proportional(12.0);
