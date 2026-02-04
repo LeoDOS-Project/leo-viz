@@ -6709,7 +6709,7 @@ fn draw_torus(
         let inclination_rad = constellation.inclination_deg.to_radians();
         let cos_i = inclination_rad.cos().abs();
         let major = 1.0;
-        let minor = (major * (1.0 - cos_i) / (1.0 + cos_i)).max(0.05);
+        let minor = (major * (1.0 - cos_i) / (1.0 + cos_i)).max(0.002);
         (major, minor)
     } else {
         (1.0, 0.8)
@@ -7006,7 +7006,7 @@ fn draw_torus(
                 let sats_per_plane = constellation.sats_per_plane();
                 let orbit_radius = planet_radius + constellation.altitude_km;
                 let inclination_rad = constellation.inclination_deg.to_radians();
-                let inclination_factor = inclination_rad.sin().abs().max(0.1);
+                let inclination_factor = inclination_rad.sin().abs().max(0.002);
                 let altitude_factor = orbit_radius / (planet_radius + 500.0);
                 let major = altitude_factor * (sats_per_plane as f64 / constellation.num_planes as f64);
                 let minor_base = altitude_factor * inclination_factor;
