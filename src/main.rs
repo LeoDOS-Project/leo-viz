@@ -1816,7 +1816,7 @@ impl PlanetConfig {
         Self {
             name,
             constellations: Vec::new(),
-            constellation_counter: TlePreset::ALL.len(),
+            constellation_counter: 0,
             celestial_body: CelestialBody::Earth,
             skin: Skin::Default,
             satellite_cameras: Vec::new(),
