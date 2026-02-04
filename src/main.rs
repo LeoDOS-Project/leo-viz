@@ -469,7 +469,6 @@ struct DetailBounds {
 }
 
 struct DetailTexture {
-    pixels: Vec<[u8; 4]>,
     width: u32,
     height: u32,
     bounds: DetailBounds,
@@ -642,6 +641,7 @@ struct TileOverlayState {
     tile_x_origin: u32,
     last_compose: std::time::Instant,
     base_fetched: bool,
+    compose_buffer: Vec<[u8; 4]>,
 }
 
 fn lon_lat_to_tile(lon: f64, lat: f64, z: u8) -> TileCoord {
@@ -2104,6 +2104,7 @@ impl App {
                         dirty: false,
                         last_compose: std::time::Instant::now(),
                         base_fetched: false,
+                        compose_buffer: Vec::new(),
                     }
                 },
                 view_width: 800.0,
@@ -4204,7 +4205,10 @@ impl eframe::App for App {
                     let tile_size = 256u32;
                     let tex_w = cols * tile_size;
                     let tex_h = rows * tile_size;
-                    let mut pixels = vec![[0u8, 0, 0, 0]; (tex_w * tex_h) as usize];
+                    let pixel_count = (tex_w * tex_h) as usize;
+                    v.tile_overlay.compose_buffer.resize(pixel_count, [0u8, 0, 0, 0]);
+                    v.tile_overlay.compose_buffer.iter_mut().for_each(|p| *p = [0, 0, 0, 0]);
+                    let pixels = &mut v.tile_overlay.compose_buffer;
                     for coord in &needed {
                         let dst_ox = (col_of(coord.x) * tile_size) as usize;
                         let dst_oy = ((coord.y - y_min) * tile_size) as usize;
@@ -4269,59 +4273,72 @@ impl eframe::App for App {
                     let merc_top = lat_to_merc(top_left_lat);
                     let merc_bot = lat_to_merc(bot_right_lat);
 
-                    if let Some(old) = &v.tile_overlay.detail_texture {
-                        if let Some(gl_tex) = old.gl_texture {
-                            if let Some(gl) = frame.gl() {
-                                unsafe { gl.delete_texture(gl_tex); }
+                    let new_bounds = DetailBounds {
+                        min_lon: top_left_lon,
+                        max_lon: bot_right_lon,
+                        min_lat: merc_bot,
+                        max_lat: merc_top,
+                    };
+
+                    if let Some(gl) = frame.gl() {
+                        unsafe {
+                            let flat_pixels: &[u8] = std::slice::from_raw_parts(
+                                v.tile_overlay.compose_buffer.as_ptr() as *const u8,
+                                v.tile_overlay.compose_buffer.len() * 4,
+                            );
+
+                            let reuse = v.tile_overlay.detail_texture.as_ref()
+                                .and_then(|dt| dt.gl_texture.filter(|_| dt.width == tex_w && dt.height == tex_h));
+
+                            if let Some(existing_tex) = reuse {
+                                gl.bind_texture(glow::TEXTURE_2D, Some(existing_tex));
+                                gl.tex_sub_image_2d(
+                                    glow::TEXTURE_2D,
+                                    0,
+                                    0, 0,
+                                    tex_w as i32, tex_h as i32,
+                                    glow::RGBA,
+                                    glow::UNSIGNED_BYTE,
+                                    glow::PixelUnpackData::Slice(Some(flat_pixels)),
+                                );
+                                v.tile_overlay.detail_texture = Some(DetailTexture {
+                                    width: tex_w,
+                                    height: tex_h,
+                                    bounds: new_bounds,
+                                    gl_texture: Some(existing_tex),
+                                });
+                            } else {
+                                if let Some(old) = &v.tile_overlay.detail_texture {
+                                    if let Some(gl_tex) = old.gl_texture {
+                                        gl.delete_texture(gl_tex);
+                                    }
+                                }
+                                let texture = gl.create_texture().expect("create detail texture");
+                                gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+                                gl.tex_image_2d(
+                                    glow::TEXTURE_2D,
+                                    0,
+                                    glow::RGBA as i32,
+                                    tex_w as i32, tex_h as i32,
+                                    0,
+                                    glow::RGBA,
+                                    glow::UNSIGNED_BYTE,
+                                    glow::PixelUnpackData::Slice(Some(flat_pixels)),
+                                );
+                                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+                                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+                                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
+                                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+                                v.tile_overlay.detail_texture = Some(DetailTexture {
+                                    width: tex_w,
+                                    height: tex_h,
+                                    bounds: new_bounds,
+                                    gl_texture: Some(texture),
+                                });
                             }
                         }
                     }
-
-                    v.tile_overlay.detail_texture = Some(DetailTexture {
-                        pixels,
-                        width: tex_w,
-                        height: tex_h,
-                        bounds: DetailBounds {
-                            min_lon: top_left_lon,
-                            max_lon: bot_right_lon,
-                            min_lat: merc_bot,
-                            max_lat: merc_top,
-                        },
-                        gl_texture: None,
-                    });
                 }
-                }
-            }
-        }
-
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(gl) = frame.gl() {
-            if let Some(ref mut dt) = v.tile_overlay.detail_texture {
-                if dt.gl_texture.is_none() && !dt.pixels.is_empty() {
-                    unsafe {
-                        let texture = gl.create_texture().expect("create detail texture");
-                        gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-                        let flat_pixels: &[u8] = std::slice::from_raw_parts(
-                            dt.pixels.as_ptr() as *const u8,
-                            dt.pixels.len() * 4,
-                        );
-                        gl.tex_image_2d(
-                            glow::TEXTURE_2D,
-                            0,
-                            glow::RGBA as i32,
-                            dt.width as i32,
-                            dt.height as i32,
-                            0,
-                            glow::RGBA,
-                            glow::UNSIGNED_BYTE,
-                            glow::PixelUnpackData::Slice(Some(flat_pixels)),
-                        );
-                        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
-                        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
-                        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-                        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
-                        dt.gl_texture = Some(texture);
-                    }
                 }
             }
         }
@@ -5087,7 +5104,6 @@ fn draw_3d_view(
                 let r = renderer.lock();
                 if let Some((detail_tex, detail_bounds)) = detail_info {
                     let dt = DetailTexture {
-                        pixels: Vec::new(),
                         width: 0,
                         height: 0,
                         bounds: DetailBounds {
