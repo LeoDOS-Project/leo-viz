@@ -1515,6 +1515,9 @@ enum TlePreset {
     Galileo,
     Glonass,
     Beidou,
+    Molniya,
+    Kuiper,
+    Planet,
 }
 
 impl TlePreset {
@@ -1531,7 +1534,10 @@ impl TlePreset {
             TlePreset::Galileo => "Galileo",
             TlePreset::Glonass => "GLONASS",
             TlePreset::Beidou => "Beidou",
-        }
+            TlePreset::Molniya => "Molniya",
+            TlePreset::Kuiper => "Kuiper",
+            TlePreset::Planet => "Planet",
+                    }
     }
 
     fn url(&self) -> &'static str {
@@ -1547,13 +1553,17 @@ impl TlePreset {
             TlePreset::Galileo => "https://celestrak.org/NORAD/elements/gp.php?GROUP=galileo&FORMAT=tle",
             TlePreset::Glonass => "https://celestrak.org/NORAD/elements/gp.php?GROUP=glo-ops&FORMAT=tle",
             TlePreset::Beidou => "https://celestrak.org/NORAD/elements/gp.php?GROUP=beidou&FORMAT=tle",
+            TlePreset::Molniya => "https://celestrak.org/NORAD/elements/gp.php?GROUP=molniya&FORMAT=tle",
+            TlePreset::Kuiper => "https://celestrak.org/NORAD/elements/gp.php?GROUP=kuiper&FORMAT=tle",
+            TlePreset::Planet => "https://celestrak.org/NORAD/elements/gp.php?GROUP=planet&FORMAT=tle",
         }
     }
 
-    const ALL: [TlePreset; 11] = [
+    const ALL: [TlePreset; 14] = [
         TlePreset::Iss,
         TlePreset::Starlink,
         TlePreset::OneWeb,
+        TlePreset::Kuiper,
         TlePreset::Iridium,
         TlePreset::IridiumNext,
         TlePreset::Globalstar,
@@ -1562,7 +1572,13 @@ impl TlePreset {
         TlePreset::Galileo,
         TlePreset::Glonass,
         TlePreset::Beidou,
+        TlePreset::Molniya,
+        TlePreset::Planet,
     ];
+
+    fn color_index(&self) -> usize {
+        Self::ALL.iter().position(|p| std::mem::discriminant(p) == std::mem::discriminant(self)).unwrap_or(0)
+    }
 }
 
 #[derive(Clone)]
@@ -2743,13 +2759,13 @@ impl ViewerState {
                     ui.horizontal(|ui| {
                         for col in 0..2 {
                             ui.vertical(|ui| {
-                                for row in 0..5 {
-                                    let preset_idx = col * 5 + row;
+                                for row in 0..7 {
+                                    let preset_idx = col * 7 + row;
                                     if preset_idx < TlePreset::ALL.len() {
                                         let preset = &TlePreset::ALL[preset_idx];
                                         if let Some((selected, state)) = planet.tle_selections.get_mut(preset) {
                                             ui.horizontal(|ui| {
-                                                let color = plane_color(preset_idx);
+                                                let color = plane_color(preset.color_index());
                                                 let rect = ui.allocate_space(egui::vec2(10.0, 10.0)).1;
                                                 ui.painter().rect_filled(rect, 2.0, color);
 
@@ -3065,7 +3081,7 @@ impl ViewerState {
                     planet_j2,
                     planet_equatorial_radius: planet_eq_radius,
                 };
-                constellations_data.push((tle_wc, positions, constellations_data.len(), true, usize::MAX, preset.label().to_string()));
+                constellations_data.push((tle_wc, positions, preset.color_index(), true, usize::MAX, preset.label().to_string()));
             }
         }
 
@@ -3887,11 +3903,12 @@ impl App {
         v.tab_counter = 0;
 
         let leo_tle = [
-            TlePreset::Starlink, TlePreset::OneWeb, TlePreset::Iridium,
+            TlePreset::Starlink, TlePreset::OneWeb, TlePreset::Kuiper, TlePreset::Iridium,
             TlePreset::IridiumNext, TlePreset::Globalstar, TlePreset::Orbcomm,
         ];
         let geo_tle = [
             TlePreset::Gps, TlePreset::Galileo, TlePreset::Glonass, TlePreset::Beidou,
+            TlePreset::Molniya, TlePreset::Planet,
         ];
 
         // Tab 1: Inclination comparison (90° vs 60°)
@@ -7055,7 +7072,7 @@ fn plane_color(plane: usize) -> egui::Color32 {
     COLORS[plane % COLORS.len()]
 }
 
-const COLORS: [egui::Color32; 8] = [
+const COLORS: [egui::Color32; 16] = [
     egui::Color32::from_rgb(255, 99, 71),
     egui::Color32::from_rgb(50, 205, 50),
     egui::Color32::from_rgb(30, 144, 255),
@@ -7064,6 +7081,14 @@ const COLORS: [egui::Color32; 8] = [
     egui::Color32::from_rgb(0, 206, 209),
     egui::Color32::from_rgb(255, 140, 0),
     egui::Color32::from_rgb(147, 112, 219),
+    egui::Color32::from_rgb(0, 255, 127),
+    egui::Color32::from_rgb(255, 105, 180),
+    egui::Color32::from_rgb(100, 149, 237),
+    egui::Color32::from_rgb(240, 230, 140),
+    egui::Color32::from_rgb(60, 179, 113),
+    egui::Color32::from_rgb(233, 150, 122),
+    egui::Color32::from_rgb(135, 206, 235),
+    egui::Color32::from_rgb(186, 85, 211),
 ];
 
 fn dim_color(color: egui::Color32) -> egui::Color32 {
