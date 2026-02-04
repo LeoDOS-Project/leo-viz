@@ -1849,6 +1849,7 @@ struct TabSettings {
     show_manhattan_path: bool,
     show_shortest_path: bool,
     show_asc_desc_colors: bool,
+    single_color: bool,
     show_torus: bool,
     show_ground_track: bool,
     show_axes: bool,
@@ -1871,6 +1872,7 @@ impl Default for TabSettings {
             show_manhattan_path: true,
             show_shortest_path: true,
             show_asc_desc_colors: false,
+            single_color: false,
             show_torus: false,
             show_ground_track: false,
             show_axes: false,
@@ -1967,6 +1969,7 @@ struct ViewerState {
     show_manhattan_path: bool,
     show_shortest_path: bool,
     show_asc_desc_colors: bool,
+    single_color: bool,
     show_altitude_lines: bool,
     show_camera_windows: bool,
     render_planet: bool,
@@ -2086,6 +2089,7 @@ impl App {
                 show_manhattan_path: true,
                 show_shortest_path: true,
                 show_asc_desc_colors: false,
+                single_color: false,
                 show_altitude_lines: false,
                 show_camera_windows: false,
                 render_planet: true,
@@ -3083,7 +3087,7 @@ impl ViewerState {
                     };
                     let x = prediction.position[0];
                     let y = prediction.position[2];
-                    let z = prediction.position[1];
+                    let z = -prediction.position[1];
                     let r = (x * x + y * y + z * z).sqrt();
                     let lat = (y / r).asin().to_degrees();
                     let lon = -z.atan2(x).to_degrees();
@@ -3155,7 +3159,7 @@ impl ViewerState {
             let show_intra_links = if use_local { local.show_intra_links } else { self.show_intra_links };
             let render_planet = if use_local { local.render_planet } else { self.render_planet };
             let hide_behind_earth = render_planet && (if use_local { local.hide_behind_earth } else { self.hide_behind_earth });
-            let single_color = constellations_data.len() > 1;
+            let single_color = (if use_local { local.single_color } else { self.single_color }) || constellations_data.len() > 1;
             let dark_mode = self.dark_mode;
             let show_routing_paths = if use_local { local.show_routing_paths } else { self.show_routing_paths };
             let show_manhattan_path = if use_local { local.show_manhattan_path } else { self.show_manhattan_path };
@@ -3328,7 +3332,7 @@ impl ViewerState {
             let show_intra_links = if use_local { local.show_intra_links } else { self.show_intra_links };
             let render_planet = if use_local { local.render_planet } else { self.render_planet };
             let hide_behind_earth = render_planet && (if use_local { local.hide_behind_earth } else { self.hide_behind_earth });
-            let single_color = constellations_data.len() > 1;
+            let single_color = (if use_local { local.single_color } else { self.single_color }) || constellations_data.len() > 1;
             let dark_mode = self.dark_mode;
             let show_routing_paths = if use_local { local.show_routing_paths } else { self.show_routing_paths };
             let show_manhattan_path = if use_local { local.show_manhattan_path } else { self.show_manhattan_path };
@@ -3694,6 +3698,7 @@ impl ViewerState {
             });
         }
         ui.checkbox(&mut self.show_asc_desc_colors, "Asc/Desc colors");
+        ui.checkbox(&mut self.single_color, "Monochrome planes");
         ui.checkbox(&mut self.show_altitude_lines, "Altitude lines");
         ui.checkbox(&mut self.show_coverage, "Show coverage");
         if self.show_coverage {
