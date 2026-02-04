@@ -676,6 +676,8 @@ struct SphereRenderer {
     textures: HashMap<(CelestialBody, Skin, TextureResolution), glow::Texture>,
     cloud_textures: HashMap<TextureResolution, glow::Texture>,
     night_texture: Option<glow::Texture>,
+    star_texture: Option<glow::Texture>,
+    milky_way_texture: Option<glow::Texture>,
 }
 
 impl SphereRenderer {
@@ -712,6 +714,7 @@ impl SphereRenderer {
                 uniform sampler2D u_clouds;
                 uniform sampler2D u_night;
                 uniform sampler2D u_detail;
+                uniform sampler2D u_stars;
                 uniform mat3 u_inv_rotation;
                 uniform float u_flattening;
                 uniform float u_aspect;
@@ -725,6 +728,7 @@ impl SphereRenderer {
                 uniform float u_blend;
                 uniform float u_center_lat;
                 uniform float u_center_lon;
+                uniform float u_show_stars;
 
                 const float PI = 3.14159265359;
                 const vec3 ATMO_COLOR = vec3(0.4, 0.7, 1.0);
@@ -775,6 +779,21 @@ impl SphereRenderer {
 
                     if (u_blend < 0.001) {
                         if (!ortho_hit) {
+                            vec3 bg = vec3(0.0);
+                            float bg_alpha = 0.0;
+
+                            if (u_show_stars > 0.5) {
+                                vec2 sp = (v_uv - 0.5) * 2.0;
+                                sp.x *= u_aspect;
+                                vec3 dir = u_inv_rotation * normalize(vec3(sp, -2.0));
+                                float slat = asin(clamp(dir.y, -1.0, 1.0));
+                                float slon = atan(-dir.z, dir.x);
+                                float su = (slon + PI) / (2.0 * PI);
+                                float sv = (PI / 2.0 - slat) / PI;
+                                bg = texture(u_stars, vec2(su, sv)).rgb;
+                                bg_alpha = 1.0;
+                            }
+
                             if (u_atmosphere > 0.0 && screen_dist < atmo_outer) {
                                 float C_atmo = O.x*O.x + O.y*O.y + O.z*O.z - 1.0;
                                 float disc_atmo = B*B - 4.0*A*C_atmo;
@@ -784,11 +803,12 @@ impl SphereRenderer {
                                     float atmo_falloff = 1.0 - atmo_depth;
                                     atmo_falloff = pow(atmo_falloff, 2.0);
                                     float glow = atmo_falloff * 0.8;
-                                    out_color = vec4(ATMO_COLOR * glow, glow);
-                                    return;
+                                    bg = bg * (1.0 - glow) + ATMO_COLOR * glow;
+                                    bg_alpha = max(bg_alpha, glow);
                                 }
                             }
-                            out_color = vec4(0.0);
+
+                            out_color = vec4(bg, bg_alpha);
                             return;
                         }
                         lat = lat_ortho;
@@ -811,6 +831,20 @@ impl SphereRenderer {
                             normal = normalize(mix(normal_ortho, n_merc, u_blend));
                             alpha = 1.0;
                         } else {
+                            vec3 star_bg = vec3(0.0);
+                            float star_alpha = 0.0;
+                            if (u_show_stars > 0.5) {
+                                vec2 sp = (v_uv - 0.5) * 2.0;
+                                sp.x *= u_aspect;
+                                vec3 dir = u_inv_rotation * normalize(vec3(sp, -2.0));
+                                float slat = asin(clamp(dir.y, -1.0, 1.0));
+                                float slon = atan(-dir.z, dir.x);
+                                float su = (slon + PI) / (2.0 * PI);
+                                float sv = (PI / 2.0 - slat) / PI;
+                                star_bg = texture(u_stars, vec2(su, sv)).rgb * (1.0 - u_blend);
+                                star_alpha = 1.0 - u_blend;
+                            }
+
                             lat = lat_merc;
                             lon = lon_merc;
                             normal = normalize(vec3(cos(lat)*cos(lon), sin(lat)/b, -cos(lat)*sin(lon)));
@@ -822,7 +856,15 @@ impl SphereRenderer {
                                 atmo_falloff = pow(atmo_falloff, 2.0);
                                 atmo_glow = atmo_falloff * 0.8 * (1.0 - u_blend);
                             }
-                            alpha = u_blend;
+                            alpha = max(u_blend, max(star_alpha, atmo_glow));
+                            if (star_alpha > u_blend && atmo_glow <= star_alpha) {
+                                vec3 bg = star_bg;
+                                if (atmo_glow > 0.0) {
+                                    bg = bg * (1.0 - atmo_glow / star_alpha) + ATMO_COLOR * atmo_glow;
+                                }
+                                out_color = vec4(bg, alpha);
+                                return;
+                            }
                             if (atmo_glow > alpha) {
                                 out_color = vec4(ATMO_COLOR * atmo_glow, atmo_glow);
                                 return;
@@ -921,6 +963,8 @@ impl SphereRenderer {
                 textures: HashMap::new(),
                 cloud_textures: HashMap::new(),
                 night_texture: None,
+                star_texture: None,
+                milky_way_texture: None,
             }
         }
     }
@@ -954,6 +998,50 @@ impl SphereRenderer {
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::REPEAT as i32);
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
             self.night_texture = Some(texture);
+        }
+    }
+
+    fn upload_star_texture(&mut self, gl: &glow::Context, tex: &EarthTexture) {
+        unsafe {
+            if self.star_texture.is_some() {
+                return;
+            }
+            let texture = gl.create_texture().expect("Cannot create texture");
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            let pixels: Vec<u8> = tex.pixels.iter().flat_map(|&[r, g, b]| [r, g, b]).collect();
+            gl.tex_image_2d(
+                glow::TEXTURE_2D, 0, glow::RGB as i32,
+                tex.width as i32, tex.height as i32, 0,
+                glow::RGB, glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(&pixels)),
+            );
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::REPEAT as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+            self.star_texture = Some(texture);
+        }
+    }
+
+    fn upload_milky_way_texture(&mut self, gl: &glow::Context, tex: &EarthTexture) {
+        unsafe {
+            if self.milky_way_texture.is_some() {
+                return;
+            }
+            let texture = gl.create_texture().expect("Cannot create texture");
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            let pixels: Vec<u8> = tex.pixels.iter().flat_map(|&[r, g, b]| [r, g, b]).collect();
+            gl.tex_image_2d(
+                glow::TEXTURE_2D, 0, glow::RGB as i32,
+                tex.width as i32, tex.height as i32, 0,
+                glow::RGB, glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(&pixels)),
+            );
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::REPEAT as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+            self.milky_way_texture = Some(texture);
         }
     }
 
@@ -1041,6 +1129,8 @@ impl SphereRenderer {
         blend: f32,
         center_lat: f32,
         center_lon: f32,
+        show_stars: bool,
+        show_milky_way: bool,
     ) {
         let Some(texture) = self.textures.get(&key) else { return };
 
@@ -1091,6 +1181,17 @@ impl SphereRenderer {
             };
             gl.uniform_1_i32(gl.get_uniform_location(self.program, "u_detail").as_ref(), 3);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_use_detail").as_ref(), if use_detail { 1.0 } else { 0.0 });
+
+            gl.active_texture(glow::TEXTURE4);
+            let star_tex = if show_milky_way { self.milky_way_texture } else { self.star_texture };
+            if let Some(st) = star_tex {
+                gl.bind_texture(glow::TEXTURE_2D, Some(st));
+            } else {
+                gl.bind_texture(glow::TEXTURE_2D, Some(*texture));
+            }
+            gl.uniform_1_i32(gl.get_uniform_location(self.program, "u_stars").as_ref(), 4);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_show_stars").as_ref(), if show_stars && star_tex.is_some() { 1.0 } else { 0.0 });
+
             let rot_data: [f32; 9] = [
                 inv_rotation[(0, 0)] as f32, inv_rotation[(1, 0)] as f32, inv_rotation[(2, 0)] as f32,
                 inv_rotation[(0, 1)] as f32, inv_rotation[(1, 1)] as f32, inv_rotation[(2, 1)] as f32,
@@ -1135,6 +1236,12 @@ impl SphereRenderer {
             }
             if let Some(nt) = self.night_texture {
                 gl.delete_texture(nt);
+            }
+            if let Some(st) = self.star_texture {
+                gl.delete_texture(st);
+            }
+            if let Some(mw) = self.milky_way_texture {
+                gl.delete_texture(mw);
             }
         }
     }
@@ -1871,8 +1978,12 @@ struct ViewerState {
     show_clouds: bool,
     show_day_night: bool,
     show_terminator: bool,
+    show_stars: bool,
+    show_milky_way: bool,
     dragging_place: Option<(usize, usize, bool, usize)>,
     night_texture: Option<Arc<EarthTexture>>,
+    star_texture: Option<Arc<EarthTexture>>,
+    milky_way_texture: Option<Arc<EarthTexture>>,
     sphere_renderer: Option<Arc<Mutex<SphereRenderer>>>,
     #[cfg(not(target_arch = "wasm32"))]
     tle_fetch_tx: mpsc::Sender<(TlePreset, Result<Vec<TleSatellite>, String>)>,
@@ -1972,8 +2083,12 @@ impl App {
                 show_clouds: true,
                 show_day_night: false,
                 show_terminator: false,
+                show_stars: false,
+                show_milky_way: false,
                 dragging_place: None,
                 night_texture: None,
+                star_texture: None,
+                milky_way_texture: None,
                 sphere_renderer: Some(sphere_renderer),
                 #[cfg(not(target_arch = "wasm32"))]
                 tle_fetch_tx,
@@ -3081,6 +3196,8 @@ impl ViewerState {
                         &mut self.dragging_place,
                         (tab_idx, planet_idx),
                         detail_gl_info,
+                        self.show_stars,
+                        self.show_milky_way,
                     );
                     self.rotation = rot;
                     self.zoom = new_zoom;
@@ -3247,6 +3364,8 @@ impl ViewerState {
                 &mut self.dragging_place,
                 (tab_idx, planet_idx),
                 detail_gl_info,
+                self.show_stars,
+                self.show_milky_way,
             );
             self.rotation = rot;
             self.zoom = new_zoom;
@@ -3583,6 +3702,8 @@ impl ViewerState {
                 self.hide_behind_earth = !show_behind;
             }
         }
+        ui.checkbox(&mut self.show_stars, "Show stars");
+        ui.add_enabled(self.show_stars, egui::Checkbox::new(&mut self.show_milky_way, "Show Milky Way"));
         ui.checkbox(&mut self.show_day_night, "Day/night cycle");
         ui.add_enabled(self.show_day_night, egui::Checkbox::new(&mut self.show_terminator, "Show terminator"));
         ui.checkbox(&mut self.show_axes, "Show axes");
@@ -3693,6 +3814,28 @@ impl ViewerState {
             if let Ok(bytes) = std::fs::read(asset_path(filename)) {
                 if let Ok(texture) = EarthTexture::from_bytes(&bytes) {
                     self.night_texture = Some(Arc::new(texture));
+                }
+            }
+        }
+    }
+
+    fn load_star_textures(&mut self, _ctx: &egui::Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.star_texture.is_none() {
+                let filename = "textures/stars/8k_stars.jpg";
+                if let Ok(bytes) = std::fs::read(asset_path(filename)) {
+                    if let Ok(texture) = EarthTexture::from_bytes(&bytes) {
+                        self.star_texture = Some(Arc::new(texture));
+                    }
+                }
+            }
+            if self.milky_way_texture.is_none() {
+                let filename = "textures/stars/8k_stars_milky_way.jpg";
+                if let Ok(bytes) = std::fs::read(asset_path(filename)) {
+                    if let Ok(texture) = EarthTexture::from_bytes(&bytes) {
+                        self.milky_way_texture = Some(Arc::new(texture));
+                    }
                 }
             }
         }
@@ -3938,6 +4081,10 @@ impl eframe::App for App {
             v.load_night_texture(ctx);
         }
 
+        if v.show_stars {
+            v.load_star_textures(ctx);
+        }
+
         if let Some(gl) = frame.gl() {
             if let Some(ref sphere_renderer) = v.sphere_renderer {
                 let mut renderer = sphere_renderer.lock();
@@ -3954,6 +4101,16 @@ impl eframe::App for App {
                 if v.show_day_night {
                     if let Some(night_tex) = &v.night_texture {
                         renderer.upload_night_texture(gl, night_tex);
+                    }
+                }
+                if v.show_stars {
+                    if let Some(star_tex) = &v.star_texture {
+                        renderer.upload_star_texture(gl, star_tex);
+                    }
+                    if v.show_milky_way {
+                        if let Some(mw_tex) = &v.milky_way_texture {
+                            renderer.upload_milky_way_texture(gl, mw_tex);
+                        }
                     }
                 }
             }
@@ -5130,6 +5287,8 @@ fn draw_3d_view(
     dragging_place: &mut Option<(usize, usize, bool, usize)>,
     drag_tab_planet: (usize, usize),
     detail_gl_info: Option<(glow::Texture, [f32; 4])>,
+    show_stars: bool,
+    show_milky_way: bool,
 ) -> (Matrix3<f64>, f64) {
     let max_altitude = constellations.iter()
         .map(|(c, _, _, _, _, _)| c.altitude_km)
@@ -5186,9 +5345,9 @@ fn draw_3d_view(
                         },
                         gl_texture: Some(detail_tex),
                     };
-                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, Some(&dt), merc_blend, center_lat_val, center_lon_val);
+                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, Some(&dt), merc_blend, center_lat_val, center_lon_val, show_stars, show_milky_way);
                 } else {
-                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, None, merc_blend, center_lat_val, center_lon_val);
+                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, None, merc_blend, center_lat_val, center_lon_val, show_stars, show_milky_way);
                 }
             })),
         };
