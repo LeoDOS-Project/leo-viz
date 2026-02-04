@@ -30,6 +30,7 @@ Planet textures are from:
 
 **[Solar System Scope](https://www.solarsystemscope.com/textures/)** (CC BY 4.0)
 - Earth, Moon, Mars, Mercury, Venus, Jupiter, Saturn, Sun (2K, 8K)
+- Stars, Stars + Milky Way (2K, 8K)
 
 **[Solar System in 16K Texture Pack](https://www.artstation.com/marketplace/p/5oNl/solar-system-in-16k-texture-pack)** by Textures for Planets
 - Earth (21K diffuse, 16K clouds, normal, specular, cities)
@@ -43,3 +44,9 @@ Planet textures are from:
 
 Real-time satellite tracking data is fetched from
 [CelesTrak](https://celestrak.org/) maintained by Dr. T.S. Kelso.
+
+Available constellations:
+- ISS, Starlink, OneWeb, Kuiper
+- Iridium, Iridium NEXT, Globalstar, Orbcomm
+- GPS, Galileo, GLONASS, Beidou
+- Molniya, Planet
