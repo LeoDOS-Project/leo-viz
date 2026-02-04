@@ -4089,7 +4089,6 @@ impl eframe::App for App {
                         samples.push((sx, sy));
                     }
                 }
-                // TODO: fix mercator projection for non-texture rendering (satellites, links, coverage polygons, etc.)
                 let merc_blend = ((v.zoom - 80.0) / 40.0).clamp(0.0, 1.0);
                 let sample_pts: Vec<(f64, f64)> = samples.iter()
                     .filter_map(|&(sx, sy)| screen_to_lonlat(sx, sy)).collect();
