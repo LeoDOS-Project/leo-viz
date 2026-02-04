@@ -6670,8 +6670,7 @@ fn draw_3d_view(
             let prev_pos = pos - drag;
             let cur = response.transform.value_from_position(pos);
             let prev = response.transform.value_from_position(prev_pos);
-            let margin = (response.transform.bounds().width() / 2.0).max(planet_radius);
-            let r = margin;
+            let r = planet_radius;
             let r_sq = r * r;
             let to_sphere = |px: f64, py: f64| -> Vector3<f64> {
                 let d_sq = px * px + py * py;
