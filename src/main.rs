@@ -1240,6 +1240,7 @@ impl WalkerConstellation {
                     lon,
                     ascending,
                     neighbor_idx: None,
+                    name: None,
                 });
             }
         }
@@ -1313,6 +1314,7 @@ struct SatelliteState {
     lon: f64,
     ascending: bool,
     neighbor_idx: Option<usize>,
+    name: Option<String>,
 }
 
 fn rotate_point_matrix(x: f64, y: f64, z: f64, rot: &Matrix3<f64>) -> (f64, f64, f64) {
@@ -1429,7 +1431,6 @@ impl TlePreset {
 
 #[derive(Clone)]
 struct TleSatellite {
-    #[allow(dead_code)]
     name: String,
     constants: Constants,
     epoch_minutes: f64,
@@ -1710,6 +1711,7 @@ impl PlanetConfig {
                     lat, lon,
                     ascending,
                     neighbor_idx: None,
+                    name: Some(sat.name.clone()),
                 });
             }
         }
@@ -4016,6 +4018,7 @@ impl eframe::App for App {
                         samples.push((sx, sy));
                     }
                 }
+                // TODO: fix mercator projection for non-texture rendering (satellites, links, coverage polygons, etc.)
                 let merc_blend = ((v.zoom - 80.0) / 40.0).clamp(0.0, 1.0);
                 let sample_pts: Vec<(f64, f64)> = samples.iter()
                     .filter_map(|&(sx, sy)| screen_to_lonlat(sx, sy)).collect();
@@ -5991,7 +5994,7 @@ fn draw_3d_view(
         label_rects.push((bg_rect, *is_gs, *idx));
     }
 
-    for (_constellation, positions, color_offset, _is_tle, orig_idx) in constellations {
+    for (constellation, positions, color_offset, _is_tle, orig_idx) in constellations {
         for sat in positions {
             for cam in satellite_cameras.iter_mut() {
                 if cam.constellation_idx == *orig_idx && cam.plane == sat.plane && cam.sat_index == sat.sat_index {
@@ -6006,6 +6009,26 @@ fn draw_3d_view(
                         scaled_sat_radius * 2.5,
                         egui::Stroke::new(2.0, color),
                     );
+
+                    let r = (sat.x * sat.x + sat.y * sat.y + sat.z * sat.z).sqrt();
+                    let alt_km = r - constellation.planet_radius;
+                    let vel_km_s = (constellation.planet_mu / r).sqrt();
+                    let id = match &sat.name {
+                        Some(name) => name.clone(),
+                        None => format!("P{}S{}", sat.plane, sat.sat_index),
+                    };
+                    let text = format!(
+                        "{}  {:.1}° {:.1}°\n{:.0} km  {:.2} km/s",
+                        id,
+                        sat.lat, sat.lon,
+                        alt_km, vel_km_s,
+                    );
+                    let font = egui::FontId::proportional(12.0);
+                    let galley = ui.painter().layout_no_wrap(text, font, egui::Color32::WHITE);
+                    let text_pos = screen_pos + egui::Vec2::new(scaled_sat_radius * 3.0, -galley.size().y / 2.0);
+                    let bg_rect = egui::Rect::from_min_size(text_pos, galley.size()).expand(4.0);
+                    ui.painter().rect_filled(bg_rect, 4.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200));
+                    ui.painter().galley(text_pos, galley, egui::Color32::WHITE);
                 }
             }
         }
