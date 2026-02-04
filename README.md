@@ -19,6 +19,11 @@ A satellite constellation visualization tool built with Rust and egui.
 cargo build --release
 ```
 
+## TODO
+
+- Camera tilt (Ctrl+drag) with perspective projection for viewing satellites from the side
+- Fix Mercator projection for non-texture rendering (satellites, links, coverage polygons)
+
 ## Image Credits
 
 Planet textures are from:
