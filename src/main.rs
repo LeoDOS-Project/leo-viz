@@ -3123,14 +3123,18 @@ impl ViewerState {
                         if ui.add(egui::DragValue::new(&mut cons.arg_periapsis).range(0.0..=360.0).suffix("°").speed(1.0)).changed() {
                             cons.preset = Preset::None;
                         }
-                        if ui.toggle_value(&mut cons.drag_enabled, "Drag").changed() {
+                    });
+
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut cons.drag_enabled, "Drag:").changed() {
                             cons.preset = Preset::None;
                         }
                         if cons.drag_enabled {
-                            ui.label("BC:");
                             if ui.add(egui::DragValue::new(&mut cons.ballistic_coeff).range(0.1..=500.0).suffix(" kg/m²").speed(1.0).max_decimals(1)).changed() {
                                 cons.preset = Preset::None;
                             }
+                        } else {
+                            ui.weak("N/A");
                         }
                     });
 
@@ -3832,7 +3836,7 @@ impl ViewerState {
         ui.label(egui::RichText::new("Simulation").strong());
         ui.horizontal(|ui| {
             ui.label("Speed:");
-            ui.add(egui::DragValue::new(&mut self.speed).range(-1000.0..=1000.0).speed(1.0));
+            ui.add(egui::DragValue::new(&mut self.speed).range(-86400.0..=86400.0).speed(1.0));
             if ui.button("⏪").clicked() {
                 self.speed = -self.speed;
             }
@@ -3844,51 +3848,148 @@ impl ViewerState {
         let start = self.start_timestamp;
         let real_timestamp = start + Duration::seconds(self.real_time as i64);
         let current_ts = start + Duration::seconds(self.time as i64);
-        ui.horizontal(|ui| {
-            ui.label("Time:");
-            ui.add(
-                egui::DragValue::new(&mut self.time)
-                    .speed(1.0)
-                    .custom_formatter(|secs, _| {
-                        let ts = (start + Duration::seconds(secs as i64)).with_timezone(&Local);
-                        ts.format("%H:%M:%S").to_string()
-                    })
-                    .custom_parser(|input| {
-                        if let Ok(secs) = input.parse::<f64>() {
-                            return Some(secs);
+        {
+            use chrono::Timelike;
+            use chrono::Datelike;
+            let local = current_ts.with_timezone(&Local);
+            let orig_time = self.time;
+            let mut t_sec = self.time;
+            let mut t_min = self.time;
+            let mut t_hour = self.time;
+            let mut t_day = self.time;
+            let total_months = local.year() as f64 * 12.0 + local.month() as f64 - 1.0;
+            let mut t_month = total_months;
+            let mut t_year = total_months;
+            let fmt_component = |secs: f64, f: fn(&chrono::DateTime<Local>) -> String| -> String {
+                let ts = (start + Duration::seconds(secs as i64)).with_timezone(&Local);
+                f(&ts)
+            };
+            ui.horizontal(|ui| {
+                ui.label("Time:");
+                ui.add(egui::DragValue::new(&mut t_hour)
+                    .speed(360.0)
+                    .custom_formatter(|s, _| fmt_component(s, |t| format!("{:02}", t.hour())))
+                    .custom_parser({
+                        let local = local;
+                        move |input| {
+                            let h = input.parse::<u32>().ok()?.min(23);
+                            let delta = (h as i64 - local.hour() as i64) * 3600;
+                            Some(orig_time + delta as f64)
                         }
-                        let formats = ["%H:%M:%S", "%H:%M"];
-                        for fmt in formats {
-                            if let Ok(parsed) = chrono::NaiveTime::parse_from_str(input, fmt) {
-                                let current = current_ts.with_timezone(&Local).date_naive();
-                                let new_dt = current.and_time(parsed).and_local_timezone(Local).single()?.with_timezone(&Utc);
-                                let diff = new_dt.signed_duration_since(start);
-                                return Some(diff.num_seconds() as f64);
-                            }
+                    }));
+                ui.label(":");
+                ui.add(egui::DragValue::new(&mut t_min)
+                    .speed(6.0)
+                    .custom_formatter(|s, _| fmt_component(s, |t| format!("{:02}", t.minute())))
+                    .custom_parser({
+                        let local = local;
+                        move |input| {
+                            let m = input.parse::<u32>().ok()?.min(59);
+                            let delta = (m as i64 - local.minute() as i64) * 60;
+                            Some(orig_time + delta as f64)
                         }
-                        None
-                    })
-            );
-            ui.label("Date:");
-            ui.add(
-                egui::DragValue::new(&mut self.time)
-                    .speed(86400.0)
-                    .custom_formatter(|secs, _| {
-                        let ts = (start + Duration::seconds(secs as i64)).with_timezone(&Local);
-                        ts.format("%d/%m/%Y").to_string()
-                    })
-                    .custom_parser(|input| {
-                        if let Ok(parsed) = chrono::NaiveDate::parse_from_str(input, "%d/%m/%Y") {
-                            let current_time = current_ts.with_timezone(&Local).time();
-                            let new_dt = parsed.and_time(current_time).and_local_timezone(Local).single()?
-                                .with_timezone(&Utc);
-                            let diff = new_dt.signed_duration_since(start);
-                            return Some(diff.num_seconds() as f64);
+                    }));
+                ui.label(":");
+                ui.add(egui::DragValue::new(&mut t_sec)
+                    .speed(0.1)
+                    .custom_formatter(|s, _| fmt_component(s, |t| format!("{:02}", t.second())))
+                    .custom_parser({
+                        let local = local;
+                        move |input| {
+                            let s = input.parse::<u32>().ok()?.min(59);
+                            let delta = s as i64 - local.second() as i64;
+                            Some(orig_time + delta as f64)
                         }
-                        None
+                    }));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Date:");
+                ui.add(egui::DragValue::new(&mut t_day)
+                    .speed(8640.0)
+                    .custom_formatter(|s, _| fmt_component(s, |t| format!("{:02}", t.day())))
+                    .custom_parser({
+                        let local = local;
+                        move |input| {
+                            let d = input.parse::<u32>().ok()?.clamp(1, 31);
+                            let delta = (d as i64 - local.day() as i64) * 86400;
+                            Some(orig_time + delta as f64)
+                        }
+                    }));
+                ui.label("/");
+                ui.add(egui::DragValue::new(&mut t_month)
+                    .speed(0.1)
+                    .custom_formatter(|v, _| {
+                        let m = (v as i32).rem_euclid(12) + 1;
+                        format!("{:02}", m)
                     })
-            );
-        });
+                    .custom_parser({
+                        let local = local;
+                        move |input| {
+                            let m: i32 = input.parse().ok()?;
+                            Some(local.year() as f64 * 12.0 + m.clamp(1, 12) as f64 - 1.0)
+                        }
+                    }));
+                ui.label("/");
+                ui.add(egui::DragValue::new(&mut t_year)
+                    .speed(1.2)
+                    .custom_formatter(|v, _| {
+                        let y = (v / 12.0).floor() as i32;
+                        format!("{}", y)
+                    })
+                    .custom_parser({
+                        let local = local;
+                        move |input| {
+                            let y: i32 = input.parse().ok()?;
+                            Some(y as f64 * 12.0 + local.month() as f64 - 1.0)
+                        }
+                    }));
+            });
+            if t_sec != self.time { self.time = t_sec; }
+            else if t_min != self.time {
+                let d = t_min - self.time;
+                self.time += (d / 60.0).round() * 60.0;
+            }
+            else if t_hour != self.time {
+                let d = t_hour - self.time;
+                self.time += (d / 3600.0).round() * 3600.0;
+            }
+            else if t_day != self.time {
+                let d = t_day - self.time;
+                self.time += (d / 86400.0).round() * 86400.0;
+            }
+            else {
+                let apply_month_delta = |raw: f64, unit: f64| -> Option<i32> {
+                    let d = raw - total_months;
+                    if d.abs() < 0.01 { return None; }
+                    Some((d / unit).round() as i32)
+                };
+                let month_delta = if t_month != total_months {
+                    apply_month_delta(t_month, 1.0)
+                } else if t_year != total_months {
+                    apply_month_delta(t_year, 12.0).map(|d| d * 12)
+                } else {
+                    None
+                };
+                if let Some(md) = month_delta {
+                    let mut m = local.month() as i32 - 1 + md;
+                    let y = local.year() + m.div_euclid(12);
+                    m = m.rem_euclid(12) + 1;
+                    let d = local.day().min(
+                        chrono::NaiveDate::from_ymd_opt(y, m as u32, 1)
+                            .and_then(|d| d.checked_add_months(chrono::Months::new(1)))
+                            .and_then(|d| d.pred_opt())
+                            .map(|d| d.day())
+                            .unwrap_or(28)
+                    );
+                    if let Some(date) = chrono::NaiveDate::from_ymd_opt(y, m as u32, d) {
+                        if let Some(dt) = date.and_time(local.time()).and_local_timezone(Local).single() {
+                            let diff = dt.with_timezone(&Utc).signed_duration_since(start);
+                            self.time = diff.num_seconds() as f64;
+                        }
+                    }
+                }
+            }
+        }
         let real_local = real_timestamp.with_timezone(&Local);
         ui.label(format!("Real: {}", real_local.format("%H:%M:%S %d/%m/%Y %Z")));
         if ui.button("Sync time").clicked() {
@@ -4991,7 +5092,40 @@ impl eframe::App for App {
                 if let Some(planet) = tab.planets.first() {
                     if planet.satellite_cameras.len() == 1 {
                         let cam = &planet.satellite_cameras[0];
-                        if let Some(cons) = planet.constellations.get(cam.constellation_idx) {
+                        let set_follow_rotation = |radial: Vector3<f64>, velocity_dir: Vector3<f64>| -> Matrix3<f64> {
+                            let z_axis = radial;
+                            let vel_proj = velocity_dir - radial * velocity_dir.dot(&radial);
+                            let y_axis = -vel_proj.normalize();
+                            let x_axis = y_axis.cross(&z_axis).normalize();
+                            Matrix3::new(
+                                x_axis.x, x_axis.y, x_axis.z,
+                                y_axis.x, y_axis.y, y_axis.z,
+                                z_axis.x, z_axis.y, z_axis.z,
+                            )
+                        };
+                        if cam.constellation_idx == usize::MAX && planet.show_tle_window {
+                            let propagation_minutes = v.start_timestamp.timestamp() as f64 / 60.0 + v.time / 60.0;
+                            'tle_search: for preset in TlePreset::ALL.iter() {
+                                let Some((selected, state, _)) = planet.tle_selections.get(preset) else { continue };
+                                if !*selected { continue; }
+                                let TleLoadState::Loaded { satellites, .. } = state else { continue };
+                                if let Some(sat) = satellites.get(cam.sat_index) {
+                                    let minutes_since_epoch = propagation_minutes - sat.epoch_minutes;
+                                    if let Ok(prediction) = sat.constants.propagate(sgp4::MinutesSinceEpoch(minutes_since_epoch)) {
+                                        let x = prediction.position[0];
+                                        let y = prediction.position[2];
+                                        let z = -prediction.position[1];
+                                        let vx = prediction.velocity[0];
+                                        let vy = prediction.velocity[2];
+                                        let vz = -prediction.velocity[1];
+                                        let radial: Vector3<f64> = Vector3::new(x, y, z).normalize();
+                                        let velocity_dir: Vector3<f64> = Vector3::new(vx, vy, vz).normalize();
+                                        v.rotation = set_follow_rotation(radial, velocity_dir);
+                                        break 'tle_search;
+                                    }
+                                }
+                            }
+                        } else if let Some(cons) = planet.constellations.get(cam.constellation_idx) {
                             let planet_radius = planet.celestial_body.radius_km();
                             let planet_mu = planet.celestial_body.mu();
                             let planet_j2 = planet.celestial_body.j2();
@@ -5011,15 +5145,8 @@ impl eframe::App for App {
                                     inc.cos(),
                                     -raan.cos() * inc.sin(),
                                 );
-                                let velocity_dir: Vector3<f64> = orbital_normal.cross(&radial).normalize();
-                                let forward = velocity_dir;
-                                let up = radial;
-                                let right = forward.cross(&up).normalize();
-                                v.rotation = Matrix3::new(
-                                    right.x, right.y, right.z,
-                                    up.x, up.y, up.z,
-                                    forward.x, forward.y, forward.z,
-                                );
+                                let velocity_dir: Vector3<f64> = radial.cross(&orbital_normal).normalize();
+                                v.rotation = set_follow_rotation(radial, velocity_dir);
                             }
                         }
                     }
