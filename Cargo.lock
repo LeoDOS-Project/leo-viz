@@ -1380,6 +1380,7 @@ dependencies = [
  "js-sys",
  "log",
  "nalgebra",
+ "serde_json",
  "sgp4",
  "ureq",
  "wasm-bindgen",

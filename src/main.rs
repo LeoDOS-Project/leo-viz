@@ -323,6 +323,15 @@ impl CelestialBody {
             CelestialBody::Eris => 25.9,
         }
     }
+
+    fn ring_params(&self) -> Option<(&'static str, f32, f32)> {
+        match self {
+            CelestialBody::Saturn => Some(("textures/saturn/saturn_ring_2k.png", 1.1, 2.3)),
+            CelestialBody::Uranus => Some(("textures/uranus/uranus_ring.png", 1.459, 4.337)),
+            CelestialBody::Neptune => Some(("textures/neptune/neptune_ring.png", 1.575, 2.665)),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -459,6 +468,30 @@ impl EarthTexture {
             pixels,
             source_size: egui::Vec2::ZERO,
         }
+    }
+}
+
+struct RingTexture {
+    width: u32,
+    height: u32,
+    pixels: Vec<[u8; 4]>,
+}
+
+impl RingTexture {
+    fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        use std::io::Cursor;
+        let cursor = Cursor::new(bytes);
+        let mut reader = image::ImageReader::new(cursor)
+            .with_guessed_format()
+            .map_err(|e| format!("Failed to guess format: {}", e))?;
+        reader.no_limits();
+        let img = reader.decode()
+            .map_err(|e| format!("Failed to decode image: {}", e))?
+            .to_rgba8();
+        let width = img.width();
+        let height = img.height();
+        let pixels: Vec<[u8; 4]> = img.pixels().map(|p| p.0).collect();
+        Ok(Self { width, height, pixels })
     }
 }
 
@@ -687,6 +720,7 @@ struct SphereRenderer {
     night_texture: Option<glow::Texture>,
     star_texture: Option<glow::Texture>,
     milky_way_texture: Option<glow::Texture>,
+    ring_textures: HashMap<CelestialBody, glow::Texture>,
 }
 
 impl SphereRenderer {
@@ -736,6 +770,12 @@ impl SphereRenderer {
                 uniform float u_use_detail;
                 uniform float u_show_stars;
                 uniform vec3 u_bg_color;
+                uniform sampler2D u_ring_texture;
+                uniform float u_has_rings;
+                uniform float u_ring_inner;
+                uniform float u_ring_outer;
+                uniform float u_adams_arc;
+                uniform float u_epsilon_wobble;
 
                 const float PI = 3.14159265359;
                 const vec3 ATMO_COLOR = vec3(0.4, 0.7, 1.0);
@@ -778,7 +818,52 @@ impl SphereRenderer {
                     vec3 normal;
                     float alpha;
 
-                    if (!ortho_hit) {
+                    float t_sphere = ortho_hit ? (-B - sqrt(discriminant)) / (2.0 * A) : 1e10;
+
+                    float ring_alpha = 0.0;
+                    vec3 ring_color = vec3(0.0);
+                    float t_ring = 1e10;
+                    if (u_has_rings > 0.5 && abs(D.y) > 0.0001) {
+                        float t_disc = -O.y / D.y;
+                        vec3 rh = O + t_disc * D;
+                        float r = length(vec2(rh.x, rh.z));
+                        if (u_epsilon_wobble > 0.5) {
+                            float theta = atan(rh.z, rh.x);
+                            float eps_center = 2.017;
+                            float eps_zone = 0.06;
+                            float prox = 1.0 - smoothstep(0.0, eps_zone, abs(r - eps_center));
+                            if (prox > 0.0) {
+                                float radial_shift = eps_center * 0.025 * cos(theta);
+                                r -= radial_shift * prox;
+                                float width_scale = 1.0 + 0.7 * cos(theta);
+                                float dr = r - eps_center;
+                                r = eps_center + dr / mix(1.0, width_scale, prox);
+                            }
+                        }
+                        if (r >= u_ring_inner && r <= u_ring_outer) {
+                            float ru = (r - u_ring_inner) / (u_ring_outer - u_ring_inner);
+                            vec4 rs = texture(u_ring_texture, vec2(ru, 0.5));
+                            ring_color = rs.rgb;
+                            ring_alpha = rs.a;
+                            if (u_adams_arc > 0.5 && ru > 0.82) {
+                                float ang = atan(rh.z, rh.x);
+                                float deg = ang * 180.0 / PI;
+                                if (deg < 0.0) deg += 360.0;
+                                float arc = 0.0;
+                                if (deg > 237.0 && deg < 257.0) arc = smoothstep(237.0, 240.0, deg) * (1.0 - smoothstep(254.0, 257.0, deg));
+                                if (deg > 258.0 && deg < 265.0) arc = max(arc, smoothstep(258.0, 260.0, deg) * (1.0 - smoothstep(263.0, 265.0, deg)));
+                                if (deg > 266.0 && deg < 273.0) arc = max(arc, smoothstep(266.0, 268.0, deg) * (1.0 - smoothstep(271.0, 273.0, deg)));
+                                if (deg > 274.0 && deg < 290.0) arc = max(arc, smoothstep(274.0, 277.0, deg) * (1.0 - smoothstep(287.0, 290.0, deg)));
+                                if (deg > 292.0 && deg < 320.0) arc = max(arc, smoothstep(292.0, 296.0, deg) * (1.0 - smoothstep(316.0, 320.0, deg)));
+                                ring_alpha *= mix(0.15, 1.0, arc);
+                            }
+                            t_ring = t_disc;
+                        }
+                    }
+
+                    bool ring_in_front = ring_alpha > 0.01 && t_ring < t_sphere;
+
+                    if (!ortho_hit && ring_alpha < 0.01) {
                         vec3 bg = vec3(0.0);
                         float bg_alpha = 0.0;
 
@@ -809,6 +894,26 @@ impl SphereRenderer {
                         }
 
                         out_color = vec4(mix(u_bg_color, bg, bg_alpha), 1.0);
+                        return;
+                    }
+
+                    if (!ortho_hit && ring_alpha >= 0.01) {
+                        vec3 bg = vec3(0.0);
+                        float bg_alpha = 0.0;
+                        if (u_show_stars > 0.5) {
+                            vec2 sp = (v_uv - 0.5) * 2.0;
+                            sp.x *= u_aspect;
+                            vec3 dir = u_inv_rotation * normalize(vec3(sp, -2.0));
+                            float slat = asin(clamp(dir.y, -1.0, 1.0));
+                            float slon = atan(-dir.z, dir.x);
+                            float su = (slon + PI) / (2.0 * PI);
+                            float sv = (PI / 2.0 - slat) / PI;
+                            bg = texture(u_stars, vec2(su, sv)).rgb;
+                            bg_alpha = 1.0;
+                        }
+                        vec3 base = mix(u_bg_color, bg, bg_alpha);
+                        vec3 final_color = mix(base, ring_color, ring_alpha);
+                        out_color = vec4(final_color, 1.0);
                         return;
                     }
                     lat = lat_ortho;
@@ -860,6 +965,10 @@ impl SphereRenderer {
                         color = mix(color, ATMO_COLOR * atmo_sun, rim);
                     }
 
+                    if (ring_in_front) {
+                        color = mix(color, ring_color, ring_alpha);
+                    }
+
                     out_color = vec4(mix(u_bg_color, color, alpha), 1.0);
                 }
             "#;
@@ -907,6 +1016,7 @@ impl SphereRenderer {
                 night_texture: None,
                 star_texture: None,
                 milky_way_texture: None,
+                ring_textures: HashMap::new(),
             }
         }
     }
@@ -984,6 +1094,28 @@ impl SphereRenderer {
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::REPEAT as i32);
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
             self.milky_way_texture = Some(texture);
+        }
+    }
+
+    fn upload_ring_texture(&mut self, gl: &glow::Context, body: CelestialBody, tex: &RingTexture) {
+        unsafe {
+            if self.ring_textures.contains_key(&body) {
+                return;
+            }
+            let texture = gl.create_texture().expect("Cannot create texture");
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            let pixels: Vec<u8> = tex.pixels.iter().flat_map(|&[r, g, b, a]| [r, g, b, a]).collect();
+            gl.tex_image_2d(
+                glow::TEXTURE_2D, 0, glow::RGBA as i32,
+                tex.width as i32, tex.height as i32, 0,
+                glow::RGBA, glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(&pixels)),
+            );
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+            self.ring_textures.insert(body, texture);
         }
     }
 
@@ -1132,6 +1264,25 @@ impl SphereRenderer {
             gl.uniform_1_i32(gl.get_uniform_location(self.program, "u_stars").as_ref(), 4);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_show_stars").as_ref(), if show_stars && star_tex.is_some() { 1.0 } else { 0.0 });
 
+            gl.active_texture(glow::TEXTURE5);
+            let ring_params = key.0.ring_params();
+            let has_rings = if let Some(rt) = self.ring_textures.get(&key.0) {
+                gl.bind_texture(glow::TEXTURE_2D, Some(*rt));
+                true
+            } else {
+                gl.bind_texture(glow::TEXTURE_2D, Some(*texture));
+                false
+            };
+            gl.uniform_1_i32(gl.get_uniform_location(self.program, "u_ring_texture").as_ref(), 5);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_has_rings").as_ref(), if has_rings { 1.0 } else { 0.0 });
+            let (ring_inner, ring_outer) = ring_params.map(|(_, i, o)| (i, o)).unwrap_or((0.0, 0.0));
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_ring_inner").as_ref(), ring_inner);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_ring_outer").as_ref(), ring_outer);
+            let adams_arc = if has_rings && key.0 == CelestialBody::Neptune { 1.0f32 } else { 0.0f32 };
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_adams_arc").as_ref(), adams_arc);
+            let epsilon_wobble = if has_rings && key.0 == CelestialBody::Uranus { 1.0f32 } else { 0.0f32 };
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_epsilon_wobble").as_ref(), epsilon_wobble);
+
             let rot_data: [f32; 9] = [
                 inv_rotation[(0, 0)] as f32, inv_rotation[(1, 0)] as f32, inv_rotation[(2, 0)] as f32,
                 inv_rotation[(0, 1)] as f32, inv_rotation[(1, 1)] as f32, inv_rotation[(2, 1)] as f32,
@@ -1180,6 +1331,9 @@ impl SphereRenderer {
             }
             if let Some(mw) = self.milky_way_texture {
                 gl.delete_texture(mw);
+            }
+            for rt in self.ring_textures.values() {
+                gl.delete_texture(*rt);
             }
         }
     }
@@ -2115,6 +2269,7 @@ struct ViewerState {
     rotation: Matrix3<f64>,
     torus_rotation: Matrix3<f64>,
     planet_textures: HashMap<(CelestialBody, Skin, TextureResolution), Arc<EarthTexture>>,
+    ring_textures: HashMap<CelestialBody, Arc<RingTexture>>,
     cloud_textures: HashMap<TextureResolution, Arc<EarthTexture>>,
     planet_image_handles: HashMap<(CelestialBody, Skin, TextureResolution), egui::TextureHandle>,
     texture_resolution: TextureResolution,
@@ -2246,6 +2401,7 @@ impl App {
                     map.insert(builtin_key, builtin_texture.clone());
                     map
                 },
+                ring_textures: HashMap::new(),
                 cloud_textures: HashMap::new(),
                 planet_image_handles: HashMap::new(),
                 texture_resolution: TextureResolution::R8192,
@@ -4414,6 +4570,15 @@ impl ViewerState {
                         self.planet_textures.insert(key, texture.clone());
                         self.texture_load_state = TextureLoadState::Loaded(texture);
                         self.planet_image_handles.remove(&key);
+                        if let Some((ring_path, _, _)) = body.ring_params() {
+                            if !self.ring_textures.contains_key(&body) {
+                                if let Ok(ring_bytes) = std::fs::read(asset_path(ring_path)) {
+                                    if let Ok(ring_tex) = RingTexture::from_bytes(&ring_bytes) {
+                                        self.ring_textures.insert(body, Arc::new(ring_tex));
+                                    }
+                                }
+                            }
+                        }
                     }
                     Err(e) => self.texture_load_state = TextureLoadState::Failed(e),
                 },
@@ -4907,6 +5072,9 @@ impl eframe::App for App {
                             renderer.upload_milky_way_texture(gl, mw_tex);
                         }
                     }
+                }
+                for (body, ring_tex) in &v.ring_textures {
+                    renderer.upload_ring_texture(gl, *body, ring_tex);
                 }
             }
         }
