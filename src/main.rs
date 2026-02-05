@@ -1153,6 +1153,28 @@ impl SphereRenderer {
         }
     }
 
+    fn evict_unused_textures(&mut self, gl: &glow::Context, keep: &[(CelestialBody, Skin, TextureResolution)]) {
+        let to_remove: Vec<_> = self.textures.keys()
+            .filter(|k| !keep.contains(k))
+            .copied()
+            .collect();
+        for key in to_remove {
+            if let Some(tex) = self.textures.remove(&key) {
+                unsafe { gl.delete_texture(tex); }
+            }
+        }
+        let keep_bodies: std::collections::HashSet<CelestialBody> = keep.iter().map(|k| k.0).collect();
+        let rings_to_remove: Vec<_> = self.ring_textures.keys()
+            .filter(|b| !keep_bodies.contains(b))
+            .copied()
+            .collect();
+        for body in rings_to_remove {
+            if let Some(tex) = self.ring_textures.remove(&body) {
+                unsafe { gl.delete_texture(tex); }
+            }
+        }
+    }
+
     fn upload_cloud_texture(&mut self, gl: &glow::Context, res: TextureResolution, cloud_tex: &EarthTexture) {
         unsafe {
             if self.cloud_textures.contains_key(&res) {
@@ -4589,7 +4611,7 @@ impl ViewerState {
             wasm_bindgen_futures::spawn_local(async move {
                 let result = fetch_texture(&filename).await;
                 TEXTURE_RESULT.with(|cell| {
-                    *cell.borrow_mut() = Some(result);
+                    cell.borrow_mut().push((key, result));
                 });
                 ctx.request_repaint();
             });
@@ -4703,7 +4725,7 @@ impl ViewerState {
 
 #[cfg(target_arch = "wasm32")]
 thread_local! {
-    static TEXTURE_RESULT: std::cell::RefCell<Option<Result<EarthTexture, String>>> = std::cell::RefCell::new(None);
+    static TEXTURE_RESULT: std::cell::RefCell<Vec<((CelestialBody, Skin, TextureResolution), Result<EarthTexture, String>)>> = std::cell::RefCell::new(Vec::new());
     static STAR_TEXTURE_RESULT: std::cell::RefCell<Option<Result<EarthTexture, String>>> = std::cell::RefCell::new(None);
     static MILKY_WAY_TEXTURE_RESULT: std::cell::RefCell<Option<Result<EarthTexture, String>>> = std::cell::RefCell::new(None);
     static NIGHT_TEXTURE_RESULT: std::cell::RefCell<Option<Result<EarthTexture, String>>> = std::cell::RefCell::new(None);
@@ -5074,8 +5096,15 @@ impl eframe::App for App {
                 for (body, ring_tex) in &v.ring_textures {
                     renderer.upload_ring_texture(gl, *body, ring_tex);
                 }
+                renderer.evict_unused_textures(gl, &bodies_needed);
             }
         }
+
+        let bodies_set: std::collections::HashSet<_> = bodies_needed.iter().copied().collect();
+        v.planet_textures.retain(|k, _| bodies_set.contains(k));
+        v.planet_image_handles.retain(|k, _| bodies_set.contains(k));
+        let body_set: std::collections::HashSet<CelestialBody> = bodies_needed.iter().map(|k| k.0).collect();
+        v.ring_textures.retain(|b, _| body_set.contains(b));
 
         #[cfg(not(target_arch = "wasm32"))]
         while let Ok((preset, result)) = v.tle_fetch_rx.try_recv() {
@@ -5594,18 +5623,16 @@ impl eframe::App for App {
 
         #[cfg(target_arch = "wasm32")]
         TEXTURE_RESULT.with(|cell| {
-            if let Some(result) = cell.borrow_mut().take() {
-                if let Some(body) = v.pending_body {
-                    match result {
-                        Ok(texture) => {
-                            let texture = Arc::new(texture);
-                            v.planet_textures.insert(body, texture.clone());
-                            v.texture_load_state = TextureLoadState::Loaded(texture);
-                            v.planet_image_handles.remove(&body);
-                        }
-                        Err(e) => {
-                            v.texture_load_state = TextureLoadState::Failed(e);
-                        }
+            for (body, result) in cell.borrow_mut().drain(..) {
+                match result {
+                    Ok(texture) => {
+                        let texture = Arc::new(texture);
+                        v.planet_textures.insert(body, texture.clone());
+                        v.texture_load_state = TextureLoadState::Loaded(texture);
+                        v.planet_image_handles.remove(&body);
+                    }
+                    Err(e) => {
+                        v.texture_load_state = TextureLoadState::Failed(e);
                     }
                 }
             }
