@@ -3510,6 +3510,9 @@ impl ViewerState {
                     });
 
                     ui.horizontal(|ui| {
+                        let old_type = cons.walker_type;
+                        ui.selectable_value(&mut cons.walker_type, WalkerType::Delta, "Delta");
+                        ui.selectable_value(&mut cons.walker_type, WalkerType::Star, "Star");
                         if ui.checkbox(&mut cons.drag_enabled, "Drag:").changed() {
                             cons.preset = Preset::None;
                         }
@@ -3520,13 +3523,6 @@ impl ViewerState {
                         } else {
                             ui.weak("N/A");
                         }
-                    });
-
-                    ui.horizontal(|ui| {
-                        let old_type = cons.walker_type;
-                        ui.selectable_value(&mut cons.walker_type, WalkerType::Delta, "Delta");
-                        ui.selectable_value(&mut cons.walker_type, WalkerType::Star, "Star");
-                        ui.weak("Drag ↕ to reorder");
                         if cons.walker_type != old_type {
                             cons.preset = Preset::None;
                         }
@@ -5013,6 +5009,8 @@ impl eframe::App for App {
         } else {
             egui::Visuals::light()
         });
+
+        ctx.options_mut(|o| o.input_options.max_click_dist = 1.0);
 
         let focused = self.dock_state.focused_leaf();
         let active_tab_idx = self.dock_state.iter_all_tabs()
