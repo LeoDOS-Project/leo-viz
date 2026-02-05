@@ -732,9 +732,6 @@ impl SphereRenderer {
                 uniform vec3 u_sun_dir;
                 uniform vec4 u_detail_bounds;
                 uniform float u_use_detail;
-                uniform float u_blend;
-                uniform float u_center_lat;
-                uniform float u_center_lon;
                 uniform float u_show_stars;
                 uniform vec3 u_bg_color;
 
@@ -775,110 +772,47 @@ impl SphereRenderer {
                         normal_ortho = normalize(vec3(world_pt.x, world_pt.y / b2, world_pt.z));
                     }
 
-                    float merc_y_center = log(tan(PI / 4.0 + u_center_lat / 2.0));
-                    float scale_f = 1.0 / cos(u_center_lat);
-                    float lon_merc = u_center_lon + centered.x * scale_f;
-                    float merc_y = merc_y_center + centered.y * scale_f;
-                    float lat_merc = 2.0 * atan(exp(clamp(merc_y, -3.0, 3.0))) - PI / 2.0;
-
                     float lat, lon;
                     vec3 normal;
                     float alpha;
 
-                    if (u_blend < 0.001) {
-                        if (!ortho_hit) {
-                            vec3 bg = vec3(0.0);
-                            float bg_alpha = 0.0;
+                    if (!ortho_hit) {
+                        vec3 bg = vec3(0.0);
+                        float bg_alpha = 0.0;
 
-                            if (u_show_stars > 0.5) {
-                                vec2 sp = (v_uv - 0.5) * 2.0;
-                                sp.x *= u_aspect;
-                                vec3 dir = u_inv_rotation * normalize(vec3(sp, -2.0));
-                                float slat = asin(clamp(dir.y, -1.0, 1.0));
-                                float slon = atan(-dir.z, dir.x);
-                                float su = (slon + PI) / (2.0 * PI);
-                                float sv = (PI / 2.0 - slat) / PI;
-                                bg = texture(u_stars, vec2(su, sv)).rgb;
-                                bg_alpha = 1.0;
-                            }
-
-                            if (u_atmosphere > 0.0 && screen_dist < atmo_outer) {
-                                float C_atmo = O.x*O.x + O.y*O.y + O.z*O.z - 1.0;
-                                float disc_atmo = B*B - 4.0*A*C_atmo;
-                                if (disc_atmo >= 0.0) {
-                                    float atmo_depth = (screen_dist - 1.0) / (ATMO_THICKNESS * u_atmosphere);
-                                    atmo_depth = clamp(atmo_depth, 0.0, 1.0);
-                                    float atmo_falloff = 1.0 - atmo_depth;
-                                    atmo_falloff = pow(atmo_falloff, 2.0);
-                                    float glow = atmo_falloff * 0.8;
-                                    bg = bg * (1.0 - glow) + ATMO_COLOR * glow;
-                                    bg_alpha = max(bg_alpha, glow);
-                                }
-                            }
-
-                            out_color = vec4(mix(u_bg_color, bg, bg_alpha), 1.0);
-                            return;
+                        if (u_show_stars > 0.5) {
+                            vec2 sp = (v_uv - 0.5) * 2.0;
+                            sp.x *= u_aspect;
+                            vec3 dir = u_inv_rotation * normalize(vec3(sp, -2.0));
+                            float slat = asin(clamp(dir.y, -1.0, 1.0));
+                            float slon = atan(-dir.z, dir.x);
+                            float su = (slon + PI) / (2.0 * PI);
+                            float sv = (PI / 2.0 - slat) / PI;
+                            bg = texture(u_stars, vec2(su, sv)).rgb;
+                            bg_alpha = 1.0;
                         }
-                        lat = lat_ortho;
-                        lon = lon_ortho;
-                        normal = normal_ortho;
-                        alpha = 1.0;
-                    } else if (u_blend > 0.999) {
-                        lat = lat_merc;
-                        lon = lon_merc;
-                        normal = normalize(vec3(cos(lat)*cos(lon), sin(lat)/b, -cos(lat)*sin(lon)));
-                        alpha = 1.0;
-                    } else {
-                        if (ortho_hit) {
-                            float dlon = lon_merc - lon_ortho;
-                            if (dlon > PI) dlon -= 2.0 * PI;
-                            if (dlon < -PI) dlon += 2.0 * PI;
-                            lon = lon_ortho + dlon * u_blend;
-                            lat = mix(lat_ortho, lat_merc, u_blend);
-                            vec3 n_merc = normalize(vec3(cos(lat_merc)*cos(lon_merc), sin(lat_merc)/b, -cos(lat_merc)*sin(lon_merc)));
-                            normal = normalize(mix(normal_ortho, n_merc, u_blend));
-                            alpha = 1.0;
-                        } else {
-                            vec3 star_bg = vec3(0.0);
-                            float star_alpha = 0.0;
-                            if (u_show_stars > 0.5) {
-                                vec2 sp = (v_uv - 0.5) * 2.0;
-                                sp.x *= u_aspect;
-                                vec3 dir = u_inv_rotation * normalize(vec3(sp, -2.0));
-                                float slat = asin(clamp(dir.y, -1.0, 1.0));
-                                float slon = atan(-dir.z, dir.x);
-                                float su = (slon + PI) / (2.0 * PI);
-                                float sv = (PI / 2.0 - slat) / PI;
-                                star_bg = texture(u_stars, vec2(su, sv)).rgb * (1.0 - u_blend);
-                                star_alpha = 1.0 - u_blend;
-                            }
 
-                            lat = lat_merc;
-                            lon = lon_merc;
-                            normal = normalize(vec3(cos(lat)*cos(lon), sin(lat)/b, -cos(lat)*sin(lon)));
-                            float atmo_glow = 0.0;
-                            if (u_atmosphere > 0.0 && screen_dist < atmo_outer) {
+                        if (u_atmosphere > 0.0 && screen_dist < atmo_outer) {
+                            float C_atmo = O.x*O.x + O.y*O.y + O.z*O.z - 1.0;
+                            float disc_atmo = B*B - 4.0*A*C_atmo;
+                            if (disc_atmo >= 0.0) {
                                 float atmo_depth = (screen_dist - 1.0) / (ATMO_THICKNESS * u_atmosphere);
                                 atmo_depth = clamp(atmo_depth, 0.0, 1.0);
                                 float atmo_falloff = 1.0 - atmo_depth;
                                 atmo_falloff = pow(atmo_falloff, 2.0);
-                                atmo_glow = atmo_falloff * 0.8 * (1.0 - u_blend);
-                            }
-                            alpha = max(u_blend, max(star_alpha, atmo_glow));
-                            if (star_alpha > u_blend && atmo_glow <= star_alpha) {
-                                vec3 bg = star_bg;
-                                if (atmo_glow > 0.0) {
-                                    bg = bg * (1.0 - atmo_glow / star_alpha) + ATMO_COLOR * atmo_glow;
-                                }
-                                out_color = vec4(mix(u_bg_color, bg, alpha), 1.0);
-                                return;
-                            }
-                            if (atmo_glow > alpha) {
-                                out_color = vec4(mix(u_bg_color, ATMO_COLOR * atmo_glow, atmo_glow), 1.0);
-                                return;
+                                float glow = atmo_falloff * 0.8;
+                                bg = bg * (1.0 - glow) + ATMO_COLOR * glow;
+                                bg_alpha = max(bg_alpha, glow);
                             }
                         }
+
+                        out_color = vec4(mix(u_bg_color, bg, bg_alpha), 1.0);
+                        return;
                     }
+                    lat = lat_ortho;
+                    lon = lon_ortho;
+                    normal = normal_ortho;
+                    alpha = 1.0;
 
                     float tex_u = (lon + PI) / (2.0 * PI);
                     float tex_v = (PI / 2.0 - lat) / PI;
@@ -887,9 +821,8 @@ impl SphereRenderer {
                     if (u_use_detail > 0.5) {
                         float lon_deg = lon * 180.0 / PI;
                         if (lon_deg < u_detail_bounds.x) lon_deg += 360.0;
-                        float detail_merc_y = log(tan(PI / 4.0 + lat / 2.0));
                         float du = (lon_deg - u_detail_bounds.x) / (u_detail_bounds.y - u_detail_bounds.x);
-                        float dv = (u_detail_bounds.w - detail_merc_y) / (u_detail_bounds.w - u_detail_bounds.z);
+                        float dv = (u_detail_bounds.w - lat) / (u_detail_bounds.w - u_detail_bounds.z);
                         if (du >= 0.0 && du <= 1.0 && dv >= 0.0 && dv <= 1.0) {
                             day_color = texture(u_detail, vec2(du, dv)).rgb;
                         } else {
@@ -913,15 +846,14 @@ impl SphereRenderer {
                         vec3 night_lights = texture(u_night, vec2(tex_u, tex_v)).rgb;
                         color = mix(night_lights, lit_day, day_factor);
                     } else {
-                        float shade_3d = 0.3 + 0.7 * max(dot(normal, -D), 0.0);
-                        float shade = mix(shade_3d, 0.85, u_blend);
+                        float shade = 0.3 + 0.7 * max(dot(normal, -D), 0.0);
                         color = day_color * shade;
                     }
 
-                    if (u_atmosphere > 0.0 && u_blend < 0.999) {
+                    if (u_atmosphere > 0.0) {
                         float fresnel = 1.0 - max(dot(normal, -D), 0.0);
                         fresnel = pow(fresnel, 3.0);
-                        float rim = fresnel * 0.6 * u_atmosphere * (1.0 - u_blend);
+                        float rim = fresnel * 0.6 * u_atmosphere;
                         float atmo_sun = u_show_day_night > 0.5 ? max(sun_dot + 0.3, 0.0) : 1.0;
                         color = mix(color, ATMO_COLOR * atmo_sun, rim);
                     }
@@ -1134,9 +1066,6 @@ impl SphereRenderer {
         show_day_night: bool,
         sun_dir: [f32; 3],
         detail_texture: Option<&DetailTexture>,
-        blend: f32,
-        center_lat: f32,
-        center_lon: f32,
         show_stars: bool,
         show_milky_way: bool,
         bg_color: [f32; 3],
@@ -1222,9 +1151,6 @@ impl SphereRenderer {
             let day_night_enabled = show_day_night && self.night_texture.is_some() && key.0 == CelestialBody::Earth;
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_show_day_night").as_ref(), if day_night_enabled { 1.0 } else { 0.0 });
             gl.uniform_3_f32(gl.get_uniform_location(self.program, "u_sun_dir").as_ref(), sun_dir[0], sun_dir[1], sun_dir[2]);
-            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_blend").as_ref(), blend);
-            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_center_lat").as_ref(), center_lat);
-            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_center_lon").as_ref(), center_lon);
             gl.uniform_3_f32(gl.get_uniform_location(self.program, "u_bg_color").as_ref(), bg_color[0], bg_color[1], bg_color[2]);
 
             gl.enable(glow::BLEND);
@@ -4913,66 +4839,27 @@ impl eframe::App for App {
                         samples.push((sx, sy));
                     }
                 }
-                let merc_blend = ((v.zoom - 80.0) / 40.0).clamp(0.0, 1.0);
                 let sample_pts: Vec<(f64, f64)> = samples.iter()
                     .filter_map(|&(sx, sy)| screen_to_lonlat(sx, sy)).collect();
-                if !sample_pts.is_empty() || merc_blend > 0.0 {
-                let (mut min_lon, mut max_lon, mut min_lat, mut max_lat);
-                if merc_blend > 0.999 {
-                    let cw = surface_rotation.transpose() * nalgebra::Vector3::new(0.0, 0.0, 1.0);
-                    let clat = cw.y.asin();
-                    let clon = (-cw.z).atan2(cw.x);
-                    let sf = 1.0 / clat.cos();
-                    let half_y = sf / view_scale;
-                    let half_x = sf * aspect / view_scale;
-                    let merc_yc = (PI / 4.0 + clat / 2.0).tan().ln();
-                    let merc_y_lo = merc_yc - half_y;
-                    let merc_y_hi = merc_yc + half_y;
-                    min_lat = (2.0 * merc_y_lo.exp().atan() - PI / 2.0).to_degrees();
-                    max_lat = (2.0 * merc_y_hi.exp().atan() - PI / 2.0).to_degrees();
-                    let clon_deg = clon.to_degrees();
-                    min_lon = clon_deg - half_x.to_degrees();
-                    max_lon = clon_deg + half_x.to_degrees();
-                } else {
-                    let (sin_sum, cos_sum) = sample_pts.iter().fold((0.0, 0.0), |(s, c), &(lon, _)| {
-                        let r = lon.to_radians();
-                        (s + r.sin(), c + r.cos())
-                    });
-                    let center_lon_avg = sin_sum.atan2(cos_sum).to_degrees();
-                    min_lon = f64::MAX;
-                    max_lon = f64::MIN;
-                    min_lat = f64::MAX;
-                    max_lat = f64::MIN;
-                    for &(lon, lat) in &sample_pts {
-                        let mut dlon = lon - center_lon_avg;
-                        if dlon > 180.0 { dlon -= 360.0; }
-                        if dlon < -180.0 { dlon += 360.0; }
-                        let adjusted_lon = center_lon_avg + dlon;
-                        if adjusted_lon < min_lon { min_lon = adjusted_lon; }
-                        if adjusted_lon > max_lon { max_lon = adjusted_lon; }
-                        if lat < min_lat { min_lat = lat; }
-                        if lat > max_lat { max_lat = lat; }
-                    }
-                    if merc_blend > 0.0 {
-                        let cw = surface_rotation.transpose() * nalgebra::Vector3::new(0.0, 0.0, 1.0);
-                        let clat = cw.y.asin();
-                        let clon = (-cw.z).atan2(cw.x);
-                        let sf = 1.0 / clat.cos();
-                        let half_y = sf / view_scale;
-                        let half_x = sf * aspect / view_scale;
-                        let merc_yc = (PI / 4.0 + clat / 2.0).tan().ln();
-                        let merc_y_lo = merc_yc - half_y;
-                        let merc_y_hi = merc_yc + half_y;
-                        let mlat_min = (2.0 * merc_y_lo.exp().atan() - PI / 2.0).to_degrees();
-                        let mlat_max = (2.0 * merc_y_hi.exp().atan() - PI / 2.0).to_degrees();
-                        let clon_deg = clon.to_degrees();
-                        let mlon_min = clon_deg - half_x.to_degrees();
-                        let mlon_max = clon_deg + half_x.to_degrees();
-                        if mlat_min < min_lat { min_lat = mlat_min; }
-                        if mlat_max > max_lat { max_lat = mlat_max; }
-                        if mlon_min < min_lon { min_lon = mlon_min; }
-                        if mlon_max > max_lon { max_lon = mlon_max; }
-                    }
+                if !sample_pts.is_empty() {
+                let (sin_sum, cos_sum) = sample_pts.iter().fold((0.0, 0.0), |(s, c), &(lon, _)| {
+                    let r = lon.to_radians();
+                    (s + r.sin(), c + r.cos())
+                });
+                let center_lon_avg = sin_sum.atan2(cos_sum).to_degrees();
+                let mut min_lon = f64::MAX;
+                let mut max_lon = f64::MIN;
+                let mut min_lat = f64::MAX;
+                let mut max_lat = f64::MIN;
+                for &(lon, lat) in &sample_pts {
+                    let mut dlon = lon - center_lon_avg;
+                    if dlon > 180.0 { dlon -= 360.0; }
+                    if dlon < -180.0 { dlon += 360.0; }
+                    let adjusted_lon = center_lon_avg + dlon;
+                    if adjusted_lon < min_lon { min_lon = adjusted_lon; }
+                    if adjusted_lon > max_lon { max_lon = adjusted_lon; }
+                    if lat < min_lat { min_lat = lat; }
+                    if lat > max_lat { max_lat = lat; }
                 }
                 let margin = 1.5;
                 let lon_center = (min_lon + max_lon) / 2.0;
@@ -5163,18 +5050,11 @@ impl eframe::App for App {
                         (lon + 360.0, lat)
                     };
 
-                    let lat_to_merc = |lat_deg: f64| -> f64 {
-                        let lat_rad = lat_deg.to_radians();
-                        (PI / 4.0 + lat_rad / 2.0).tan().ln()
-                    };
-                    let merc_top = lat_to_merc(top_left_lat);
-                    let merc_bot = lat_to_merc(bot_right_lat);
-
                     let new_bounds = DetailBounds {
                         min_lon: top_left_lon,
                         max_lon: bot_right_lon,
-                        min_lat: merc_bot,
-                        max_lat: merc_top,
+                        min_lat: bot_right_lat.to_radians(),
+                        max_lat: top_left_lat.to_radians(),
                     };
 
                     if let Some(gl) = frame.gl() {
@@ -6167,11 +6047,6 @@ fn draw_3d_view(
             _ => 0.0,
         };
 
-        let merc_blend = ((zoom - 80.0) / 40.0).clamp(0.0, 1.0) as f32;
-        let center_world = combined_rotation.transpose() * Vector3::new(0.0, 0.0, 1.0);
-        let center_lat_val = center_world.y.asin() as f32;
-        let center_lon_val = (-center_world.z).atan2(center_world.x) as f32;
-
         let bg = ui.visuals().extreme_bg_color;
         let bg_color = [bg.r() as f32 / 255.0, bg.g() as f32 / 255.0, bg.b() as f32 / 255.0];
         let detail_info = detail_gl_info;
@@ -6192,9 +6067,9 @@ fn draw_3d_view(
                         },
                         gl_texture: Some(detail_tex),
                     };
-                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, Some(&dt), merc_blend, center_lat_val, center_lon_val, show_stars, show_milky_way, bg_color);
+                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, Some(&dt), show_stars, show_milky_way, bg_color);
                 } else {
-                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, None, merc_blend, center_lat_val, center_lon_val, show_stars, show_milky_way, bg_color);
+                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, None, show_stars, show_milky_way, bg_color);
                 }
             })),
         };
