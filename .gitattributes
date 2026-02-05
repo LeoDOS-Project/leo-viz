@@ -1,3 +1,2 @@
-textures/earth/Earth_* filter=lfs diff=lfs merge=lfs -text
-textures/mercury/Mercury_* filter=lfs diff=lfs merge=lfs -text
-textures/venus/Venus_* filter=lfs diff=lfs merge=lfs -text
+textures/**/*16k* filter=lfs diff=lfs merge=lfs -text
+textures/**/*21k* filter=lfs diff=lfs merge=lfs -text
