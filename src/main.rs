@@ -2762,6 +2762,7 @@ impl ViewerState {
         ui.separator();
 
         let mut const_to_remove: Option<usize> = None;
+        let mut cameras_to_clean: Vec<usize> = Vec::new();
         let planet = &mut self.tabs[tab_idx].planets[planet_idx];
         let num_constellations = planet.constellations.len();
         let show_tle = planet.show_tle_window;
@@ -3016,6 +3017,9 @@ impl ViewerState {
                         };
                         if ui.add(hide_btn).clicked() {
                             cons.hidden = !cons.hidden;
+                            if cons.hidden {
+                                cameras_to_clean.push(cidx);
+                            }
                         }
                         if num_constellations > 0 {
                             let btn = egui::Button::new(
@@ -3206,8 +3210,20 @@ impl ViewerState {
             if cidx == usize::MAX {
                 self.tabs[tab_idx].planets[planet_idx].add_constellation();
             } else {
+                cameras_to_clean.push(cidx);
                 self.tabs[tab_idx].planets[planet_idx].constellations.remove(cidx);
+                for cam in &mut self.tabs[tab_idx].planets[planet_idx].satellite_cameras {
+                    if cam.constellation_idx != usize::MAX && cam.constellation_idx > cidx {
+                        cam.constellation_idx -= 1;
+                    }
+                }
             }
+        }
+        {
+            let p = &mut self.tabs[tab_idx].planets[planet_idx];
+            p.satellite_cameras.retain(|c|
+                c.constellation_idx == usize::MAX || !cameras_to_clean.contains(&c.constellation_idx)
+            );
         }
         });
 
@@ -5090,12 +5106,11 @@ impl eframe::App for App {
         if v.follow_satellite {
             if let Some(tab) = v.tabs.get(active_tab_idx) {
                 if let Some(planet) = tab.planets.first() {
-                    if planet.satellite_cameras.len() == 1 {
-                        let cam = &planet.satellite_cameras[0];
+                    if let Some(cam) = planet.satellite_cameras.last() {
                         let set_follow_rotation = |radial: Vector3<f64>, velocity_dir: Vector3<f64>| -> Matrix3<f64> {
                             let z_axis = radial;
                             let vel_proj = velocity_dir - radial * velocity_dir.dot(&radial);
-                            let y_axis = -vel_proj.normalize();
+                            let y_axis = vel_proj.normalize();
                             let x_axis = y_axis.cross(&z_axis).normalize();
                             Matrix3::new(
                                 x_axis.x, x_axis.y, x_axis.z,
@@ -5103,7 +5118,7 @@ impl eframe::App for App {
                                 z_axis.x, z_axis.y, z_axis.z,
                             )
                         };
-                        if cam.constellation_idx == usize::MAX && planet.show_tle_window {
+                        if cam.constellation_idx == usize::MAX {
                             let propagation_minutes = v.start_timestamp.timestamp() as f64 / 60.0 + v.time / 60.0;
                             'tle_search: for preset in TlePreset::ALL.iter() {
                                 let Some((selected, state, _)) = planet.tle_selections.get(preset) else { continue };
@@ -5131,22 +5146,17 @@ impl eframe::App for App {
                             let planet_j2 = planet.celestial_body.j2();
                             let planet_eq_radius = planet.celestial_body.equatorial_radius_km();
                             let wc = cons.constellation(planet_radius, planet_mu, planet_j2, planet_eq_radius);
-                            let positions = wc.satellite_positions(v.time);
-                            if let Some(sat) = positions.iter().find(|s| s.plane == cam.plane && s.sat_index == cam.sat_index) {
-                                let radial: Vector3<f64> = Vector3::new(sat.x, sat.y, sat.z).normalize();
-                                let raan_spread = match cons.walker_type {
-                                    WalkerType::Delta => 2.0 * PI,
-                                    WalkerType::Star => PI,
-                                };
-                                let raan = raan_spread * cam.plane as f64 / cons.num_planes as f64;
-                                let inc = cons.inclination.to_radians();
-                                let orbital_normal: Vector3<f64> = Vector3::new(
-                                    raan.sin() * inc.sin(),
-                                    inc.cos(),
-                                    -raan.cos() * inc.sin(),
-                                );
-                                let velocity_dir: Vector3<f64> = radial.cross(&orbital_normal).normalize();
-                                v.rotation = set_follow_rotation(radial, velocity_dir);
+                            let dt = 0.1;
+                            let pos_now = wc.satellite_positions(v.time);
+                            let pos_next = wc.satellite_positions(v.time + dt);
+                            if let Some(sat) = pos_now.iter().find(|s| s.plane == cam.plane && s.sat_index == cam.sat_index) {
+                                if let Some(sat2) = pos_next.iter().find(|s| s.plane == cam.plane && s.sat_index == cam.sat_index) {
+                                    let radial: Vector3<f64> = Vector3::new(sat.x, sat.y, sat.z).normalize();
+                                    let velocity_dir: Vector3<f64> = Vector3::new(
+                                        sat2.x - sat.x, sat2.y - sat.y, sat2.z - sat.z
+                                    ).normalize();
+                                    v.rotation = set_follow_rotation(radial, velocity_dir);
+                                }
                             }
                         }
                     }
