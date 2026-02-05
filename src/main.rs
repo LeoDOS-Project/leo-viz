@@ -64,6 +64,7 @@ enum CelestialBody {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Skin {
     Default,
+    Abstract,
     HellOnEarth,
     Terraformed,
     Civilized,
@@ -117,6 +118,7 @@ impl Skin {
     fn label(&self) -> &'static str {
         match self {
             Skin::Default => "Default",
+            Skin::Abstract => "Abstract",
             Skin::HellOnEarth => "Hell on Earth",
             Skin::Terraformed => "Terraformed",
             Skin::Civilized => "Civilized",
@@ -185,7 +187,7 @@ impl CelestialBody {
 
     fn available_skins(&self) -> &'static [Skin] {
         match self {
-            CelestialBody::Earth => &[Skin::Default, Skin::HellOnEarth],
+            CelestialBody::Earth => &[Skin::Default, Skin::Abstract, Skin::HellOnEarth],
             CelestialBody::Mars => &[Skin::Default, Skin::Terraformed, Skin::Civilized],
             _ => &[Skin::Default],
         }
@@ -1685,6 +1687,94 @@ fn fetch_tle_data(url: &str) -> Result<Vec<TleSatellite>, String> {
     parse_tle_data(&body)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn fetch_or_cache_geojson(filename: &str, url: &str) -> Result<String, String> {
+    let cache_dir = dirs_cache().join("leo-viz").join("geodata");
+    let _ = std::fs::create_dir_all(&cache_dir);
+    let path = cache_dir.join(filename);
+    if path.exists() {
+        return std::fs::read_to_string(&path).map_err(|e| format!("{}", e));
+    }
+    let resp = ureq::get(url).call().map_err(|e| format!("{}", e))?;
+    let data = resp.into_string().map_err(|e| format!("{}", e))?;
+    let _ = std::fs::write(&path, &data);
+    Ok(data)
+}
+
+fn parse_geojson_borders(json: &str) -> Result<Vec<Vec<(f64, f64)>>, String> {
+    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("{}", e))?;
+    let features = v["features"].as_array().ok_or("no features")?;
+    let mut polylines = Vec::new();
+    for feat in features {
+        let geom = &feat["geometry"];
+        match geom["type"].as_str() {
+            Some("LineString") => {
+                if let Some(line) = extract_coord_line(&geom["coordinates"]) {
+                    polylines.push(line);
+                }
+            }
+            Some("MultiLineString") => {
+                if let Some(arrs) = geom["coordinates"].as_array() {
+                    for arr in arrs {
+                        if let Some(line) = extract_coord_line(arr) {
+                            polylines.push(line);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(polylines)
+}
+
+fn extract_coord_line(arr: &serde_json::Value) -> Option<Vec<(f64, f64)>> {
+    let points = arr.as_array()?;
+    let coords: Vec<(f64, f64)> = points.iter().filter_map(|p| {
+        let a = p.as_array()?;
+        Some((a.get(1)?.as_f64()?, a.first()?.as_f64()?))
+    }).collect();
+    if coords.is_empty() { None } else { Some(coords) }
+}
+
+fn parse_geojson_cities(json: &str) -> Result<Vec<CityLabel>, String> {
+    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("{}", e))?;
+    let features = v["features"].as_array().ok_or("no features")?;
+    let mut cities = Vec::new();
+    for feat in features {
+        let props = &feat["properties"];
+        let geom = &feat["geometry"];
+        if let Some(coords) = geom["coordinates"].as_array() {
+            let lon = coords[0].as_f64().unwrap_or(0.0);
+            let lat = coords[1].as_f64().unwrap_or(0.0);
+            let name = props["name"].as_str().unwrap_or("").to_string();
+            let pop = props["pop_max"].as_f64()
+                .or_else(|| props["pop_min"].as_f64())
+                .unwrap_or(0.0);
+            if !name.is_empty() {
+                cities.push(CityLabel { lat, lon, name, population: pop });
+            }
+        }
+    }
+    cities.sort_by(|a, b| b.population.partial_cmp(&a.population).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(cities)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_geo_overlay() -> Result<GeoOverlayData, String> {
+    let borders_json = fetch_or_cache_geojson(
+        "ne_110m_admin_0_boundary_lines_land.geojson",
+        "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_boundary_lines_land.geojson",
+    )?;
+    let cities_json = fetch_or_cache_geojson(
+        "ne_110m_populated_places_simple.geojson",
+        "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_populated_places_simple.geojson",
+    )?;
+    let borders = parse_geojson_borders(&borders_json)?;
+    let cities = parse_geojson_cities(&cities_json)?;
+    Ok(GeoOverlayData { borders, cities })
+}
+
 fn parse_tle_data(data: &str) -> Result<Vec<TleSatellite>, String> {
     let lines: Vec<&str> = data.lines().collect();
     let mut satellites = Vec::new();
@@ -1833,6 +1923,25 @@ struct DeviceLayer {
     name: String,
     color: egui::Color32,
     devices: Vec<(f64, f64)>,
+}
+
+struct CityLabel {
+    lat: f64,
+    lon: f64,
+    name: String,
+    population: f64,
+}
+
+struct GeoOverlayData {
+    borders: Vec<Vec<(f64, f64)>>,
+    cities: Vec<CityLabel>,
+}
+
+enum GeoLoadState {
+    NotLoaded,
+    Loading,
+    Loaded(GeoOverlayData),
+    Failed,
 }
 
 #[derive(Clone)]
@@ -2045,6 +2154,12 @@ struct ViewerState {
     show_terminator: bool,
     show_stars: bool,
     show_milky_way: bool,
+    show_borders: bool,
+    show_cities: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    geo_data: GeoLoadState,
+    #[cfg(not(target_arch = "wasm32"))]
+    geo_fetch_rx: Option<mpsc::Receiver<Result<GeoOverlayData, String>>>,
     dragging_place: Option<(usize, usize, bool, usize)>,
     night_texture: Option<Arc<EarthTexture>>,
     star_texture: Option<Arc<EarthTexture>>,
@@ -2170,6 +2285,12 @@ impl App {
                 show_terminator: false,
                 show_stars: false,
                 show_milky_way: false,
+                show_borders: false,
+                show_cities: false,
+                #[cfg(not(target_arch = "wasm32"))]
+                geo_data: GeoLoadState::NotLoaded,
+                #[cfg(not(target_arch = "wasm32"))]
+                geo_fetch_rx: None,
                 dragging_place: None,
                 night_texture: None,
                 star_texture: None,
@@ -3585,6 +3706,16 @@ impl ViewerState {
                         detail_gl_info,
                         self.show_stars,
                         self.show_milky_way,
+                        #[cfg(not(target_arch = "wasm32"))]
+                        { match &self.geo_data { GeoLoadState::Loaded(d) => d.borders.as_slice(), _ => &[] } },
+                        #[cfg(target_arch = "wasm32")]
+                        &[],
+                        #[cfg(not(target_arch = "wasm32"))]
+                        { match &self.geo_data { GeoLoadState::Loaded(d) => d.cities.as_slice(), _ => &[] } },
+                        #[cfg(target_arch = "wasm32")]
+                        &[],
+                        self.show_borders,
+                        self.show_cities,
                     );
                     self.rotation = rot;
                     self.zoom = new_zoom;
@@ -3754,6 +3885,16 @@ impl ViewerState {
                 detail_gl_info,
                 self.show_stars,
                 self.show_milky_way,
+                #[cfg(not(target_arch = "wasm32"))]
+                { match &self.geo_data { GeoLoadState::Loaded(d) => d.borders.as_slice(), _ => &[] } },
+                #[cfg(target_arch = "wasm32")]
+                &[],
+                #[cfg(not(target_arch = "wasm32"))]
+                { match &self.geo_data { GeoLoadState::Loaded(d) => d.cities.as_slice(), _ => &[] } },
+                #[cfg(target_arch = "wasm32")]
+                &[],
+                self.show_borders,
+                self.show_cities,
             );
             self.rotation = rot;
             self.zoom = new_zoom;
@@ -4160,6 +4301,8 @@ impl ViewerState {
         ui.checkbox(&mut self.show_axes, "Show axes");
         ui.checkbox(&mut self.show_polar_circle, "Show polar circle");
         ui.checkbox(&mut self.show_equator, "Show equator");
+        ui.checkbox(&mut self.show_borders, "Country borders");
+        ui.checkbox(&mut self.show_cities, "City labels");
         ui.checkbox(&mut self.show_day_night, "Day/night cycle");
         ui.add_enabled(self.show_day_night, egui::Checkbox::new(&mut self.show_terminator, "Show terminator"));
 
@@ -4207,6 +4350,41 @@ impl ViewerState {
         let res = self.texture_resolution;
         let key = (body, skin, res);
         if self.planet_textures.contains_key(&key) {
+            return;
+        }
+
+        if skin == Skin::Abstract && body == CelestialBody::Earth {
+            let src_key = (CelestialBody::Earth, Skin::Default, TextureResolution::R8192);
+            if !self.planet_textures.contains_key(&src_key) {
+                if let Some(path) = Skin::Default.filename(CelestialBody::Earth, TextureResolution::R8192) {
+                    if let Ok(bytes) = std::fs::read(asset_path(path)) {
+                        if let Ok(tex) = EarthTexture::from_bytes(&bytes) {
+                            self.planet_textures.insert(src_key, Arc::new(tex));
+                        }
+                    }
+                }
+            }
+            let texture = if let Some(src) = self.planet_textures.get(&src_key) {
+                let ocean = [25u8, 40, 80];
+                let land = [60u8, 75, 85];
+                let ice = [140u8, 150, 160];
+                let pixels: Vec<[u8; 3]> = src.pixels.iter().map(|&[r, g, b]| {
+                    let brightness = (r as u16 + g as u16 + b as u16) / 3;
+                    let is_ocean = b as u16 > (r as u16 + g as u16) / 2 + 20
+                        && brightness < 180;
+                    let is_ice = brightness > 200;
+                    if is_ice { ice } else if is_ocean { ocean } else { land }
+                }).collect();
+                Arc::new(EarthTexture { width: src.width, height: src.height, pixels })
+            } else {
+                Arc::new(EarthTexture {
+                    width: 2, height: 1,
+                    pixels: vec![[25, 40, 80], [25, 40, 80]],
+                })
+            };
+            self.planet_textures.insert(key, texture.clone());
+            self.texture_load_state = TextureLoadState::Loaded(texture);
+            self.planet_image_handles.remove(&key);
             return;
         }
 
@@ -4747,6 +4925,25 @@ impl eframe::App for App {
                             };
                         }
                     }
+                }
+            }
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if (v.show_borders || v.show_cities) && matches!(v.geo_data, GeoLoadState::NotLoaded) {
+                let (tx, rx) = mpsc::channel();
+                v.geo_fetch_rx = Some(rx);
+                v.geo_data = GeoLoadState::Loading;
+                std::thread::spawn(move || { let _ = tx.send(load_geo_overlay()); });
+            }
+            if let Some(ref rx) = v.geo_fetch_rx {
+                if let Ok(result) = rx.try_recv() {
+                    v.geo_data = match result {
+                        Ok(data) => GeoLoadState::Loaded(data),
+                        Err(_) => GeoLoadState::Failed,
+                    };
+                    v.geo_fetch_rx = None;
                 }
             }
         }
@@ -6014,6 +6211,10 @@ fn draw_3d_view(
     detail_gl_info: Option<(glow::Texture, [f32; 4])>,
     show_stars: bool,
     show_milky_way: bool,
+    geo_borders: &[Vec<(f64, f64)>],
+    geo_cities: &[CityLabel],
+    show_borders: bool,
+    show_cities: bool,
 ) -> (Matrix3<f64>, f64) {
     let max_altitude = constellations.iter()
         .map(|(c, _, _, _, _, _)| c.altitude_km)
@@ -6358,6 +6559,76 @@ fn draw_3d_view(
             if !back_seg.is_empty() && !hide_behind_earth {
                 plot_ui.line(Line::new("", PlotPoints::new(back_seg))
                     .color(dim_eq).width(1.0));
+            }
+        }
+
+        if show_borders && body_key.0 == CelestialBody::Earth {
+            let border_color = egui::Color32::from_rgb(180, 180, 180);
+            let dim_border = egui::Color32::from_rgba_unmultiplied(180, 180, 180, 40);
+            for polyline in geo_borders {
+                let mut front_seg: Vec<[f64; 2]> = Vec::new();
+                let mut back_seg: Vec<[f64; 2]> = Vec::new();
+                for &(lat_deg, lon_deg) in polyline {
+                    let lat = lat_deg.to_radians();
+                    let lon = (-lon_deg).to_radians();
+                    let x = planet_radius * lat.cos() * lon.cos();
+                    let y = planet_radius * lat.sin();
+                    let z = planet_radius * lat.cos() * lon.sin();
+                    let (rx, ry, rz) = rotate_point_matrix(x, y, z, &surface_rotation);
+                    let occluded = rz < 0.0 && (rx * rx + ry * ry) < earth_r_sq;
+                    if occluded {
+                        if !front_seg.is_empty() {
+                            plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut front_seg)))
+                                .color(border_color).width(1.0));
+                        }
+                        back_seg.push([rx, ry]);
+                    } else {
+                        if !back_seg.is_empty() {
+                            if !hide_behind_earth {
+                                plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut back_seg)))
+                                    .color(dim_border).width(0.5));
+                            } else {
+                                back_seg.clear();
+                            }
+                        }
+                        front_seg.push([rx, ry]);
+                    }
+                }
+                if !front_seg.is_empty() {
+                    plot_ui.line(Line::new("", PlotPoints::new(front_seg))
+                        .color(border_color).width(1.0));
+                }
+                if !back_seg.is_empty() && !hide_behind_earth {
+                    plot_ui.line(Line::new("", PlotPoints::new(back_seg))
+                        .color(dim_border).width(0.5));
+                }
+            }
+        }
+
+        if show_cities && body_key.0 == CelestialBody::Earth {
+            let min_pop = if zoom >= 8.0 { 0.0 }
+                else if zoom >= 4.0 { 500_000.0 }
+                else if zoom >= 2.0 { 2_000_000.0 }
+                else { 5_000_000.0 };
+            let max_cities = if zoom >= 8.0 { 200 }
+                else if zoom >= 4.0 { 80 }
+                else if zoom >= 2.0 { 30 }
+                else { 15 };
+            let city_color = egui::Color32::from_rgb(220, 220, 200);
+            let mut count = 0usize;
+            for city in geo_cities {
+                if city.population < min_pop { continue; }
+                if count >= max_cities { break; }
+                let lat = city.lat.to_radians();
+                let lon = (-city.lon).to_radians();
+                let x = planet_radius * lat.cos() * lon.cos();
+                let y = planet_radius * lat.sin();
+                let z = planet_radius * lat.cos() * lon.sin();
+                let (rx, ry, rz) = rotate_point_matrix(x, y, z, &surface_rotation);
+                if !hide_behind_earth || rz >= 0.0 {
+                    surface_labels.push(([rx, ry], city.name.clone(), city_color, false, 500_000 + count));
+                    count += 1;
+                }
             }
         }
 
