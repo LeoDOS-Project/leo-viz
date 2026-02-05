@@ -6563,8 +6563,8 @@ fn draw_3d_view(
         }
 
         if show_borders && body_key.0 == CelestialBody::Earth {
-            let border_color = egui::Color32::from_rgb(180, 180, 180);
-            let dim_border = egui::Color32::from_rgba_unmultiplied(180, 180, 180, 40);
+            let border_color = egui::Color32::from_rgb(0, 0, 0);
+            let dim_border = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 40);
             for polyline in geo_borders {
                 let mut front_seg: Vec<[f64; 2]> = Vec::new();
                 let mut back_seg: Vec<[f64; 2]> = Vec::new();
