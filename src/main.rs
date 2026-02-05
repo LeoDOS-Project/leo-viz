@@ -1814,6 +1814,13 @@ struct AreaOfInterest {
 }
 
 #[derive(Clone)]
+struct DeviceLayer {
+    name: String,
+    color: egui::Color32,
+    devices: Vec<(f64, f64)>,
+}
+
+#[derive(Clone)]
 struct PlanetConfig {
     name: String,
     constellations: Vec<ConstellationConfig>,
@@ -1829,6 +1836,7 @@ struct PlanetConfig {
     tle_selections: HashMap<TlePreset, (bool, TleLoadState, Option<Vec<TleShell>>)>,
     ground_stations: Vec<GroundStation>,
     areas_of_interest: Vec<AreaOfInterest>,
+    device_layers: Vec<DeviceLayer>,
 }
 
 impl PlanetConfig {
@@ -1852,6 +1860,11 @@ impl PlanetConfig {
             tle_selections,
             ground_stations: Vec::new(),
             areas_of_interest: Vec::new(),
+            device_layers: vec![DeviceLayer {
+                name: "CandyTron".to_string(),
+                color: egui::Color32::from_rgb(80, 140, 255),
+                devices: vec![(59.40481807006525, 17.949657783197082), (59.41, 17.96)],
+            }],
         }
     }
 
@@ -2012,6 +2025,7 @@ struct ViewerState {
     last_cycle_time: f64,
     use_gpu_rendering: bool,
     show_clouds: bool,
+    show_devices: bool,
     show_day_night: bool,
     show_terminator: bool,
     show_stars: bool,
@@ -2136,6 +2150,7 @@ impl App {
                 last_cycle_time: 0.0,
                 use_gpu_rendering: true,
                 show_clouds: true,
+                show_devices: false,
                 show_day_night: false,
                 show_terminator: false,
                 show_stars: false,
@@ -2289,6 +2304,10 @@ impl TabViewer for ViewerState {
         if *tab < self.tabs.len() {
             self.render_tab_ui(ui, *tab);
         }
+    }
+
+    fn scroll_bars(&self, _tab: &Self::Tab) -> [bool; 2] {
+        [false, false]
     }
 
     fn closeable(&mut self, _tab: &mut Self::Tab) -> bool {
@@ -2548,8 +2567,10 @@ impl ViewerState {
             let planet_name = planet.name.clone();
             let mut ground_stations = planet.ground_stations.clone();
             let mut areas_of_interest = planet.areas_of_interest.clone();
+            let mut device_layers = planet.device_layers.clone();
             let mut gs_changed = false;
             let mut aoi_changed = false;
+            let mut dev_changed = false;
 
             egui::Window::new(format!("Ground - {}", planet_name))
                 .open(&mut self.tabs[tab_idx].planets[planet_idx].show_gs_aoi_window)
@@ -2664,6 +2685,67 @@ impl ViewerState {
                         });
                         aoi_changed = true;
                     }
+
+                    ui.separator();
+                    ui.heading("Devices");
+                    let mut layer_to_remove = None;
+                    for (li, layer) in device_layers.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            if ui.add_sized([80.0, 18.0], egui::TextEdit::singleline(&mut layer.name)).changed() {
+                                dev_changed = true;
+                            }
+                            if ui.color_edit_button_srgba(&mut layer.color).changed() {
+                                dev_changed = true;
+                            }
+                            ui.weak(format!("{} pts", layer.devices.len()));
+                            if ui.small_button("×").clicked() {
+                                layer_to_remove = Some(li);
+                            }
+                        });
+                        let mut dev_to_remove = None;
+                        egui::ScrollArea::vertical()
+                            .id_salt(format!("devlayer_{}", li))
+                            .max_height(120.0)
+                            .show(ui, |ui| {
+                                for (di, dev) in layer.devices.iter_mut().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(16.0);
+                                        ui.label("Lat:");
+                                        if ui.add(egui::DragValue::new(&mut dev.0).range(-90.0..=90.0).speed(0.5).suffix("°")).changed() {
+                                            dev_changed = true;
+                                        }
+                                        ui.label("Lon:");
+                                        if ui.add(egui::DragValue::new(&mut dev.1).range(-180.0..=180.0).speed(0.5).suffix("°")).changed() {
+                                            dev_changed = true;
+                                        }
+                                        if ui.small_button("x").clicked() {
+                                            dev_to_remove = Some(di);
+                                        }
+                                    });
+                                }
+                            });
+                        if let Some(di) = dev_to_remove {
+                            layer.devices.remove(di);
+                            dev_changed = true;
+                        }
+                        if ui.small_button("+ Add device").clicked() {
+                            layer.devices.push((0.0, 0.0));
+                            dev_changed = true;
+                        }
+                        ui.separator();
+                    }
+                    if let Some(li) = layer_to_remove {
+                        device_layers.remove(li);
+                        dev_changed = true;
+                    }
+                    if ui.button("+ Add device layer").clicked() {
+                        device_layers.push(DeviceLayer {
+                            name: format!("Layer {}", device_layers.len() + 1),
+                            color: egui::Color32::from_rgb(80, 140, 255),
+                            devices: Vec::new(),
+                        });
+                        dev_changed = true;
+                    }
                 });
 
             if gs_changed {
@@ -2671,6 +2753,9 @@ impl ViewerState {
             }
             if aoi_changed {
                 self.tabs[tab_idx].planets[planet_idx].areas_of_interest = areas_of_interest;
+            }
+            if dev_changed {
+                self.tabs[tab_idx].planets[planet_idx].device_layers = device_layers;
             }
         }
 
@@ -3146,7 +3231,7 @@ impl ViewerState {
                         let old_type = cons.walker_type;
                         ui.selectable_value(&mut cons.walker_type, WalkerType::Delta, "Delta");
                         ui.selectable_value(&mut cons.walker_type, WalkerType::Star, "Star");
-                        ui.label(format!("({} sats)", cons.total_sats()));
+                        ui.weak("Drag ↕ to reorder");
                         if cons.walker_type != old_type {
                             cons.preset = Preset::None;
                         }
@@ -3473,6 +3558,7 @@ impl ViewerState {
                         self.time,
                         &mut planet.ground_stations,
                         &mut planet.areas_of_interest,
+                        if self.show_devices { &planet.device_layers } else { &[] },
                         body_rot_angle,
                         &mut self.dragging_place,
                         (tab_idx, planet_idx),
@@ -3641,6 +3727,7 @@ impl ViewerState {
                 self.time,
                 &mut planet.ground_stations,
                 &mut planet.areas_of_interest,
+                if self.show_devices { &planet.device_layers } else { &[] },
                 body_rot_angle,
                 &mut self.dragging_place,
                 (tab_idx, planet_idx),
@@ -3848,7 +3935,7 @@ impl ViewerState {
         ui.checkbox(&mut self.follow_satellite, "Follow satellite");
         ui.checkbox(&mut self.show_camera_windows, "Show camera windows");
 
-        ui.add_space(5.0);
+        ui.separator();
         ui.label(egui::RichText::new("Simulation").strong());
         ui.horizontal(|ui| {
             ui.label("Speed:");
@@ -4011,6 +4098,8 @@ impl ViewerState {
         if ui.button("Sync time").clicked() {
             self.time = self.real_time;
         }
+        ui.separator();
+        ui.label(egui::RichText::new("Display").strong());
         ui.checkbox(&mut self.show_orbits, "Show orbits");
         ui.checkbox(&mut self.show_intra_links, "Intra-plane links");
         ui.checkbox(&mut self.show_links, "Inter-plane links");
@@ -4023,7 +4112,17 @@ impl ViewerState {
         }
         ui.checkbox(&mut self.show_asc_desc_colors, "Asc/Desc colors");
         ui.checkbox(&mut self.single_color, "Monochrome planes");
-        ui.checkbox(&mut self.show_altitude_lines, "Altitude lines");
+        ui.checkbox(&mut self.show_torus, "Show torus");
+        ui.checkbox(&mut self.auto_cycle_tabs, "Auto-cycle tabs");
+        if self.auto_cycle_tabs {
+            ui.horizontal(|ui| {
+                ui.label("Interval:");
+                ui.add(egui::DragValue::new(&mut self.cycle_interval).range(1.0..=60.0).speed(0.5).suffix("s"));
+            });
+        }
+
+        ui.separator();
+        ui.label(egui::RichText::new("Overlays").strong());
         ui.checkbox(&mut self.show_coverage, "Show coverage");
         if self.show_coverage {
             ui.horizontal(|ui| {
@@ -4035,17 +4134,16 @@ impl ViewerState {
                     .suffix("°"));
             });
         }
-        ui.checkbox(&mut self.show_torus, "Show torus");
+        ui.checkbox(&mut self.show_altitude_lines, "Altitude lines");
         ui.checkbox(&mut self.show_ground_track, "Show ground");
-        ui.checkbox(&mut self.auto_cycle_tabs, "Auto-cycle tabs");
-        if self.auto_cycle_tabs {
-            ui.horizontal(|ui| {
-                ui.label("Interval:");
-                ui.add(egui::DragValue::new(&mut self.cycle_interval).range(1.0..=60.0).speed(0.5).suffix("s"));
-            });
-        }
+        ui.checkbox(&mut self.show_devices, "Show devices");
+        ui.checkbox(&mut self.show_axes, "Show axes");
+        ui.checkbox(&mut self.show_polar_circle, "Show polar circle");
+        ui.checkbox(&mut self.show_equator, "Show equator");
+        ui.checkbox(&mut self.show_day_night, "Day/night cycle");
+        ui.add_enabled(self.show_day_night, egui::Checkbox::new(&mut self.show_terminator, "Show terminator"));
 
-        ui.add_space(5.0);
+        ui.separator();
         ui.label(egui::RichText::new("Rendering").strong());
         ui.checkbox(&mut self.dark_mode, "Dark mode");
         ui.horizontal(|ui| {
@@ -4074,11 +4172,6 @@ impl ViewerState {
         ui.checkbox(&mut self.show_clouds, "Show clouds");
         ui.checkbox(&mut self.show_stars, "Show stars");
         ui.add_enabled(self.show_stars, egui::Checkbox::new(&mut self.show_milky_way, "Show Milky Way"));
-        ui.checkbox(&mut self.show_day_night, "Day/night cycle");
-        ui.add_enabled(self.show_day_night, egui::Checkbox::new(&mut self.show_terminator, "Show terminator"));
-        ui.checkbox(&mut self.show_axes, "Show axes");
-        ui.checkbox(&mut self.show_polar_circle, "Show polar circle");
-        ui.checkbox(&mut self.show_equator, "Show equator");
         ui.horizontal(|ui| {
             ui.label("Sat:");
             ui.add(egui::DragValue::new(&mut self.sat_radius).range(1.0..=15.0).speed(0.1));
@@ -4087,14 +4180,6 @@ impl ViewerState {
         });
         ui.checkbox(&mut self.fixed_sizes, "Fixed sizes (ignore alt)");
 
-        ui.add_space(10.0);
-        ui.separator();
-        ui.label("Delta: RAAN spread 360°");
-        ui.label("Star: RAAN spread 180°");
-        ui.add_space(5.0);
-        ui.label("Drag 3D views to rotate");
-        ui.add_space(5.0);
-        ui.label("Earth textures: Solar System Scope (CC-BY)");
     }
 
     #[allow(unused_variables)]
@@ -4555,7 +4640,13 @@ impl eframe::App for App {
         let v = &mut self.viewer;
 
         ctx.set_visuals(if v.dark_mode {
-            egui::Visuals::dark()
+            let mut vis = egui::Visuals::dark();
+            let black = egui::Color32::BLACK;
+            vis.window_fill = black;
+            vis.panel_fill = black;
+            vis.extreme_bg_color = black;
+            vis.faint_bg_color = egui::Color32::from_gray(15);
+            vis
         } else {
             egui::Visuals::light()
         });
@@ -5280,27 +5371,16 @@ impl eframe::App for App {
             }
         }
 
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.add_space(4.0);
-                ui.heading("LEO Viz");
-                if ui.button("[Info]").clicked() {
-                    self.viewer.show_info = !self.viewer.show_info;
-                }
-                if ui.button("[Demo]").clicked() {
-                    self.setup_demo();
-                }
-                if self.viewer.show_side_panel {
-                    if ui.small_button("−").clicked() {
-                        self.viewer.show_side_panel = false;
-                    }
-                } else {
+        if !self.viewer.show_side_panel {
+            egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(4.0);
                     if ui.small_button("+").clicked() {
                         self.viewer.show_side_panel = true;
                     }
-                }
+                });
             });
-        });
+        }
 
         if self.viewer.show_info {
             egui::Window::new("Info")
@@ -5451,11 +5531,22 @@ impl eframe::App for App {
             egui::SidePanel::left("settings_panel")
                 .resizable(true)
                 .default_width(200.0)
+                .show_separator_line(false)
+                .frame(egui::Frame::side_top_panel(ctx.style().as_ref()).inner_margin(4.0).stroke(egui::Stroke::NONE))
                 .show(ctx, |ui| {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         ui.add_space(4.0);
                         ui.strong("Settings");
+                        if ui.button("[Info]").clicked() {
+                            self.viewer.show_info = !self.viewer.show_info;
+                        }
+                        if ui.button("[Demo]").clicked() {
+                            self.setup_demo();
+                        }
+                        if ui.small_button("−").clicked() {
+                            self.viewer.show_side_panel = false;
+                        }
                     });
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -5464,8 +5555,11 @@ impl eframe::App for App {
                 });
         }
 
+        let mut dock_style = egui_dock::Style::from_egui(ctx.style().as_ref());
+        dock_style.main_surface_border_stroke = egui::Stroke::NONE;
         DockArea::new(&mut self.dock_state)
             .show_add_buttons(true)
+            .style(dock_style)
             .show(ctx, &mut self.viewer);
 
         if let Some(new_idx) = self.viewer.pending_add_tab.take() {
@@ -5860,6 +5954,7 @@ fn draw_3d_view(
     time: f64,
     ground_stations: &mut [GroundStation],
     areas_of_interest: &mut [AreaOfInterest],
+    device_layers: &[DeviceLayer],
     body_rot_angle: f64,
     dragging_place: &mut Option<(usize, usize, bool, usize)>,
     drag_tab_planet: (usize, usize),
@@ -5949,6 +6044,7 @@ fn draw_3d_view(
         .cursor_color(egui::Color32::TRANSPARENT);
 
     let mut surface_labels: Vec<([f64; 2], String, egui::Color32, bool, usize)> = Vec::new();
+    let mut device_cluster_labels: Vec<([f64; 2], usize, egui::Color32)> = Vec::new();
 
     let response = plot.show(ui, |plot_ui| {
         let ground_stations = &*ground_stations;
@@ -6349,6 +6445,78 @@ fn draw_3d_view(
 
             if !hide_behind_earth || rz >= 0.0 {
                 surface_labels.push(([rx, ry], gs.name.clone(), gs.color, true, gs_idx));
+            }
+        }
+
+        let show_device_dots = zoom >= 2000.0;
+
+        for (layer_idx, layer) in device_layers.iter().enumerate() {
+            if layer.devices.is_empty() { continue; }
+
+            let mut projected: Vec<([f64; 2], bool)> = Vec::new();
+            for &(lat_deg, lon_deg) in &layer.devices {
+                let lat = lat_deg.to_radians();
+                let lon = (-lon_deg).to_radians();
+                let x = planet_radius * lat.cos() * lon.cos();
+                let y = planet_radius * lat.sin();
+                let z = planet_radius * lat.cos() * lon.sin();
+                let (rx, ry, rz) = rotate_point_matrix(x, y, z, &surface_rotation);
+                let visible = !hide_behind_earth || rz >= 0.0;
+                projected.push(([rx, ry], visible));
+            }
+
+            if show_device_dots {
+                for (dev_idx, (pos, vis)) in projected.iter().enumerate() {
+                    if !vis { continue; }
+                    plot_ui.points(
+                        Points::new("", PlotPoints::new(vec![*pos]))
+                            .color(layer.color)
+                            .radius(scaled_sat_radius * 0.8),
+                    );
+                    let label = format!("{} #{}", layer.name, dev_idx + 1);
+                    surface_labels.push((
+                        *pos,
+                        label,
+                        layer.color,
+                        false,
+                        1000000 + layer_idx * 10000 + dev_idx,
+                    ));
+                }
+            } else {
+                let cell_size = planet_radius * 0.15 / zoom.max(0.1);
+                let min_circle_r = 2.0;
+                let mut grid: std::collections::HashMap<(i64, i64), Vec<usize>> = std::collections::HashMap::new();
+                for (i, (pos, vis)) in projected.iter().enumerate() {
+                    if !vis { continue; }
+                    let gx = (pos[0] / cell_size).floor() as i64;
+                    let gy = (pos[1] / cell_size).floor() as i64;
+                    grid.entry((gx, gy)).or_default().push(i);
+                }
+
+                for (_key, indices) in &grid {
+                    let count = indices.len();
+                    let cx: f64 = indices.iter().map(|&i| projected[i].0[0]).sum::<f64>() / count as f64;
+                    let cy: f64 = indices.iter().map(|&i| projected[i].0[1]).sum::<f64>() / count as f64;
+
+                    let circle_r = (cell_size * 0.35).max(min_circle_r);
+                    let fill = egui::Color32::from_rgba_unmultiplied(
+                        layer.color.r(), layer.color.g(), layer.color.b(), 60,
+                    );
+                    let n = 24;
+                    let pts: Vec<[f64; 2]> = (0..=n)
+                        .map(|i| {
+                            let a = 2.0 * PI * i as f64 / n as f64;
+                            [cx + circle_r * a.cos(), cy + circle_r * a.sin()]
+                        })
+                        .collect();
+                    plot_ui.polygon(
+                        Polygon::new("", PlotPoints::new(pts))
+                            .fill_color(fill)
+                            .stroke(egui::Stroke::new(1.5, layer.color)),
+                    );
+
+                    device_cluster_labels.push(([cx, cy], count, layer.color));
+                }
             }
         }
 
@@ -6814,6 +6982,23 @@ fn draw_3d_view(
         ui.painter().rect_filled(bg_rect, 3.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180));
         ui.painter().galley(text_pos, galley, *color);
         label_rects.push((bg_rect, *is_gs, *idx));
+    }
+
+    for (pos, count, color) in &device_cluster_labels {
+        let plot_pt = egui_plot::PlotPoint::new(pos[0], pos[1]);
+        let screen_pos = response.transform.position_from_point(&plot_pt);
+        let text = format!("{}", count);
+        let galley = ui.painter().layout_no_wrap(
+            text,
+            egui::FontId::proportional(11.0),
+            egui::Color32::WHITE,
+        );
+        let text_pos = screen_pos + egui::Vec2::new(-(galley.size().x / 2.0), -(galley.size().y / 2.0));
+        let bg_rect = egui::Rect::from_min_size(text_pos, galley.size()).expand(2.0);
+        ui.painter().rect_filled(bg_rect, 3.0, egui::Color32::from_rgba_unmultiplied(
+            color.r() / 3, color.g() / 3, color.b() / 3, 200,
+        ));
+        ui.painter().galley(text_pos, galley, egui::Color32::WHITE);
     }
 
     if constellations.len() > 1 {
