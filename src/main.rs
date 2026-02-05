@@ -1518,77 +1518,166 @@ enum Preset {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum TlePreset {
-    Iss,
-    Starlink,
-    OneWeb,
-    Iridium,
-    IridiumNext,
-    Globalstar,
-    Orbcomm,
-    Gps,
-    Galileo,
-    Glonass,
-    Beidou,
-    Molniya,
-    Kuiper,
-    Planet,
+    Starlink, OneWeb, Kuiper, Geo, Intelsat, Ses, Iridium, IridiumNext,
+    Globalstar, Orbcomm, Molniya, Swarm, Amateur, XComm, OtherComm, Satnogs,
+    Gps, Galileo, Glonass, Beidou, Gnss, Sbas, Nnss, Musson,
+    Weather, Noaa, Goes, EarthResources, Sarsat, DisasterMon, Tdrss, Argos, Planet, Spire,
+    Stations, Last30Days, Brightest100, ActiveSats, Analyst, Science,
+    Geodetic, Engineering, Education, Military, RadarCal, Cubesats, Misc,
+    Fengyun1cDebris, Cosmos2251Debris, Iridium33Debris, Cosmos1408Debris,
 }
 
 impl TlePreset {
     fn label(&self) -> &'static str {
         match self {
-            TlePreset::Iss => "ISS",
-            TlePreset::Starlink => "Starlink",
-            TlePreset::OneWeb => "OneWeb",
-            TlePreset::Iridium => "Iridium",
-            TlePreset::IridiumNext => "Iridium NEXT",
-            TlePreset::Globalstar => "Globalstar",
-            TlePreset::Orbcomm => "Orbcomm",
-            TlePreset::Gps => "GPS",
-            TlePreset::Galileo => "Galileo",
-            TlePreset::Glonass => "GLONASS",
-            TlePreset::Beidou => "Beidou",
-            TlePreset::Molniya => "Molniya",
-            TlePreset::Kuiper => "Kuiper",
-            TlePreset::Planet => "Planet",
-                    }
+            Self::Starlink => "Starlink",
+            Self::OneWeb => "OneWeb",
+            Self::Kuiper => "Kuiper",
+            Self::Geo => "GEO",
+            Self::Intelsat => "Intelsat",
+            Self::Ses => "SES",
+            Self::Iridium => "Iridium",
+            Self::IridiumNext => "Iridium NEXT",
+            Self::Globalstar => "Globalstar",
+            Self::Orbcomm => "Orbcomm",
+            Self::Molniya => "Molniya",
+            Self::Swarm => "Swarm",
+            Self::Amateur => "Amateur",
+            Self::XComm => "X-Comm",
+            Self::OtherComm => "Other Comm",
+            Self::Satnogs => "SatNOGS",
+            Self::Gps => "GPS",
+            Self::Galileo => "Galileo",
+            Self::Glonass => "GLONASS",
+            Self::Beidou => "Beidou",
+            Self::Gnss => "GNSS",
+            Self::Sbas => "SBAS",
+            Self::Nnss => "NNSS",
+            Self::Musson => "Musson",
+            Self::Weather => "Weather",
+            Self::Noaa => "NOAA",
+            Self::Goes => "GOES",
+            Self::EarthResources => "Earth Res.",
+            Self::Sarsat => "SARSAT",
+            Self::DisasterMon => "DMC",
+            Self::Tdrss => "TDRSS",
+            Self::Argos => "ARGOS",
+            Self::Planet => "Planet",
+            Self::Spire => "Spire",
+            Self::Stations => "Stations",
+            Self::Last30Days => "Last 30 Days",
+            Self::Brightest100 => "100 Brightest",
+            Self::ActiveSats => "Active",
+            Self::Analyst => "Analyst",
+            Self::Science => "Science",
+            Self::Geodetic => "Geodetic",
+            Self::Engineering => "Engineering",
+            Self::Education => "Education",
+            Self::Military => "Military",
+            Self::RadarCal => "Radar Cal.",
+            Self::Cubesats => "CubeSats",
+            Self::Misc => "Misc",
+            Self::Fengyun1cDebris => "Fengyun 1C",
+            Self::Cosmos2251Debris => "Cosmos 2251",
+            Self::Iridium33Debris => "Iridium 33",
+            Self::Cosmos1408Debris => "Cosmos 1408",
+        }
     }
 
     fn url(&self) -> &'static str {
         match self {
-            TlePreset::Iss => "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=tle",
-            TlePreset::Starlink => "https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle",
-            TlePreset::OneWeb => "https://celestrak.org/NORAD/elements/gp.php?GROUP=oneweb&FORMAT=tle",
-            TlePreset::Iridium => "https://celestrak.org/NORAD/elements/gp.php?GROUP=iridium&FORMAT=tle",
-            TlePreset::IridiumNext => "https://celestrak.org/NORAD/elements/gp.php?GROUP=iridium-NEXT&FORMAT=tle",
-            TlePreset::Globalstar => "https://celestrak.org/NORAD/elements/gp.php?GROUP=globalstar&FORMAT=tle",
-            TlePreset::Orbcomm => "https://celestrak.org/NORAD/elements/gp.php?GROUP=orbcomm&FORMAT=tle",
-            TlePreset::Gps => "https://celestrak.org/NORAD/elements/gp.php?GROUP=gps-ops&FORMAT=tle",
-            TlePreset::Galileo => "https://celestrak.org/NORAD/elements/gp.php?GROUP=galileo&FORMAT=tle",
-            TlePreset::Glonass => "https://celestrak.org/NORAD/elements/gp.php?GROUP=glo-ops&FORMAT=tle",
-            TlePreset::Beidou => "https://celestrak.org/NORAD/elements/gp.php?GROUP=beidou&FORMAT=tle",
-            TlePreset::Molniya => "https://celestrak.org/NORAD/elements/gp.php?GROUP=molniya&FORMAT=tle",
-            TlePreset::Kuiper => "https://celestrak.org/NORAD/elements/gp.php?GROUP=kuiper&FORMAT=tle",
-            TlePreset::Planet => "https://celestrak.org/NORAD/elements/gp.php?GROUP=planet&FORMAT=tle",
+            Self::Starlink => "https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle",
+            Self::OneWeb => "https://celestrak.org/NORAD/elements/gp.php?GROUP=oneweb&FORMAT=tle",
+            Self::Kuiper => "https://celestrak.org/NORAD/elements/gp.php?GROUP=kuiper&FORMAT=tle",
+            Self::Geo => "https://celestrak.org/NORAD/elements/gp.php?GROUP=geo&FORMAT=tle",
+            Self::Intelsat => "https://celestrak.org/NORAD/elements/gp.php?GROUP=intelsat&FORMAT=tle",
+            Self::Ses => "https://celestrak.org/NORAD/elements/gp.php?GROUP=ses&FORMAT=tle",
+            Self::Iridium => "https://celestrak.org/NORAD/elements/gp.php?GROUP=iridium&FORMAT=tle",
+            Self::IridiumNext => "https://celestrak.org/NORAD/elements/gp.php?GROUP=iridium-NEXT&FORMAT=tle",
+            Self::Globalstar => "https://celestrak.org/NORAD/elements/gp.php?GROUP=globalstar&FORMAT=tle",
+            Self::Orbcomm => "https://celestrak.org/NORAD/elements/gp.php?GROUP=orbcomm&FORMAT=tle",
+            Self::Molniya => "https://celestrak.org/NORAD/elements/gp.php?GROUP=molniya&FORMAT=tle",
+            Self::Swarm => "https://celestrak.org/NORAD/elements/gp.php?GROUP=swarm&FORMAT=tle",
+            Self::Amateur => "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle",
+            Self::XComm => "https://celestrak.org/NORAD/elements/gp.php?GROUP=x-comm&FORMAT=tle",
+            Self::OtherComm => "https://celestrak.org/NORAD/elements/gp.php?GROUP=other-comm&FORMAT=tle",
+            Self::Satnogs => "https://celestrak.org/NORAD/elements/gp.php?GROUP=satnogs&FORMAT=tle",
+            Self::Gps => "https://celestrak.org/NORAD/elements/gp.php?GROUP=gps-ops&FORMAT=tle",
+            Self::Galileo => "https://celestrak.org/NORAD/elements/gp.php?GROUP=galileo&FORMAT=tle",
+            Self::Glonass => "https://celestrak.org/NORAD/elements/gp.php?GROUP=glo-ops&FORMAT=tle",
+            Self::Beidou => "https://celestrak.org/NORAD/elements/gp.php?GROUP=beidou&FORMAT=tle",
+            Self::Gnss => "https://celestrak.org/NORAD/elements/gp.php?GROUP=gnss&FORMAT=tle",
+            Self::Sbas => "https://celestrak.org/NORAD/elements/gp.php?GROUP=sbas&FORMAT=tle",
+            Self::Nnss => "https://celestrak.org/NORAD/elements/gp.php?GROUP=nnss&FORMAT=tle",
+            Self::Musson => "https://celestrak.org/NORAD/elements/gp.php?GROUP=musson&FORMAT=tle",
+            Self::Weather => "https://celestrak.org/NORAD/elements/gp.php?GROUP=weather&FORMAT=tle",
+            Self::Noaa => "https://celestrak.org/NORAD/elements/gp.php?GROUP=noaa&FORMAT=tle",
+            Self::Goes => "https://celestrak.org/NORAD/elements/gp.php?GROUP=goes&FORMAT=tle",
+            Self::EarthResources => "https://celestrak.org/NORAD/elements/gp.php?GROUP=resource&FORMAT=tle",
+            Self::Sarsat => "https://celestrak.org/NORAD/elements/gp.php?GROUP=sarsat&FORMAT=tle",
+            Self::DisasterMon => "https://celestrak.org/NORAD/elements/gp.php?GROUP=dmc&FORMAT=tle",
+            Self::Tdrss => "https://celestrak.org/NORAD/elements/gp.php?GROUP=tdrss&FORMAT=tle",
+            Self::Argos => "https://celestrak.org/NORAD/elements/gp.php?GROUP=argos&FORMAT=tle",
+            Self::Planet => "https://celestrak.org/NORAD/elements/gp.php?GROUP=planet&FORMAT=tle",
+            Self::Spire => "https://celestrak.org/NORAD/elements/gp.php?GROUP=spire&FORMAT=tle",
+            Self::Stations => "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle",
+            Self::Last30Days => "https://celestrak.org/NORAD/elements/gp.php?GROUP=last-30-days&FORMAT=tle",
+            Self::Brightest100 => "https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=tle",
+            Self::ActiveSats => "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle",
+            Self::Analyst => "https://celestrak.org/NORAD/elements/gp.php?GROUP=analyst&FORMAT=tle",
+            Self::Science => "https://celestrak.org/NORAD/elements/gp.php?GROUP=science&FORMAT=tle",
+            Self::Geodetic => "https://celestrak.org/NORAD/elements/gp.php?GROUP=geodetic&FORMAT=tle",
+            Self::Engineering => "https://celestrak.org/NORAD/elements/gp.php?GROUP=engineering&FORMAT=tle",
+            Self::Education => "https://celestrak.org/NORAD/elements/gp.php?GROUP=education&FORMAT=tle",
+            Self::Military => "https://celestrak.org/NORAD/elements/gp.php?GROUP=military&FORMAT=tle",
+            Self::RadarCal => "https://celestrak.org/NORAD/elements/gp.php?GROUP=radar&FORMAT=tle",
+            Self::Cubesats => "https://celestrak.org/NORAD/elements/gp.php?GROUP=cubesat&FORMAT=tle",
+            Self::Misc => "https://celestrak.org/NORAD/elements/gp.php?GROUP=other&FORMAT=tle",
+            Self::Fengyun1cDebris => "https://celestrak.org/NORAD/elements/gp.php?GROUP=fengyun-1c-debris&FORMAT=tle",
+            Self::Cosmos2251Debris => "https://celestrak.org/NORAD/elements/gp.php?GROUP=cosmos-2251-debris&FORMAT=tle",
+            Self::Iridium33Debris => "https://celestrak.org/NORAD/elements/gp.php?GROUP=iridium-33-debris&FORMAT=tle",
+            Self::Cosmos1408Debris => "https://celestrak.org/NORAD/elements/gp.php?GROUP=cosmos-1408-debris&FORMAT=tle",
         }
     }
 
-    const ALL: [TlePreset; 14] = [
-        TlePreset::Iss,
-        TlePreset::Starlink,
-        TlePreset::OneWeb,
-        TlePreset::Kuiper,
-        TlePreset::Iridium,
-        TlePreset::IridiumNext,
-        TlePreset::Globalstar,
-        TlePreset::Orbcomm,
-        TlePreset::Gps,
-        TlePreset::Galileo,
-        TlePreset::Glonass,
-        TlePreset::Beidou,
-        TlePreset::Molniya,
-        TlePreset::Planet,
+    fn category(&self) -> &'static str {
+        match self {
+            Self::Starlink | Self::OneWeb | Self::Kuiper | Self::Geo |
+            Self::Intelsat | Self::Ses | Self::Iridium | Self::IridiumNext |
+            Self::Globalstar | Self::Orbcomm | Self::Molniya | Self::Swarm |
+            Self::Amateur | Self::XComm | Self::OtherComm | Self::Satnogs => "Comms",
+            Self::Gps | Self::Galileo | Self::Glonass | Self::Beidou |
+            Self::Gnss | Self::Sbas | Self::Nnss | Self::Musson => "Navigation",
+            Self::Weather | Self::Noaa | Self::Goes | Self::EarthResources |
+            Self::Sarsat | Self::DisasterMon | Self::Tdrss | Self::Argos |
+            Self::Planet | Self::Spire => "Observation",
+            Self::Fengyun1cDebris | Self::Cosmos2251Debris |
+            Self::Iridium33Debris | Self::Cosmos1408Debris => "Debris",
+            _ => "Other",
+        }
+    }
+
+    const ALL: [TlePreset; 51] = [
+        Self::Starlink, Self::OneWeb, Self::Kuiper, Self::Geo,
+        Self::Intelsat, Self::Ses, Self::Iridium, Self::IridiumNext,
+        Self::Globalstar, Self::Orbcomm, Self::Molniya, Self::Swarm,
+        Self::Amateur, Self::XComm, Self::OtherComm, Self::Satnogs,
+        Self::Gps, Self::Galileo, Self::Glonass, Self::Beidou,
+        Self::Gnss, Self::Sbas, Self::Nnss, Self::Musson,
+        Self::Weather, Self::Noaa, Self::Goes, Self::EarthResources,
+        Self::Sarsat, Self::DisasterMon, Self::Tdrss, Self::Argos,
+        Self::Planet, Self::Spire,
+        Self::Stations, Self::Last30Days, Self::Brightest100,
+        Self::ActiveSats, Self::Analyst, Self::Science,
+        Self::Geodetic, Self::Engineering, Self::Education,
+        Self::Military, Self::RadarCal, Self::Cubesats, Self::Misc,
+        Self::Fengyun1cDebris, Self::Cosmos2251Debris,
+        Self::Iridium33Debris, Self::Cosmos1408Debris,
     ];
+
+    fn is_debris(&self) -> bool {
+        matches!(self, Self::Fengyun1cDebris | Self::Cosmos2251Debris | Self::Iridium33Debris | Self::Cosmos1408Debris)
+    }
 
     fn color_index(&self) -> usize {
         Self::ALL.iter().position(|p| std::mem::discriminant(p) == std::mem::discriminant(self)).unwrap_or(0)
@@ -2149,7 +2238,7 @@ impl App {
                 cycle_interval: 5.0,
                 last_cycle_time: 0.0,
                 use_gpu_rendering: true,
-                show_clouds: true,
+                show_clouds: false,
                 show_devices: false,
                 show_day_night: false,
                 show_terminator: false,
@@ -2823,7 +2912,7 @@ impl ViewerState {
                             if let Some((selected, state, _)) = tle_selections.get(preset) {
                                 if *selected {
                                     if let TleLoadState::Loaded { satellites, .. } = state {
-                                        return Some((preset.label(), satellites.len()));
+                                        return Some((preset.label(), satellites.len(), preset.is_debris()));
                                     }
                                 }
                             }
@@ -2834,11 +2923,14 @@ impl ViewerState {
                     if !live_data.is_empty() {
                         ui.heading("Live Data (TLE)");
                         let mut total = 0;
-                        for (name, count) in &live_data {
-                            ui.label(format!("  {}: {} satellites", name, count));
-                            total += count;
+                        let mut total_debris = 0;
+                        for (name, count, is_debris) in &live_data {
+                            let kind = if *is_debris { "debris" } else { "satellites" };
+                            ui.label(format!("  {}: {} {}", name, count, kind));
+                            if *is_debris { total_debris += count; } else { total += count; }
                         }
-                        ui.label(format!("  Total: {} satellites", total));
+                        if total > 0 { ui.label(format!("  Satellites: {}", total)); }
+                        if total_debris > 0 { ui.label(format!("  Debris: {}", total_debris)); }
                     }
                 });
         }
@@ -2856,10 +2948,7 @@ impl ViewerState {
         let tle_fetch_tx = self.tle_fetch_tx.clone();
 
         let controls_height = 180.0;
-        egui::ScrollArea::vertical()
-            .id_salt(format!("controls_{}_{}",tab_idx, planet_idx))
-            .max_height(controls_height)
-            .show(ui, |ui| {
+        {
         let planet = &mut self.tabs[tab_idx].planets[planet_idx];
         ui.horizontal(|ui| {
             if show_tle {
@@ -2872,14 +2961,15 @@ impl ViewerState {
                     .map(|(_, _, shells)| shells.is_some()).unwrap_or(false);
 
                 ui.vertical(|ui| {
+                    ui.set_min_height(controls_height);
                     let mut fetch_requested = false;
                     let mut split_preset: Option<TlePreset> = None;
                     let unsplit_preset: Option<TlePreset> = None;
                     ui.horizontal(|ui| {
                         ui.label("TLE");
                         if ui.small_button("All").clicked() {
-                            for (selected, _, _) in planet.tle_selections.values_mut() {
-                                *selected = true;
+                            for (preset, (selected, _, _)) in planet.tle_selections.iter_mut() {
+                                *selected = !matches!(preset, TlePreset::Last30Days | TlePreset::Brightest100 | TlePreset::ActiveSats);
                             }
                         }
                         if ui.small_button("None").clicked() {
@@ -2900,76 +2990,78 @@ impl ViewerState {
                         }
                     });
 
+                    egui::ScrollArea::vertical()
+                        .id_salt(format!("tle_scroll_{}_{}",tab_idx, planet_idx))
+                        .max_height(controls_height)
+                        .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        for col in 0..2 {
+                        for category in ["Comms", "Navigation", "Observation", "Other", "Debris"] {
                             ui.vertical(|ui| {
-                                for row in 0..7 {
-                                    let preset_idx = col * 7 + row;
-                                    if preset_idx < TlePreset::ALL.len() {
-                                        let preset = &TlePreset::ALL[preset_idx];
-                                        if let Some((selected, state, _)) = planet.tle_selections.get_mut(preset) {
-                                            let is_clustered_other = split_active && !selected_loaded.contains(preset);
-                                            let is_clustered_selected = split_active && selected_loaded.contains(preset);
-                                            ui.horizontal(|ui| {
-                                                if !split_active {
-                                                    let color = plane_color(preset.color_index());
-                                                    let rect = ui.allocate_space(egui::vec2(10.0, 10.0)).1;
-                                                    ui.painter().rect_filled(rect, 2.0, color);
-                                                    ui.painter().rect_filled(rect.shrink(2.5), 1.0, egui::Color32::BLACK);
-                                                }
+                                ui.strong(category);
+                                for preset in TlePreset::ALL.iter().filter(|p| p.category() == category) {
+                                    if let Some((selected, state, _)) = planet.tle_selections.get_mut(preset) {
+                                        let is_clustered_other = split_active && !selected_loaded.contains(preset);
+                                        let is_clustered_selected = split_active && selected_loaded.contains(preset);
+                                        ui.horizontal(|ui| {
+                                            if !split_active {
+                                                let color = plane_color(preset.color_index());
+                                                let rect = ui.allocate_space(egui::vec2(10.0, 10.0)).1;
+                                                ui.painter().rect_filled(rect, 2.0, color);
+                                                ui.painter().rect_filled(rect.shrink(2.5), 1.0, egui::Color32::BLACK);
+                                            }
 
-                                                let is_loading = matches!(state, TleLoadState::Loading);
-                                                if is_clustered_other {
-                                                    ui.add_enabled(false, egui::Button::new(preset.label()).selected(*selected));
-                                                } else if is_clustered_selected {
-                                                    let _ = ui.selectable_label(true, preset.label());
-                                                } else if ui.selectable_label(*selected, preset.label()).clicked() {
-                                                    *selected = !*selected;
-                                                }
-                                                if is_loading {
-                                                    ui.spinner();
-                                                }
+                                            let is_loading = matches!(state, TleLoadState::Loading);
+                                            if is_clustered_other {
+                                                ui.add_enabled(false, egui::Button::new(preset.label()).selected(*selected));
+                                            } else if is_clustered_selected {
+                                                let _ = ui.selectable_label(true, preset.label());
+                                            } else if ui.selectable_label(*selected, preset.label()).clicked() {
+                                                *selected = !*selected;
+                                            }
+                                            if is_loading {
+                                                ui.spinner();
+                                            }
 
-                                                #[cfg(not(target_arch = "wasm32"))]
-                                                if fetch_requested && *selected {
-                                                    if matches!(state, TleLoadState::NotLoaded | TleLoadState::Failed(_)) {
-                                                        *state = TleLoadState::Loading;
-                                                        let url = preset.url().to_string();
-                                                        let preset_copy = *preset;
-                                                        let tx = tle_fetch_tx.clone();
-                                                        std::thread::spawn(move || {
-                                                            let result = fetch_tle_data(&url);
-                                                            let _ = tx.send((preset_copy, result));
+                                            #[cfg(not(target_arch = "wasm32"))]
+                                            if fetch_requested && *selected {
+                                                if matches!(state, TleLoadState::NotLoaded | TleLoadState::Failed(_)) {
+                                                    *state = TleLoadState::Loading;
+                                                    let url = preset.url().to_string();
+                                                    let preset_copy = *preset;
+                                                    let tx = tle_fetch_tx.clone();
+                                                    std::thread::spawn(move || {
+                                                        let result = fetch_tle_data(&url);
+                                                        let _ = tx.send((preset_copy, result));
+                                                    });
+                                                }
+                                            }
+
+                                            #[cfg(target_arch = "wasm32")]
+                                            if fetch_requested && *selected {
+                                                if matches!(state, TleLoadState::NotLoaded | TleLoadState::Failed(_)) {
+                                                    *state = TleLoadState::Loading;
+                                                    let url = preset.url().to_string();
+                                                    let preset_copy = *preset;
+                                                    let ctx = ui.ctx().clone();
+                                                    wasm_bindgen_futures::spawn_local(async move {
+                                                        let result = match fetch_tle_text(&url).await {
+                                                            Ok(text) => parse_tle_data_async(&text).await,
+                                                            Err(e) => Err(e),
+                                                        };
+                                                        TLE_FETCH_RESULT.with(|cell| {
+                                                            cell.borrow_mut().push((preset_copy, result));
                                                         });
-                                                    }
+                                                        ctx.request_repaint();
+                                                    });
                                                 }
-
-                                                #[cfg(target_arch = "wasm32")]
-                                                if fetch_requested && *selected {
-                                                    if matches!(state, TleLoadState::NotLoaded | TleLoadState::Failed(_)) {
-                                                        *state = TleLoadState::Loading;
-                                                        let url = preset.url().to_string();
-                                                        let preset_copy = *preset;
-                                                        let ctx = ui.ctx().clone();
-                                                        wasm_bindgen_futures::spawn_local(async move {
-                                                            let result = match fetch_tle_text(&url).await {
-                                                                Ok(text) => parse_tle_data_async(&text).await,
-                                                                Err(e) => Err(e),
-                                                            };
-                                                            TLE_FETCH_RESULT.with(|cell| {
-                                                                cell.borrow_mut().push((preset_copy, result));
-                                                            });
-                                                            ctx.request_repaint();
-                                                        });
-                                                    }
-                                                }
-                                            });
-                                        }
+                                            }
+                                        });
                                     }
                                 }
                             });
                         }
 
+                    });
                     });
 
                     if let Some(preset) = split_preset {
@@ -3310,7 +3402,7 @@ impl ViewerState {
                 c.constellation_idx == usize::MAX || !cameras_to_clean.contains(&c.constellation_idx)
             );
         }
-        });
+        }
 
         ui.separator();
         }
@@ -3335,7 +3427,7 @@ impl ViewerState {
                     let wc = c.constellation(planet_radius, planet_mu, planet_j2, planet_eq_radius);
                     let pos = wc.satellite_positions(self.time);
                     let name = c.preset_name().to_string();
-                    (wc, pos, c.color_offset, false, orig_idx, name)
+                    (wc, pos, c.color_offset, 0u8, orig_idx, name)
                 })
                 .collect()
         };
@@ -3411,7 +3503,8 @@ impl ViewerState {
                             planet_equatorial_radius: planet_eq_radius,
                         };
                         let label = format!("{} {}", preset.label(), shell.label);
-                        constellations_data.push((tle_wc, positions, shell.color_offset, true, usize::MAX, label));
+                        let tle_kind = if preset.is_debris() { 2u8 } else { 1u8 };
+                        constellations_data.push((tle_wc, positions, shell.color_offset, tle_kind, usize::MAX, label));
                     }
                 } else {
                     let tle_wc = WalkerConstellation {
@@ -3430,7 +3523,8 @@ impl ViewerState {
                         planet_j2,
                         planet_equatorial_radius: planet_eq_radius,
                     };
-                    constellations_data.push((tle_wc, all_positions, preset.color_index(), true, usize::MAX, preset.label().to_string()));
+                    let tle_kind = if preset.is_debris() { 2u8 } else { 1u8 };
+                    constellations_data.push((tle_wc, all_positions, preset.color_index(), tle_kind, usize::MAX, preset.label().to_string()));
                 }
             }
         }
@@ -5385,9 +5479,9 @@ impl eframe::App for App {
         if self.viewer.show_info {
             egui::Window::new("Info")
                 .open(&mut self.viewer.show_info)
-                .default_width(700.0)
+                .default_width(1000.0)
                 .show(ctx, |ui| {
-                    ui.columns(2, |cols| {
+                    ui.columns(3, |cols| {
                         cols[0].heading("Celestial Bodies");
                         let mut bodies: Vec<_> = CelestialBody::ALL.iter().collect();
                         bodies.sort_by(|a, b| b.radius_km().partial_cmp(&a.radius_km()).unwrap());
@@ -5518,11 +5612,90 @@ impl eframe::App for App {
                             ui.end_row();
                         });
 
-                        cols[1].add_space(10.0);
-                        cols[1].heading("Live TLE Sources");
-                        cols[1].label("From CelesTrak: Starlink, OneWeb, Kuiper,");
-                        cols[1].label("Iridium, Iridium NEXT, Globalstar, Orbcomm,");
-                        cols[1].label("GPS, Galileo, GLONASS, Beidou, Molniya, Planet");
+                        cols[2].heading("Live TLE Data (CelesTrak)");
+                        egui::ScrollArea::vertical().max_height(500.0).show(&mut cols[2], |ui| {
+                            for (cat, entries) in [
+                                ("Comms", vec![
+                                    ("Starlink", "SpaceX LEO broadband", "Operational"),
+                                    ("OneWeb", "LEO broadband", "Operational"),
+                                    ("Kuiper", "Amazon LEO broadband", "Deploying"),
+                                    ("GEO", "Geostationary satellites", "Operational"),
+                                    ("Intelsat", "GEO comms operator", "Operational"),
+                                    ("SES", "GEO/MEO comms operator", "Operational"),
+                                    ("Iridium", "Original voice/data", "Decommissioned"),
+                                    ("Iridium NEXT", "2nd-gen Iridium", "Operational"),
+                                    ("Globalstar", "LEO voice/data", "Operational"),
+                                    ("Orbcomm", "LEO IoT/M2M messaging", "Operational"),
+                                    ("Molniya", "Russian HEO comms", "Decommissioned"),
+                                    ("Swarm", "SpaceX IoT CubeSats", "Operational"),
+                                    ("Amateur", "Amateur radio satellites", "Operational"),
+                                    ("X-Comm", "Experimental comms", "Operational"),
+                                    ("Other Comm", "Miscellaneous comms", "Operational"),
+                                    ("SatNOGS", "Open-source ground stn network", "Operational"),
+                                ]),
+                                ("Navigation", vec![
+                                    ("GPS", "US navigation (MEO)", "Operational"),
+                                    ("Galileo", "EU navigation (MEO)", "Operational"),
+                                    ("GLONASS", "Russian navigation (MEO)", "Operational"),
+                                    ("Beidou", "Chinese navigation (MEO/GEO)", "Operational"),
+                                    ("GNSS", "All GNSS combined", "Operational"),
+                                    ("SBAS", "Augmentation systems (GEO)", "Operational"),
+                                    ("NNSS", "Navy navigation (legacy)", "Decommissioned"),
+                                    ("Musson", "Russian geodetic/nav", "Operational"),
+                                ]),
+                                ("Observation", vec![
+                                    ("Weather", "Weather satellites", "Operational"),
+                                    ("NOAA", "US weather (polar)", "Operational"),
+                                    ("GOES", "US weather (GEO)", "Operational"),
+                                    ("Earth Res.", "Earth resource imaging", "Operational"),
+                                    ("SARSAT", "Search & rescue beacons", "Operational"),
+                                    ("DMC", "Disaster monitoring", "Operational"),
+                                    ("TDRSS", "NASA tracking & data relay", "Operational"),
+                                    ("ARGOS", "Environmental data collection", "Operational"),
+                                    ("Planet", "Earth-imaging CubeSats", "Operational"),
+                                    ("Spire", "Weather/AIS CubeSats", "Operational"),
+                                ]),
+                                ("Other", vec![
+                                    ("Stations", "ISS & space stations", "Operational"),
+                                    ("Last 30 Days", "Recently launched", "Operational"),
+                                    ("100 Brightest", "Visually brightest", "Operational"),
+                                    ("Active", "All active satellites", "Operational"),
+                                    ("Analyst", "Analyst-tracked objects", "Operational"),
+                                    ("Science", "Scientific satellites", "Operational"),
+                                    ("Geodetic", "Geodetic satellites", "Operational"),
+                                    ("Engineering", "Engineering satellites", "Operational"),
+                                    ("Education", "Educational satellites", "Operational"),
+                                    ("Military", "Military satellites", "Operational"),
+                                    ("Radar Cal.", "Radar calibration", "Operational"),
+                                    ("CubeSats", "CubeSat catalog", "Operational"),
+                                    ("Misc", "Uncategorized objects", "Operational"),
+                                ]),
+                                ("Debris", vec![
+                                    ("Fengyun 1C", "2007 ASAT test (~1800)", ""),
+                                    ("Cosmos 2251", "2009 collision (~580)", ""),
+                                    ("Iridium 33", "2009 collision (~110)", ""),
+                                    ("Cosmos 1408", "2021 ASAT test", ""),
+                                ]),
+                            ] {
+                                ui.strong(cat);
+                                egui::Grid::new(format!("tle_{}_grid", cat)).striped(true).show(ui, |ui| {
+                                    for (name, desc, status) in &entries {
+                                        ui.label(*name);
+                                        ui.label(*desc);
+                                        if !status.is_empty() {
+                                            let color = match *status {
+                                                "Operational" => egui::Color32::from_rgb(80, 200, 80),
+                                                "Deploying" => egui::Color32::from_rgb(200, 200, 80),
+                                                _ => egui::Color32::from_rgb(200, 80, 80),
+                                            };
+                                            ui.colored_label(color, *status);
+                                        }
+                                        ui.end_row();
+                                    }
+                                });
+                                ui.add_space(4.0);
+                            }
+                        });
                     });
                 });
         }
@@ -5909,7 +6082,7 @@ fn draw_routing_path(
 fn draw_3d_view(
     ui: &mut egui::Ui,
     id: &str,
-    constellations: &[(WalkerConstellation, Vec<SatelliteState>, usize, bool, usize, String)],
+    constellations: &[(WalkerConstellation, Vec<SatelliteState>, usize, u8, usize, String)],
     show_orbits: bool,
     show_axes: bool,
     show_coverage: bool,
@@ -6058,8 +6231,8 @@ fn draw_3d_view(
         let earth_r_sq = visual_earth_r * visual_earth_r;
 
         if show_orbits && !hide_behind_earth {
-            for (constellation, _, color_offset, is_tle, _, _) in constellations {
-                if *is_tle { continue; }
+            for (constellation, _, color_offset, tle_kind, _, _) in constellations {
+                if *tle_kind != 0 { continue; }
                 for plane in 0..constellation.num_planes {
                     let orbit_pts = constellation.orbit_points_3d(plane, time);
                     let color = plane_color(if single_color { *color_offset } else { plane + color_offset });
@@ -6090,7 +6263,7 @@ fn draw_3d_view(
         }
 
         if !hide_behind_earth {
-            for (constellation, positions, color_offset, _is_tle, _, _) in constellations {
+            for (constellation, positions, color_offset, _tle_kind, _, _) in constellations {
                 for plane in 0..constellation.num_planes {
                     let color = plane_color(if single_color { *color_offset } else { plane + color_offset });
                     let pts: PlotPoints = positions
@@ -6198,7 +6371,7 @@ fn draw_3d_view(
         }
 
         if show_coverage {
-            for (constellation, positions, color_offset, _is_tle, _, _) in constellations {
+            for (constellation, positions, color_offset, _tle_kind, _, _) in constellations {
                 let orbit_radius = planet_radius + constellation.altitude_km;
                 let cone_half_angle = coverage_angle.to_radians();
                 let max_earth_angle = (planet_radius / orbit_radius).acos();
@@ -6550,8 +6723,8 @@ fn draw_3d_view(
         }
 
         if show_orbits {
-            for (constellation, _, color_offset, is_tle, _, _) in constellations {
-                if *is_tle { continue; }
+            for (constellation, _, color_offset, tle_kind, _, _) in constellations {
+                if *tle_kind != 0 { continue; }
                 for plane in 0..constellation.num_planes {
                     let orbit_pts = constellation.orbit_points_3d(plane, time);
                     let color = if show_routing_paths || show_asc_desc_colors {
@@ -6747,8 +6920,8 @@ fn draw_3d_view(
 
                         let mut best: Option<(usize, &WalkerConstellation, &Vec<SatelliteState>, &SatelliteState, f64)> = None;
 
-                        for (cidx, (cons, positions, _, is_tle, _, _)) in constellations.iter().enumerate() {
-                            if *is_tle { continue; }
+                        for (cidx, (cons, positions, _, tle_kind, _, _)) in constellations.iter().enumerate() {
+                            if *tle_kind != 0 { continue; }
                             for sat in positions.iter() {
                                 if let Some(asc) = ascending_filter {
                                     if sat.ascending != asc { continue; }
@@ -6822,8 +6995,9 @@ fn draw_3d_view(
             }
         }
 
-        for (constellation, positions, color_offset, is_tle, orig_idx, _) in constellations {
-            if *is_tle {
+        for (constellation, positions, color_offset, tle_kind, orig_idx, _) in constellations {
+            if *tle_kind != 0 {
+                let is_debris = *tle_kind == 2;
                 for sat in positions {
                     let color = plane_color(color_offset + sat.plane);
                     let dim_col = egui::Color32::from_rgba_unmultiplied(
@@ -6839,33 +7013,47 @@ fn draw_3d_view(
                         egui::Color32::from_rgb(240, 240, 240)
                     };
 
-                    if !hide_behind_earth && !in_front {
-                        plot_ui.points(
-                            Points::new("", PlotPoints::new(vec![[rx, ry]]))
-                                .color(dim_col)
-                                .radius(scaled_sat_radius * 0.8)
-                                .filled(true),
+                    if is_debris {
+                        let d = scaled_sat_radius as f64 * 1.5 * margin / (width as f64 * 0.5);
+                        let c = if in_front { color } else if !hide_behind_earth { dim_col } else { continue };
+                        let w = if in_front { 1.0 } else { 0.5 };
+                        plot_ui.line(
+                            egui_plot::Line::new("", PlotPoints::new(vec![[rx - d, ry - d], [rx + d, ry + d]]))
+                                .color(c).width(w),
                         );
-                        plot_ui.points(
-                            Points::new("", PlotPoints::new(vec![[rx, ry]]))
-                                .color(bg_color)
-                                .radius(scaled_sat_radius * 0.4)
-                                .filled(true),
+                        plot_ui.line(
+                            egui_plot::Line::new("", PlotPoints::new(vec![[rx - d, ry + d], [rx + d, ry - d]]))
+                                .color(c).width(w),
                         );
-                    }
-                    if in_front {
-                        plot_ui.points(
-                            Points::new("", PlotPoints::new(vec![[rx, ry]]))
-                                .color(color)
-                                .radius(scaled_sat_radius)
-                                .filled(true),
-                        );
-                        plot_ui.points(
-                            Points::new("", PlotPoints::new(vec![[rx, ry]]))
-                                .color(bg_color)
-                                .radius(scaled_sat_radius * 0.5)
-                                .filled(true),
-                        );
+                    } else {
+                        if !hide_behind_earth && !in_front {
+                            plot_ui.points(
+                                Points::new("", PlotPoints::new(vec![[rx, ry]]))
+                                    .color(dim_col)
+                                    .radius(scaled_sat_radius * 0.8)
+                                    .filled(true),
+                            );
+                            plot_ui.points(
+                                Points::new("", PlotPoints::new(vec![[rx, ry]]))
+                                    .color(bg_color)
+                                    .radius(scaled_sat_radius * 0.4)
+                                    .filled(true),
+                            );
+                        }
+                        if in_front {
+                            plot_ui.points(
+                                Points::new("", PlotPoints::new(vec![[rx, ry]]))
+                                    .color(color)
+                                    .radius(scaled_sat_radius)
+                                    .filled(true),
+                            );
+                            plot_ui.points(
+                                Points::new("", PlotPoints::new(vec![[rx, ry]]))
+                                    .color(bg_color)
+                                    .radius(scaled_sat_radius * 0.5)
+                                    .filled(true),
+                            );
+                        }
                     }
                 }
                 continue;
@@ -6910,7 +7098,7 @@ fn draw_3d_view(
                                 .radius(scaled_sat_radius * 0.8)
                                 .filled(true),
                         );
-                        if *is_tle {
+                        if *tle_kind != 0 {
                             plot_ui.points(
                                 Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                     .color(bg_color)
@@ -6926,7 +7114,7 @@ fn draw_3d_view(
                                 .radius(scaled_sat_radius)
                                 .filled(true),
                         );
-                        if *is_tle {
+                        if *tle_kind != 0 {
                             plot_ui.points(
                                 Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                     .color(bg_color)
@@ -7008,7 +7196,7 @@ fn draw_3d_view(
         let font = egui::FontId::proportional(12.0);
         let square_size = 10.0;
         let mut seen = std::collections::HashSet::new();
-        for (_, _, color_offset, is_tle, _, name) in constellations {
+        for (_, _, color_offset, tle_kind, _, name) in constellations {
             if !seen.insert((name.as_str(), *color_offset)) { continue; }
             let color = plane_color(*color_offset);
             let square_rect = egui::Rect::from_min_size(
@@ -7028,17 +7216,28 @@ fn draw_3d_view(
             );
             ui.painter().rect_filled(bg_rect, 3.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 160));
             ui.painter().rect_filled(square_rect, 2.0, color);
-            if *is_tle {
+            if *tle_kind == 1 {
                 let inset = 2.5;
                 let inner = square_rect.shrink(inset);
                 ui.painter().rect_filled(inner, 1.0, egui::Color32::BLACK);
+            } else if *tle_kind == 2 {
+                let c = square_rect.center();
+                let h = square_size * 0.35;
+                ui.painter().line_segment(
+                    [c - egui::vec2(h, h), c + egui::vec2(h, h)],
+                    egui::Stroke::new(1.5, egui::Color32::BLACK),
+                );
+                ui.painter().line_segment(
+                    [c + egui::vec2(-h, h), c + egui::vec2(h, -h)],
+                    egui::Stroke::new(1.5, egui::Color32::BLACK),
+                );
             }
             ui.painter().galley(text_pos, galley, egui::Color32::WHITE);
             y += 16.0;
         }
     }
 
-    for (constellation, positions, color_offset, _is_tle, orig_idx, _) in constellations {
+    for (constellation, positions, color_offset, _tle_kind, orig_idx, _) in constellations {
         for sat in positions {
             for cam in satellite_cameras.iter_mut() {
                 if cam.constellation_idx == *orig_idx && cam.plane == sat.plane && cam.sat_index == sat.sat_index {
@@ -7402,7 +7601,7 @@ fn draw_3d_view(
 fn draw_ground_track(
     ui: &mut egui::Ui,
     id: &str,
-    constellations: &[(WalkerConstellation, Vec<SatelliteState>, usize, bool, usize, String)],
+    constellations: &[(WalkerConstellation, Vec<SatelliteState>, usize, u8, usize, String)],
     width: f32,
     height: f32,
     sat_radius: f32,
@@ -7418,7 +7617,7 @@ fn draw_ground_track(
         .show_axes([true, true]);
 
     plot.show(ui, |plot_ui| {
-        for (constellation, positions, color_offset, _is_tle, _, _) in constellations {
+        for (constellation, positions, color_offset, _tle_kind, _, _) in constellations {
             for plane in 0..constellation.num_planes {
                 let color = plane_color(if single_color { *color_offset } else { plane + color_offset });
                 let pts: PlotPoints = positions
@@ -7451,7 +7650,7 @@ fn draw_ground_track(
 fn draw_torus(
     ui: &mut egui::Ui,
     id: &str,
-    constellations: &[(WalkerConstellation, Vec<SatelliteState>, usize, bool, usize, String)],
+    constellations: &[(WalkerConstellation, Vec<SatelliteState>, usize, u8, usize, String)],
     time: f64,
     rotation: Matrix3<f64>,
     width: f32,
@@ -7532,7 +7731,7 @@ fn draw_torus(
             rotate_point_matrix(x, y, z, &display_rotation)
         };
 
-        for (_cidx, (constellation, positions, color_offset, _is_tle, orig_idx, _)) in constellations.iter().enumerate() {
+        for (_cidx, (constellation, positions, color_offset, _tle_kind, orig_idx, _)) in constellations.iter().enumerate() {
             let sats_per_plane = constellation.total_sats / constellation.num_planes;
             let orbit_radius = constellation.planet_radius + constellation.altitude_km;
             let period = 2.0 * PI * (orbit_radius.powi(3) / constellation.planet_mu).sqrt();
