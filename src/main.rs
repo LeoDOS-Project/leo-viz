@@ -8223,6 +8223,99 @@ fn draw_torus(
             rotate_point_matrix(x, y, z, &display_rotation)
         };
 
+        if let Some((constellation, _, _, _, _, _)) = constellations.first() {
+            let orbit_radius = constellation.planet_radius + constellation.altitude_km;
+            let earth_scale = planet_radius / orbit_radius;
+            let earth_major = major_radius * earth_scale;
+            let earth_minor = minor_radius * earth_scale;
+            let earth_color = egui::Color32::from_rgb(60, 100, 140);
+            let earth_dim = egui::Color32::from_rgba_unmultiplied(40, 70, 100, 150);
+
+            let earth_point = |theta: f64, phi: f64| -> (f64, f64, f64) {
+                let r = earth_major + earth_minor * phi.cos();
+                let y = earth_minor * phi.sin();
+                let x = r * theta.cos();
+                let z = r * theta.sin();
+                rotate_point_matrix(x, y, z, &display_rotation)
+            };
+
+            let earth_facing = |theta: f64, phi: f64| -> bool {
+                let nx = phi.cos() * theta.cos();
+                let ny = phi.sin();
+                let nz = phi.cos() * theta.sin();
+                let (_, _, nz_rot) = rotate_point_matrix(nx, ny, nz, &rotation);
+                nz_rot >= 0.0
+            };
+
+            for ring in 0..12 {
+                let phi = 2.0 * PI * ring as f64 / 12.0;
+                let mut front_segment: Vec<[f64; 2]> = Vec::new();
+                let mut back_segment: Vec<[f64; 2]> = Vec::new();
+                for i in 0..=50 {
+                    let theta = 2.0 * PI * i as f64 / 50.0;
+                    let (rx, ry, _) = earth_point(theta, phi);
+                    let facing = earth_facing(theta, phi);
+                    if facing {
+                        front_segment.push([rx, ry]);
+                        if !back_segment.is_empty() {
+                            plot_ui.line(
+                                Line::new("", PlotPoints::new(std::mem::take(&mut back_segment)))
+                                    .color(earth_dim).width(1.0),
+                            );
+                        }
+                    } else {
+                        back_segment.push([rx, ry]);
+                        if !front_segment.is_empty() {
+                            plot_ui.line(
+                                Line::new("", PlotPoints::new(std::mem::take(&mut front_segment)))
+                                    .color(earth_color).width(1.5),
+                            );
+                        }
+                    }
+                }
+                if !front_segment.is_empty() {
+                    plot_ui.line(Line::new("", PlotPoints::new(front_segment)).color(earth_color).width(1.5));
+                }
+                if !back_segment.is_empty() {
+                    plot_ui.line(Line::new("", PlotPoints::new(back_segment)).color(earth_dim).width(1.0));
+                }
+            }
+
+            for ring in 0..16 {
+                let theta = 2.0 * PI * ring as f64 / 16.0;
+                let mut front_segment: Vec<[f64; 2]> = Vec::new();
+                let mut back_segment: Vec<[f64; 2]> = Vec::new();
+                for i in 0..=50 {
+                    let phi = 2.0 * PI * i as f64 / 50.0;
+                    let (rx, ry, _) = earth_point(theta, phi);
+                    let facing = earth_facing(theta, phi);
+                    if facing {
+                        front_segment.push([rx, ry]);
+                        if !back_segment.is_empty() {
+                            plot_ui.line(
+                                Line::new("", PlotPoints::new(std::mem::take(&mut back_segment)))
+                                    .color(earth_dim).width(1.0),
+                            );
+                        }
+                    } else {
+                        back_segment.push([rx, ry]);
+                        if !front_segment.is_empty() {
+                            plot_ui.line(
+                                Line::new("", PlotPoints::new(std::mem::take(&mut front_segment)))
+                                    .color(earth_color).width(1.5),
+                            );
+                        }
+                    }
+                }
+                if !front_segment.is_empty() {
+                    plot_ui.line(Line::new("", PlotPoints::new(front_segment)).color(earth_color).width(1.5));
+                }
+                if !back_segment.is_empty() {
+                    plot_ui.line(Line::new("", PlotPoints::new(back_segment)).color(earth_dim).width(1.0));
+                }
+            }
+        }
+
         for (_cidx, (constellation, positions, color_offset, _tle_kind, orig_idx, _)) in constellations.iter().enumerate() {
             let sats_per_plane = constellation.total_sats / constellation.num_planes;
             let orbit_radius = constellation.planet_radius + constellation.altitude_km;
