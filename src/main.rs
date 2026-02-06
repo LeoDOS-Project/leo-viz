@@ -11,6 +11,18 @@ use sgp4::Constants;
 use chrono::{DateTime, Utc, Local, Duration};
 use glow::HasContext as _;
 
+const SECONDS_PER_DAY: f64 = 86400.0;
+const DAYS_PER_JULIAN_CENTURY: f64 = 36525.0;
+
+const GMST_BASE_DEG: f64 = 280.46061837;
+const GMST_ROTATION_PER_DAY: f64 = 360.98564736629;
+const GMST_CORRECTION: f64 = 0.000387933;
+
+const SOLAR_DECLINATION_MAX: f64 = -23.45;
+const DAYS_PER_YEAR: f64 = 365.0;
+
+const EARTH_VISUAL_SCALE: f64 = 0.95;
+
 fn asset_path(relative: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
 }
@@ -406,7 +418,7 @@ impl EarthTexture {
                         b_sum += b as u32;
                     }
                 }
-                let count = (factor * factor) as u32;
+                let count = factor * factor;
                 pixels.push([
                     (r_sum / count) as u8,
                     (g_sum / count) as u8,
@@ -1815,9 +1827,9 @@ enum TleLoadState {
 }
 
 fn mean_motion_to_altitude_km(n_revs_per_day: f64) -> f64 {
-    let mu = 398600.4418_f64;
-    let r_earth = 6371.0_f64;
-    let n_rad_s = n_revs_per_day * 2.0 * std::f64::consts::PI / 86400.0;
+    let mu = CelestialBody::Earth.mu();
+    let r_earth = CelestialBody::Earth.radius_km();
+    let n_rad_s = n_revs_per_day * 2.0 * std::f64::consts::PI / SECONDS_PER_DAY;
     let a = (mu / (n_rad_s * n_rad_s)).powf(1.0 / 3.0);
     a - r_earth
 }
@@ -1830,11 +1842,11 @@ fn greenwich_mean_sidereal_time(timestamp: DateTime<Utc>) -> f64 {
     let j2000 = DateTime::parse_from_rfc3339("2000-01-01T12:00:00Z")
         .unwrap()
         .with_timezone(&Utc);
-    let days_since_j2000 = (timestamp - j2000).num_milliseconds() as f64 / (1000.0 * 86400.0);
-    let centuries = days_since_j2000 / 36525.0;
-    let gmst_degrees = 280.46061837
-        + 360.98564736629 * days_since_j2000
-        + 0.000387933 * centuries * centuries
+    let days_since_j2000 = (timestamp - j2000).num_milliseconds() as f64 / (1000.0 * SECONDS_PER_DAY);
+    let centuries = days_since_j2000 / DAYS_PER_JULIAN_CENTURY;
+    let gmst_degrees = GMST_BASE_DEG
+        + GMST_ROTATION_PER_DAY * days_since_j2000
+        + GMST_CORRECTION * centuries * centuries
         - centuries * centuries * centuries / 38710000.0;
     let gmst_normalized = gmst_degrees.rem_euclid(360.0);
     gmst_normalized.to_radians()
@@ -1968,25 +1980,19 @@ fn parse_tle_data(data: &str) -> Result<Vec<TleSatellite>, String> {
 
         let tle = format!("{}\n{}\n{}", name_line, line1, line2);
 
-        match sgp4::parse_3les(&tle) {
-            Ok(elements_vec) => {
-                for elements in elements_vec {
-                    match Constants::from_elements(&elements) {
-                        Ok(constants) => {
-                            let epoch_minutes = datetime_to_minutes(&elements.datetime);
-                            satellites.push(TleSatellite {
-                                name: elements.object_name.unwrap_or_default(),
-                                inclination_deg: elements.inclination,
-                                mean_motion: elements.mean_motion,
-                                constants,
-                                epoch_minutes,
-                            });
-                        }
-                        Err(_) => continue,
-                    }
+        if let Ok(elements_vec) = sgp4::parse_3les(&tle) {
+            for elements in elements_vec {
+                if let Ok(constants) = Constants::from_elements(&elements) {
+                    let epoch_minutes = datetime_to_minutes(&elements.datetime);
+                    satellites.push(TleSatellite {
+                        name: elements.object_name.unwrap_or_default(),
+                        inclination_deg: elements.inclination,
+                        mean_motion: elements.mean_motion,
+                        constants,
+                        epoch_minutes,
+                    });
                 }
             }
-            Err(_) => {}
         }
 
         i += 3;
@@ -3067,7 +3073,7 @@ impl ViewerState {
             let celestial_body = planet.celestial_body;
             let planet_radius = celestial_body.radius_km();
             let mu = celestial_body.mu();
-            let constellations: Vec<_> = planet.constellations.iter().cloned().collect();
+            let constellations: Vec<_> = planet.constellations.to_vec();
             let tle_selections = planet.tle_selections.clone();
 
             egui::Window::new(format!("Stats - {}", planet_name))
@@ -3082,7 +3088,7 @@ impl ViewerState {
                     ui.label(format!("  Surface gravity: {:.2} m/s²", surface_gravity * 1000.0));
                     let escape_velocity = (2.0 * mu * 1e9 / (planet_radius * 1000.0)).sqrt() / 1000.0;
                     ui.label(format!("  Escape velocity: {:.2} km/s", escape_velocity));
-                    let geo_orbit = (mu * (86400.0 / (2.0 * PI)).powi(2)).powf(1.0/3.0);
+                    let geo_orbit = (mu * (SECONDS_PER_DAY / (2.0 * PI)).powi(2)).powf(1.0/3.0);
                     let geo_altitude = geo_orbit - planet_radius;
                     if geo_altitude > 0.0 {
                         ui.label(format!("  Geostationary alt: {:.0} km", geo_altitude));
@@ -3192,10 +3198,8 @@ impl ViewerState {
                         if ui.small_button("Fetch").clicked() {
                             fetch_requested = true;
                         }
-                        if can_split && !split_active {
-                            if ui.small_button("Cluster").clicked() {
-                                split_preset = Some(selected_loaded[0]);
-                            }
+                        if can_split && !split_active && ui.small_button("Cluster").clicked() {
+                            split_preset = Some(selected_loaded[0]);
                         }
                         if ui.small_button("x").clicked() {
                             planet.show_tle_window = false;
@@ -3235,37 +3239,33 @@ impl ViewerState {
                                             }
 
                                             #[cfg(not(target_arch = "wasm32"))]
-                                            if fetch_requested && *selected {
-                                                if matches!(state, TleLoadState::NotLoaded | TleLoadState::Failed(_)) {
-                                                    *state = TleLoadState::Loading;
-                                                    let url = preset.url().to_string();
-                                                    let preset_copy = *preset;
-                                                    let tx = tle_fetch_tx.clone();
-                                                    std::thread::spawn(move || {
-                                                        let result = fetch_tle_data(&url);
-                                                        let _ = tx.send((preset_copy, result));
-                                                    });
-                                                }
+                                            if fetch_requested && *selected && matches!(state, TleLoadState::NotLoaded | TleLoadState::Failed(_)) {
+                                                *state = TleLoadState::Loading;
+                                                let url = preset.url().to_string();
+                                                let preset_copy = *preset;
+                                                let tx = tle_fetch_tx.clone();
+                                                std::thread::spawn(move || {
+                                                    let result = fetch_tle_data(&url);
+                                                    let _ = tx.send((preset_copy, result));
+                                                });
                                             }
 
                                             #[cfg(target_arch = "wasm32")]
-                                            if fetch_requested && *selected {
-                                                if matches!(state, TleLoadState::NotLoaded | TleLoadState::Failed(_)) {
-                                                    *state = TleLoadState::Loading;
-                                                    let url = preset.url().to_string();
-                                                    let preset_copy = *preset;
-                                                    let ctx = ui.ctx().clone();
-                                                    wasm_bindgen_futures::spawn_local(async move {
-                                                        let result = match fetch_tle_text(&url).await {
-                                                            Ok(text) => parse_tle_data_async(&text).await,
-                                                            Err(e) => Err(e),
-                                                        };
-                                                        TLE_FETCH_RESULT.with(|cell| {
-                                                            cell.borrow_mut().push((preset_copy, result));
-                                                        });
-                                                        ctx.request_repaint();
+                                            if fetch_requested && *selected && matches!(state, TleLoadState::NotLoaded | TleLoadState::Failed(_)) {
+                                                *state = TleLoadState::Loading;
+                                                let url = preset.url().to_string();
+                                                let preset_copy = *preset;
+                                                let ctx = ui.ctx().clone();
+                                                wasm_bindgen_futures::spawn_local(async move {
+                                                    let result = match fetch_tle_text(&url).await {
+                                                        Ok(text) => parse_tle_data_async(&text).await,
+                                                        Err(e) => Err(e),
+                                                    };
+                                                    TLE_FETCH_RESULT.with(|cell| {
+                                                        cell.borrow_mut().push((preset_copy, result));
                                                     });
-                                                }
+                                                    ctx.request_repaint();
+                                                });
                                             }
                                         });
                                     }
@@ -3357,7 +3357,7 @@ impl ViewerState {
                                 }
                             });
                             ui.horizontal(|ui| {
-                                let num_cols = (shells.len() + 6) / 7;
+                                let num_cols = shells.len().div_ceil(7);
                                 for col in 0..num_cols {
                                     ui.vertical(|ui| {
                                         for row in 0..7 {
@@ -3854,7 +3854,7 @@ impl ViewerState {
                             use chrono::Datelike;
                             let timestamp = self.start_timestamp + chrono::Duration::seconds(time as i64);
                             let day_of_year = timestamp.ordinal() as f64;
-                            let declination: f64 = -23.45 * ((360.0_f64 / 365.0) * (day_of_year + 10.0)).to_radians().cos();
+                            let declination: f64 = SOLAR_DECLINATION_MAX * ((360.0 / DAYS_PER_YEAR) * (day_of_year + 10.0)).to_radians().cos();
                             let decl_rad = declination.to_radians();
                             let sun_ra = ((day_of_year - 80.0) * 360.0 / 365.0).to_radians();
                             let sun_inertial = Vector3::new(
@@ -4047,7 +4047,7 @@ impl ViewerState {
                     use chrono::Datelike;
                     let timestamp = self.start_timestamp + chrono::Duration::seconds(time as i64);
                     let day_of_year = timestamp.ordinal() as f64;
-                    let declination: f64 = -23.45 * ((360.0_f64 / 365.0) * (day_of_year + 10.0)).to_radians().cos();
+                    let declination: f64 = SOLAR_DECLINATION_MAX * ((360.0 / DAYS_PER_YEAR) * (day_of_year + 10.0)).to_radians().cos();
                     let decl_rad = declination.to_radians();
                     let sun_ra = ((day_of_year - 80.0) * 360.0 / 365.0).to_radians();
                     let sun_inertial = Vector3::new(
@@ -4279,9 +4279,9 @@ impl ViewerState {
                 -sin_a, 0.0, cos_a,
             );
             if *earth_fixed_ref {
-                *rotation_ref = *rotation_ref * body_y_rot;
+                *rotation_ref *= body_y_rot;
             } else {
-                *rotation_ref = *rotation_ref * body_y_rot.transpose();
+                *rotation_ref *= body_y_rot.transpose();
             }
         }
         ui.horizontal(|ui| {
@@ -4337,37 +4337,28 @@ impl ViewerState {
                 ui.add(egui::DragValue::new(&mut t_hour)
                     .speed(360.0)
                     .custom_formatter(|s, _| fmt_component(s, |t| format!("{:02}", t.hour())))
-                    .custom_parser({
-                        let local = local;
-                        move |input| {
-                            let h = input.parse::<u32>().ok()?.min(23);
-                            let delta = (h as i64 - local.hour() as i64) * 3600;
-                            Some(orig_time + delta as f64)
-                        }
+                    .custom_parser(move |input| {
+                        let h = input.parse::<u32>().ok()?.min(23);
+                        let delta = (h as i64 - local.hour() as i64) * 3600;
+                        Some(orig_time + delta as f64)
                     }));
                 ui.label(":");
                 ui.add(egui::DragValue::new(&mut t_min)
                     .speed(6.0)
                     .custom_formatter(|s, _| fmt_component(s, |t| format!("{:02}", t.minute())))
-                    .custom_parser({
-                        let local = local;
-                        move |input| {
-                            let m = input.parse::<u32>().ok()?.min(59);
-                            let delta = (m as i64 - local.minute() as i64) * 60;
-                            Some(orig_time + delta as f64)
-                        }
+                    .custom_parser(move |input| {
+                        let m = input.parse::<u32>().ok()?.min(59);
+                        let delta = (m as i64 - local.minute() as i64) * 60;
+                        Some(orig_time + delta as f64)
                     }));
                 ui.label(":");
                 ui.add(egui::DragValue::new(&mut t_sec)
                     .speed(0.1)
                     .custom_formatter(|s, _| fmt_component(s, |t| format!("{:02}", t.second())))
-                    .custom_parser({
-                        let local = local;
-                        move |input| {
-                            let s = input.parse::<u32>().ok()?.min(59);
-                            let delta = s as i64 - local.second() as i64;
-                            Some(orig_time + delta as f64)
-                        }
+                    .custom_parser(move |input| {
+                        let s = input.parse::<u32>().ok()?.min(59);
+                        let delta = s as i64 - local.second() as i64;
+                        Some(orig_time + delta as f64)
                     }));
             });
             ui.horizontal(|ui| {
@@ -4375,13 +4366,10 @@ impl ViewerState {
                 ui.add(egui::DragValue::new(&mut t_day)
                     .speed(8640.0)
                     .custom_formatter(|s, _| fmt_component(s, |t| format!("{:02}", t.day())))
-                    .custom_parser({
-                        let local = local;
-                        move |input| {
-                            let d = input.parse::<u32>().ok()?.clamp(1, 31);
-                            let delta = (d as i64 - local.day() as i64) * 86400;
-                            Some(orig_time + delta as f64)
-                        }
+                    .custom_parser(move |input| {
+                        let d = input.parse::<u32>().ok()?.clamp(1, 31);
+                        let delta = (d as i64 - local.day() as i64) * 86400;
+                        Some(orig_time + delta as f64)
                     }));
                 ui.label("/");
                 ui.add(egui::DragValue::new(&mut t_month)
@@ -4390,12 +4378,9 @@ impl ViewerState {
                         let m = (v as i32).rem_euclid(12) + 1;
                         format!("{:02}", m)
                     })
-                    .custom_parser({
-                        let local = local;
-                        move |input| {
-                            let m: i32 = input.parse().ok()?;
-                            Some(local.year() as f64 * 12.0 + m.clamp(1, 12) as f64 - 1.0)
-                        }
+                    .custom_parser(move |input| {
+                        let m: i32 = input.parse().ok()?;
+                        Some(local.year() as f64 * 12.0 + m.clamp(1, 12) as f64 - 1.0)
                     }));
                 ui.label("/");
                 ui.add(egui::DragValue::new(&mut t_year)
@@ -4404,12 +4389,9 @@ impl ViewerState {
                         let y = (v / 12.0).floor() as i32;
                         format!("{}", y)
                     })
-                    .custom_parser({
-                        let local = local;
-                        move |input| {
-                            let y: i32 = input.parse().ok()?;
-                            Some(y as f64 * 12.0 + local.month() as f64 - 1.0)
-                        }
+                    .custom_parser(move |input| {
+                        let y: i32 = input.parse().ok()?;
+                        Some(y as f64 * 12.0 + local.month() as f64 - 1.0)
                     }));
             });
             if t_sec != *time_ref { *time_ref = t_sec; }
@@ -5346,7 +5328,7 @@ impl eframe::App for App {
                 let margin = 1.5;
                 let lon_center = (min_lon + max_lon) / 2.0;
                 let lat_center = (min_lat + max_lat) / 2.0;
-                let tile_deg = 360.0 / (1u64 << camera_zoom_to_tile_zoom(v.zoom).max(2).min(18)) as f64;
+                let tile_deg = 360.0 / (1u64 << camera_zoom_to_tile_zoom(v.zoom).clamp(2, 18)) as f64;
                 let min_half = tile_deg * 3.0;
                 let lon_half = ((max_lon - min_lon) / 2.0 * margin).max(min_half);
                 let lat_half = ((max_lat - min_lat) / 2.0 * margin).max(min_half);
@@ -5467,7 +5449,7 @@ impl eframe::App for App {
                         if x >= x_org { x - x_org } else { n - x_org + x }
                     };
                     let cols = needed.iter().map(|c| col_of(c.x)).max().unwrap() + 1;
-                    let rows = (y_max - y_min + 1) as u32;
+                    let rows = y_max - y_min + 1;
                     let tile_size = 256u32;
                     let tex_w = cols * tile_size;
                     let tex_h = rows * tile_size;
@@ -5796,7 +5778,7 @@ impl eframe::App for App {
         }
 
         if !v.use_gpu_rendering {
-            let rotation_changed = v.last_rotation.map_or(true, |r| r != v.rotation);
+            let rotation_changed = v.last_rotation.is_none_or(|r| r != v.rotation);
             let resolution_changed = v.last_resolution != v.earth_resolution;
             let time_changed = v.animate;
 
@@ -5822,7 +5804,7 @@ impl eframe::App for App {
                         let render_size = key.2.cpu_render_size();
                         let image = texture.render_sphere(render_size, &body_combined, flattening);
                         let handle = ctx.load_texture(
-                            &format!("planet_{:?}_{:?}", key.0, key.1),
+                            format!("planet_{:?}_{:?}", key.0, key.1),
                             image,
                             egui::TextureOptions::LINEAR,
                         );
@@ -6175,7 +6157,7 @@ impl eframe::App for App {
                     let cos_a = body_rot.cos();
                     let sin_a = body_rot.sin();
                     for camera in &planet.satellite_cameras {
-                        let sat_data = planet.constellations.get(camera.constellation_idx).map(|cons| {
+                        let sat_data = planet.constellations.get(camera.constellation_idx).and_then(|cons| {
                             let wc = cons.constellation(pr, pm, pj2, peq);
                             let positions = wc.satellite_positions(self.viewer.time);
                             positions.iter()
@@ -6186,7 +6168,7 @@ impl eframe::App for App {
                                     let ground_lon = (-bz).atan2(bx).to_degrees();
                                     (s.lat, ground_lon, cons.altitude_km, texture, pr)
                                 })
-                        }).flatten();
+                        });
 
                     if let Some((lat, lon, altitude_km, texture, planet_radius)) = sat_data {
                         let win_response = egui::Window::new(format!("{}: {}", planet.name, camera.label))
@@ -6311,6 +6293,28 @@ fn draw_satellite_camera(
     ui.label(format!("Alt: {:.0} km", altitude_km));
 }
 
+fn wrap_index(current: usize, direction: i32, modulus: usize) -> usize {
+    ((current as i32 + direction + modulus as i32) % modulus as i32) as usize
+}
+
+fn compute_path_direction(src: usize, dst: usize, modulus: usize, is_star: bool) -> (i32, usize) {
+    if is_star {
+        if dst >= src {
+            (1, dst - src)
+        } else {
+            (-1, src - dst)
+        }
+    } else {
+        let diff_fwd = (dst + modulus - src) % modulus;
+        let diff_bwd = (src + modulus - dst) % modulus;
+        if diff_fwd <= diff_bwd {
+            (1, diff_fwd)
+        } else {
+            (-1, diff_bwd)
+        }
+    }
+}
+
 fn compute_manhattan_path(
     src_plane: usize, src_sat: usize,
     dst_plane: usize, dst_sat: usize,
@@ -6319,39 +6323,18 @@ fn compute_manhattan_path(
 ) -> Vec<(usize, usize)> {
     let mut path = vec![(src_plane, src_sat)];
 
-    let (plane_dir, plane_steps) = if is_star {
-        if dst_plane >= src_plane {
-            (1i32, dst_plane - src_plane)
-        } else {
-            (-1i32, src_plane - dst_plane)
-        }
-    } else {
-        let plane_diff_fwd = (dst_plane + num_planes - src_plane) % num_planes;
-        let plane_diff_bwd = (src_plane + num_planes - dst_plane) % num_planes;
-        if plane_diff_fwd <= plane_diff_bwd {
-            (1i32, plane_diff_fwd)
-        } else {
-            (-1i32, plane_diff_bwd)
-        }
-    };
-
-    let sat_diff_fwd = (dst_sat + sats_per_plane - src_sat) % sats_per_plane;
-    let sat_diff_bwd = (src_sat + sats_per_plane - dst_sat) % sats_per_plane;
-    let (sat_dir, sat_steps) = if sat_diff_fwd <= sat_diff_bwd {
-        (1i32, sat_diff_fwd)
-    } else {
-        (-1i32, sat_diff_bwd)
-    };
+    let (plane_dir, plane_steps) = compute_path_direction(src_plane, dst_plane, num_planes, is_star);
+    let (sat_dir, sat_steps) = compute_path_direction(src_sat, dst_sat, sats_per_plane, false);
 
     let mut cur_plane = src_plane;
     for _ in 0..plane_steps {
-        cur_plane = ((cur_plane as i32 + plane_dir + num_planes as i32) % num_planes as i32) as usize;
+        cur_plane = wrap_index(cur_plane, plane_dir, num_planes);
         path.push((cur_plane, src_sat));
     }
 
     let mut cur_sat = src_sat;
     for _ in 0..sat_steps {
-        cur_sat = ((cur_sat as i32 + sat_dir + sats_per_plane as i32) % sats_per_plane as i32) as usize;
+        cur_sat = wrap_index(cur_sat, sat_dir, sats_per_plane);
         path.push((dst_plane, cur_sat));
     }
 
@@ -6367,29 +6350,8 @@ fn compute_shortest_path(
 ) -> Vec<(usize, usize)> {
     let mut path = vec![(src_plane, src_sat)];
 
-    let (plane_dir, mut plane_steps_remaining) = if is_star {
-        if dst_plane >= src_plane {
-            (1i32, dst_plane - src_plane)
-        } else {
-            (-1i32, src_plane - dst_plane)
-        }
-    } else {
-        let plane_diff_fwd = (dst_plane + num_planes - src_plane) % num_planes;
-        let plane_diff_bwd = (src_plane + num_planes - dst_plane) % num_planes;
-        if plane_diff_fwd <= plane_diff_bwd {
-            (1i32, plane_diff_fwd)
-        } else {
-            (-1i32, plane_diff_bwd)
-        }
-    };
-
-    let sat_diff_fwd = (dst_sat + sats_per_plane - src_sat) % sats_per_plane;
-    let sat_diff_bwd = (src_sat + sats_per_plane - dst_sat) % sats_per_plane;
-    let (sat_dir, mut sat_steps_remaining) = if sat_diff_fwd <= sat_diff_bwd {
-        (1i32, sat_diff_fwd)
-    } else {
-        (-1i32, sat_diff_bwd)
-    };
+    let (plane_dir, mut plane_steps_remaining) = compute_path_direction(src_plane, dst_plane, num_planes, is_star);
+    let (sat_dir, mut sat_steps_remaining) = compute_path_direction(src_sat, dst_sat, sats_per_plane, false);
 
     let get_pos = |plane: usize, sat_idx: usize| -> Option<(f64, f64, f64)> {
         positions.iter()
@@ -6409,20 +6371,20 @@ fn compute_shortest_path(
 
     while plane_steps_remaining > 0 || sat_steps_remaining > 0 {
         if plane_steps_remaining == 0 {
-            cur_sat = ((cur_sat as i32 + sat_dir + sats_per_plane as i32) % sats_per_plane as i32) as usize;
+            cur_sat = wrap_index(cur_sat, sat_dir, sats_per_plane);
             sat_steps_remaining -= 1;
             path.push((cur_plane, cur_sat));
             continue;
         }
         if sat_steps_remaining == 0 {
-            cur_plane = ((cur_plane as i32 + plane_dir + num_planes as i32) % num_planes as i32) as usize;
+            cur_plane = wrap_index(cur_plane, plane_dir, num_planes);
             plane_steps_remaining -= 1;
             path.push((cur_plane, cur_sat));
             continue;
         }
 
-        let next_plane = ((cur_plane as i32 + plane_dir + num_planes as i32) % num_planes as i32) as usize;
-        let next_sat = ((cur_sat as i32 + sat_dir + sats_per_plane as i32) % sats_per_plane as i32) as usize;
+        let next_plane = wrap_index(cur_plane, plane_dir, num_planes);
+        let next_sat = wrap_index(cur_sat, sat_dir, sats_per_plane);
 
         let cur_pos = get_pos(cur_plane, cur_sat);
         let cross_plane_pos = get_pos(next_plane, cur_sat);
@@ -7158,7 +7120,7 @@ fn draw_3d_view(
                     grid.entry((gx, gy)).or_default().push(i);
                 }
 
-                for (_key, indices) in &grid {
+                for indices in grid.values() {
                     let count = indices.len();
                     let cx: f64 = indices.iter().map(|&i| projected[i].0[0]).sum::<f64>() / count as f64;
                     let cy: f64 = indices.iter().map(|&i| projected[i].0[1]).sum::<f64>() / count as f64;
@@ -7419,10 +7381,8 @@ fn draw_3d_view(
                                     if sat.ascending != asc { continue; }
                                 }
                                 let dist = haversine_dist(sat);
-                                if dist <= max_angular_dist {
-                                    if best.is_none() || dist < best.as_ref().unwrap().4 {
-                                        best = Some((cidx, cons, positions, sat, dist));
-                                    }
+                                if dist <= max_angular_dist && (best.is_none() || dist < best.as_ref().unwrap().4) {
+                                    best = Some((cidx, cons, positions, sat, dist));
                                 }
                             }
                         }
@@ -7560,12 +7520,10 @@ fn draw_3d_view(
                     let color = if show_asc_desc_colors {
                         if is_tracked {
                             if sat.ascending { COLOR_ASCENDING } else { COLOR_DESCENDING }
+                        } else if sat.ascending {
+                            egui::Color32::from_rgb(180, 140, 80)
                         } else {
-                            if sat.ascending {
-                                egui::Color32::from_rgb(180, 140, 80)
-                            } else {
-                                egui::Color32::from_rgb(80, 120, 180)
-                            }
+                            egui::Color32::from_rgb(80, 120, 180)
                         }
                     } else {
                         base_color
@@ -7794,7 +7752,7 @@ fn draw_3d_view(
         'hover: for (_constellation, positions, color_offset, _, _, _) in constellations {
             for sat in positions {
                 let (rx, ry, rz) = rotate_point_matrix(sat.x, sat.y, sat.z, &satellite_rotation);
-                let earth_r_sq = (planet_radius * 0.95).powi(2) as f64;
+                let earth_r_sq = (planet_radius * EARTH_VISUAL_SCALE).powi(2);
                 let visible = rz >= 0.0 || (rx * rx + ry * ry) >= earth_r_sq;
                 if !visible && hide_behind_earth {
                     continue;
@@ -7943,10 +7901,8 @@ fn draw_3d_view(
         }
     }
 
-    if !response.response.dragged() {
-        if dragging_place.map_or(false, |(t, p, _, _)| t == drag_tab_planet.0 && p == drag_tab_planet.1) {
-            *dragging_place = None;
-        }
+    if !response.response.dragged() && dragging_place.is_some_and(|(t, p, _, _)| t == drag_tab_planet.0 && p == drag_tab_planet.1) {
+        *dragging_place = None;
     }
 
     if response.response.clicked() {
@@ -7959,7 +7915,7 @@ fn draw_3d_view(
             'outer: for (_constellation, positions, _color_offset, _, orig_idx, _) in constellations {
                 for sat in positions {
                     let (rx, ry, rz) = rotate_point_matrix(sat.x, sat.y, sat.z, &satellite_rotation);
-                    let earth_r_sq = (planet_radius * 0.95).powi(2) as f64;
+                    let earth_r_sq = (planet_radius * EARTH_VISUAL_SCALE).powi(2);
                     let visible = rz >= 0.0 || (rx * rx + ry * ry) >= earth_r_sq;
                     if !visible && hide_behind_earth {
                         continue;
@@ -8316,7 +8272,7 @@ fn draw_torus(
             }
         }
 
-        for (_cidx, (constellation, positions, color_offset, _tle_kind, orig_idx, _)) in constellations.iter().enumerate() {
+        for (constellation, positions, color_offset, _tle_kind, orig_idx, _) in constellations.iter() {
             let sats_per_plane = constellation.total_sats / constellation.num_planes;
             let orbit_radius = constellation.planet_radius + constellation.altitude_km;
             let period = 2.0 * PI * (orbit_radius.powi(3) / constellation.planet_mu).sqrt();
@@ -8423,12 +8379,10 @@ fn draw_torus(
                     let color = if show_asc_desc_colors {
                         if is_tracked {
                             if sat.ascending { COLOR_ASCENDING } else { COLOR_DESCENDING }
+                        } else if sat.ascending {
+                            egui::Color32::from_rgb(180, 140, 80)
                         } else {
-                            if sat.ascending {
-                                egui::Color32::from_rgb(180, 140, 80)
-                            } else {
-                                egui::Color32::from_rgb(80, 120, 180)
-                            }
+                            egui::Color32::from_rgb(80, 120, 180)
                         }
                     } else {
                         base_color
@@ -8597,7 +8551,7 @@ fn draw_torus(
                 rotate_point_matrix(x, y, z, &display_rotation)
             };
 
-            'outer: for (_cidx, (constellation, positions, _, _, orig_idx, _)) in constellations.iter().enumerate() {
+            'outer: for (constellation, positions, _, _, orig_idx, _) in constellations.iter() {
                 let sats_per_plane = constellation.total_sats / constellation.num_planes;
                 let orbit_radius = constellation.planet_radius + constellation.altitude_km;
                 let period = 2.0 * PI * (orbit_radius.powi(3) / constellation.planet_mu).sqrt();
