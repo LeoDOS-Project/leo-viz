@@ -1,3 +1,8 @@
+//! Geographic overlay data.
+//!
+//! Loads and parses GeoJSON data for country borders and city labels
+//! from Natural Earth. Provides disk caching for offline use.
+
 pub struct CityLabel {
     pub lat: f64,
     pub lon: f64,

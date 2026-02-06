@@ -1,3 +1,8 @@
+//! Celestial body definitions and properties.
+//!
+//! Provides enums and data for planets, moons, and dwarf planets including
+//! physical properties (radius, mass, rotation), texture mappings, and skins.
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum CelestialBody {
     Earth,
