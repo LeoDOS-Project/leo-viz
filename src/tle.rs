@@ -2,6 +2,7 @@
 //!
 //! Parses and manages TLE data from CelesTrak for real satellite positions.
 //! Supports 50+ satellite groups including Starlink, GPS, ISS, and debris.
+//! Includes WASM-specific async fetching and incremental parsing.
 
 use sgp4::Constants;
 
@@ -267,4 +268,94 @@ pub fn fetch_tle_data(url: &str) -> Result<Vec<TleSatellite>, String> {
         .map_err(|e| format!("Read error: {}", e))?;
 
     parse_tle_data(&body)
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    pub(crate) static TLE_FETCH_RESULT: std::cell::RefCell<Vec<(TlePreset, Result<Vec<TleSatellite>, String>)>> = std::cell::RefCell::new(Vec::new());
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn fetch_tle_text(url: &str) -> Result<String, String> {
+    use wasm_bindgen::JsCast as _;
+    use web_sys::{Request, RequestInit, Response};
+
+    let opts = RequestInit::new();
+    opts.set_method("GET");
+
+    let request = Request::new_with_str_and_init(url, &opts)
+        .map_err(|e| format!("{:?}", e))?;
+
+    let window = web_sys::window().ok_or("No window")?;
+    let resp_value = wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| format!("Fetch failed: {:?}", e))?;
+
+    let resp: Response = resp_value.dyn_into()
+        .map_err(|_| "Response is not a Response")?;
+
+    if !resp.ok() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+
+    let array_buffer = wasm_bindgen_futures::JsFuture::from(
+        resp.array_buffer().map_err(|e| format!("{:?}", e))?
+    )
+    .await
+    .map_err(|e| format!("{:?}", e))?;
+
+    let bytes = js_sys::Uint8Array::new(&array_buffer).to_vec();
+    String::from_utf8(bytes).map_err(|e| format!("{}", e))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn yield_now() {
+    wasm_bindgen_futures::JsFuture::from(
+        js_sys::Promise::new(&mut |resolve, _| {
+            web_sys::window().unwrap()
+                .set_timeout_with_callback(&resolve).unwrap();
+        })
+    ).await.unwrap();
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn parse_tle_data_async(data: &str) -> Result<Vec<TleSatellite>, String> {
+    let lines: Vec<&str> = data.lines().collect();
+    let mut satellites = Vec::new();
+    let mut i = 0;
+    let mut batch = 0;
+    while i + 2 < lines.len() {
+        let name_line = lines[i].trim();
+        let line1 = lines[i + 1].trim();
+        let line2 = lines[i + 2].trim();
+        if !line1.starts_with('1') || !line2.starts_with('2') {
+            i += 1;
+            continue;
+        }
+        let tle = format!("{}\n{}\n{}", name_line, line1, line2);
+        if let Ok(elements_vec) = sgp4::parse_3les(&tle) {
+            for elements in elements_vec {
+                if let Ok(constants) = Constants::from_elements(&elements) {
+                    let epoch_minutes = datetime_to_minutes(&elements.datetime);
+                    satellites.push(TleSatellite {
+                        name: elements.object_name.unwrap_or_default(),
+                        inclination_deg: elements.inclination,
+                        mean_motion: elements.mean_motion,
+                        constants,
+                        epoch_minutes,
+                    });
+                }
+            }
+        }
+        i += 3;
+        batch += 1;
+        if batch % 100 == 0 {
+            yield_now().await;
+        }
+    }
+    if satellites.is_empty() {
+        Err("No valid TLE data found".to_string())
+    } else {
+        Ok(satellites)
+    }
 }
