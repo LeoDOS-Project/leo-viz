@@ -2181,6 +2181,36 @@ impl PlanetConfig {
 
 }
 
+#[derive(Clone, Copy)]
+struct View3DFlags {
+    show_orbits: bool,
+    show_axes: bool,
+    show_coverage: bool,
+    show_links: bool,
+    show_intra_links: bool,
+    hide_behind_earth: bool,
+    single_color: bool,
+    dark_mode: bool,
+    show_routing_paths: bool,
+    show_manhattan_path: bool,
+    show_shortest_path: bool,
+    show_asc_desc_colors: bool,
+    show_altitude_lines: bool,
+    render_planet: bool,
+    fixed_sizes: bool,
+    show_polar_circle: bool,
+    show_equator: bool,
+    show_terminator: bool,
+    earth_fixed_camera: bool,
+    use_gpu_rendering: bool,
+    show_clouds: bool,
+    show_day_night: bool,
+    show_stars: bool,
+    show_milky_way: bool,
+    show_borders: bool,
+    show_cities: bool,
+}
+
 #[derive(Clone)]
 struct TabSettings {
     time: f64,
@@ -3806,13 +3836,36 @@ impl ViewerState {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     let planet = &mut self.tabs[tab_idx].planets[planet_idx];
+                    let view_flags = View3DFlags {
+                        show_orbits, show_axes, show_coverage, show_links, show_intra_links,
+                        hide_behind_earth, single_color, dark_mode, show_routing_paths,
+                        show_manhattan_path, show_shortest_path, show_asc_desc_colors,
+                        show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
+                        show_equator, show_terminator, earth_fixed_camera,
+                        use_gpu_rendering: self.use_gpu_rendering, show_clouds, show_day_night,
+                        show_stars, show_milky_way, show_borders, show_cities,
+                    };
+                    let sun_dir = {
+                        use chrono::Datelike;
+                        let timestamp = self.start_timestamp + chrono::Duration::seconds(time as i64);
+                        let day_of_year = timestamp.ordinal() as f64;
+                        let declination: f64 = SOLAR_DECLINATION_MAX * ((360.0 / DAYS_PER_YEAR) * (day_of_year + 10.0)).to_radians().cos();
+                        let decl_rad = declination.to_radians();
+                        let sun_ra = ((day_of_year - 80.0) * 360.0 / 365.0).to_radians();
+                        let sun_inertial = Vector3::new(
+                            decl_rad.cos() * sun_ra.cos(),
+                            decl_rad.sin(),
+                            -decl_rad.cos() * sun_ra.sin(),
+                        );
+                        let sun_shader = body_y_rotation.transpose() * sun_inertial;
+                        [sun_shader.x as f32, sun_shader.y as f32, sun_shader.z as f32]
+                    };
+                    let device_layers_ref: &[DeviceLayer] = if show_devices { &planet.device_layers } else { &[] };
                     let (rot, new_zoom) = draw_3d_view(
                         ui,
                         &view_name,
                         &constellations_data,
-                        show_orbits,
-                        show_axes,
-                        show_coverage,
+                        view_flags,
                         coverage_angle,
                         rotation,
                         satellite_rotation,
@@ -3821,60 +3874,25 @@ impl ViewerState {
                         planet_handle,
                         zoom,
                         sat_radius,
-                        show_links,
-                        show_intra_links,
-                        hide_behind_earth,
-                        single_color,
-                        dark_mode,
+                        link_width,
                         &mut planet.pending_cameras,
                         &mut self.camera_id_counter,
                         &mut planet.satellite_cameras,
                         &mut planet.cameras_to_remove,
-                        show_routing_paths,
-                        show_manhattan_path,
-                        show_shortest_path,
-                        show_asc_desc_colors,
-                        show_altitude_lines,
                         planet_radius,
-                        render_planet,
-                        link_width,
-                        fixed_sizes,
                         flattening,
-                        show_polar_circle,
-                        show_equator,
-                        show_terminator,
                         self.sphere_renderer.as_ref(),
                         (celestial_body, skin, tex_res),
                         &body_y_rotation,
-                        earth_fixed_camera,
-                        self.use_gpu_rendering,
-                        show_clouds,
-                        show_day_night,
-                        {
-                            use chrono::Datelike;
-                            let timestamp = self.start_timestamp + chrono::Duration::seconds(time as i64);
-                            let day_of_year = timestamp.ordinal() as f64;
-                            let declination: f64 = SOLAR_DECLINATION_MAX * ((360.0 / DAYS_PER_YEAR) * (day_of_year + 10.0)).to_radians().cos();
-                            let decl_rad = declination.to_radians();
-                            let sun_ra = ((day_of_year - 80.0) * 360.0 / 365.0).to_radians();
-                            let sun_inertial = Vector3::new(
-                                decl_rad.cos() * sun_ra.cos(),
-                                decl_rad.sin(),
-                                -decl_rad.cos() * sun_ra.sin(),
-                            );
-                            let sun_shader = body_y_rotation.transpose() * sun_inertial;
-                            [sun_shader.x as f32, sun_shader.y as f32, sun_shader.z as f32]
-                        },
+                        sun_dir,
                         time,
                         &mut planet.ground_stations,
                         &mut planet.areas_of_interest,
-                        if show_devices { &planet.device_layers } else { &[] },
+                        device_layers_ref,
                         body_rot_angle,
                         &mut self.dragging_place,
                         (tab_idx, planet_idx),
                         detail_gl_info,
-                        show_stars,
-                        show_milky_way,
                         #[cfg(not(target_arch = "wasm32"))]
                         { match &self.geo_data { GeoLoadState::Loaded(d) => if show_borders { d.borders.as_slice() } else { &[] }, _ => &[] } },
                         #[cfg(target_arch = "wasm32")]
@@ -3883,8 +3901,6 @@ impl ViewerState {
                         { match &self.geo_data { GeoLoadState::Loaded(d) => if show_cities { d.cities.as_slice() } else { &[] }, _ => &[] } },
                         #[cfg(target_arch = "wasm32")]
                         &[],
-                        show_borders,
-                        show_cities,
                     );
                     if use_local {
                         self.tabs[tab_idx].local_settings.rotation = rot;
@@ -3999,13 +4015,36 @@ impl ViewerState {
             self.view_height = earth_height;
 
             let planet = &mut self.tabs[tab_idx].planets[planet_idx];
+            let view_flags = View3DFlags {
+                show_orbits, show_axes, show_coverage, show_links, show_intra_links,
+                hide_behind_earth, single_color, dark_mode, show_routing_paths,
+                show_manhattan_path, show_shortest_path, show_asc_desc_colors,
+                show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
+                show_equator, show_terminator, earth_fixed_camera,
+                use_gpu_rendering: self.use_gpu_rendering, show_clouds, show_day_night,
+                show_stars, show_milky_way, show_borders, show_cities,
+            };
+            let sun_dir = {
+                use chrono::Datelike;
+                let timestamp = self.start_timestamp + chrono::Duration::seconds(time as i64);
+                let day_of_year = timestamp.ordinal() as f64;
+                let declination: f64 = SOLAR_DECLINATION_MAX * ((360.0 / DAYS_PER_YEAR) * (day_of_year + 10.0)).to_radians().cos();
+                let decl_rad = declination.to_radians();
+                let sun_ra = ((day_of_year - 80.0) * 360.0 / 365.0).to_radians();
+                let sun_inertial = Vector3::new(
+                    decl_rad.cos() * sun_ra.cos(),
+                    decl_rad.sin(),
+                    -decl_rad.cos() * sun_ra.sin(),
+                );
+                let sun_shader = body_y_rotation.transpose() * sun_inertial;
+                [sun_shader.x as f32, sun_shader.y as f32, sun_shader.z as f32]
+            };
+            let device_layers_ref: &[DeviceLayer] = if show_devices { &planet.device_layers } else { &[] };
             let (rot, new_zoom) = draw_3d_view(
                 ui,
                 &view_name,
                 &constellations_data,
-                show_orbits,
-                show_axes,
-                show_coverage,
+                view_flags,
                 coverage_angle,
                 rotation,
                 satellite_rotation,
@@ -4014,60 +4053,25 @@ impl ViewerState {
                 planet_handle,
                 zoom,
                 sat_radius,
-                show_links,
-                show_intra_links,
-                hide_behind_earth,
-                single_color,
-                dark_mode,
+                link_width,
                 &mut planet.pending_cameras,
                 &mut self.camera_id_counter,
                 &mut planet.satellite_cameras,
                 &mut planet.cameras_to_remove,
-                show_routing_paths,
-                show_manhattan_path,
-                show_shortest_path,
-                show_asc_desc_colors,
-                show_altitude_lines,
                 planet_radius,
-                render_planet,
-                link_width,
-                fixed_sizes,
                 flattening,
-                show_polar_circle,
-                show_equator,
-                show_terminator,
                 self.sphere_renderer.as_ref(),
                 (celestial_body, skin, tex_res),
                 &body_y_rotation,
-                earth_fixed_camera,
-                self.use_gpu_rendering,
-                show_clouds,
-                show_day_night,
-                {
-                    use chrono::Datelike;
-                    let timestamp = self.start_timestamp + chrono::Duration::seconds(time as i64);
-                    let day_of_year = timestamp.ordinal() as f64;
-                    let declination: f64 = SOLAR_DECLINATION_MAX * ((360.0 / DAYS_PER_YEAR) * (day_of_year + 10.0)).to_radians().cos();
-                    let decl_rad = declination.to_radians();
-                    let sun_ra = ((day_of_year - 80.0) * 360.0 / 365.0).to_radians();
-                    let sun_inertial = Vector3::new(
-                        decl_rad.cos() * sun_ra.cos(),
-                        decl_rad.sin(),
-                        -decl_rad.cos() * sun_ra.sin(),
-                    );
-                    let sun_shader = body_y_rotation.transpose() * sun_inertial;
-                    [sun_shader.x as f32, sun_shader.y as f32, sun_shader.z as f32]
-                },
+                sun_dir,
                 time,
                 &mut planet.ground_stations,
                 &mut planet.areas_of_interest,
-                if show_devices { &planet.device_layers } else { &[] },
+                device_layers_ref,
                 body_rot_angle,
                 &mut self.dragging_place,
                 (tab_idx, planet_idx),
                 detail_gl_info,
-                show_stars,
-                show_milky_way,
                 #[cfg(not(target_arch = "wasm32"))]
                 { match &self.geo_data { GeoLoadState::Loaded(d) => if show_borders { d.borders.as_slice() } else { &[] }, _ => &[] } },
                 #[cfg(target_arch = "wasm32")]
@@ -4076,8 +4080,6 @@ impl ViewerState {
                 { match &self.geo_data { GeoLoadState::Loaded(d) => if show_cities { d.cities.as_slice() } else { &[] }, _ => &[] } },
                 #[cfg(target_arch = "wasm32")]
                 &[],
-                show_borders,
-                show_cities,
             );
             if use_local {
                 self.tabs[tab_idx].local_settings.rotation = rot;
@@ -6468,9 +6470,7 @@ fn draw_3d_view(
     ui: &mut egui::Ui,
     id: &str,
     constellations: &[(WalkerConstellation, Vec<SatelliteState>, usize, u8, usize, String)],
-    show_orbits: bool,
-    show_axes: bool,
-    show_coverage: bool,
+    flags: View3DFlags,
     coverage_angle: f64,
     mut rotation: Matrix3<f64>,
     satellite_rotation: Matrix3<f64>,
@@ -6479,35 +6479,16 @@ fn draw_3d_view(
     earth_texture: Option<&egui::TextureHandle>,
     mut zoom: f64,
     sat_radius: f32,
-    show_links: bool,
-    show_intra_links: bool,
-    hide_behind_earth: bool,
-    single_color: bool,
-    dark_mode: bool,
+    link_width: f32,
     pending_cameras: &mut Vec<SatelliteCamera>,
     camera_id_counter: &mut usize,
     satellite_cameras: &mut [SatelliteCamera],
     cameras_to_remove: &mut Vec<usize>,
-    show_routing_paths: bool,
-    show_manhattan_path: bool,
-    show_shortest_path: bool,
-    show_asc_desc_colors: bool,
-    show_altitude_lines: bool,
     planet_radius: f64,
-    render_planet: bool,
-    link_width: f32,
-    fixed_sizes: bool,
     flattening: f64,
-    show_polar_circle: bool,
-    show_equator: bool,
-    show_terminator: bool,
     sphere_renderer: Option<&Arc<Mutex<SphereRenderer>>>,
     body_key: (CelestialBody, Skin, TextureResolution),
     body_rotation: &Matrix3<f64>,
-    earth_fixed_camera: bool,
-    use_gpu_rendering: bool,
-    show_clouds: bool,
-    show_day_night: bool,
     sun_dir: [f32; 3],
     time: f64,
     ground_stations: &mut [GroundStation],
@@ -6517,13 +6498,17 @@ fn draw_3d_view(
     dragging_place: &mut Option<(usize, usize, bool, usize)>,
     drag_tab_planet: (usize, usize),
     detail_gl_info: Option<(glow::Texture, [f32; 4])>,
-    show_stars: bool,
-    show_milky_way: bool,
     geo_borders: &[Vec<(f64, f64)>],
     geo_cities: &[CityLabel],
-    show_borders: bool,
-    show_cities: bool,
 ) -> (Matrix3<f64>, f64) {
+    let View3DFlags {
+        show_orbits, show_axes, show_coverage, show_links, show_intra_links,
+        hide_behind_earth, single_color, dark_mode, show_routing_paths,
+        show_manhattan_path, show_shortest_path, show_asc_desc_colors,
+        show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
+        show_equator, show_terminator, earth_fixed_camera, use_gpu_rendering,
+        show_clouds, show_day_night, show_stars, show_milky_way, show_borders, show_cities,
+    } = flags;
     let max_altitude = constellations.iter()
         .map(|(c, _, _, _, _, _)| c.altitude_km)
         .fold(550.0_f64, |a, b| a.max(b));
