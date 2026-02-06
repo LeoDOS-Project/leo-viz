@@ -1,7 +1,7 @@
-//! Image texture loading and processing.
+//! Image texture loading, decoding, and processing.
 //!
-//! Handles loading, decoding, and sampling planet textures (JPEG/PNG).
-//! Includes CPU-based sphere rendering for fallback rendering mode.
+//! Handles loading and sampling planet textures (JPEG/PNG), CPU-based
+//! sphere rendering, asset path resolution, and WASM texture fetching.
 
 use egui::Color32;
 use nalgebra::{Matrix3, Vector3};
@@ -162,4 +162,75 @@ impl RingTexture {
         let pixels: Vec<[u8; 4]> = img.pixels().map(|p| p.0).collect();
         Ok(Self { width, height, pixels })
     }
+}
+
+pub(crate) fn asset_path(relative: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn decode_jpeg_pixels(bytes: &[u8]) -> Option<(Vec<[u8; 3]>, u32, u32)> {
+    use std::io::Cursor;
+    let img = image::load(Cursor::new(bytes), image::ImageFormat::Jpeg).ok()?;
+    let rgb = img.to_rgb8();
+    let w = rgb.width();
+    let h = rgb.height();
+    let pixels: Vec<[u8; 3]> = rgb.pixels().map(|p| p.0).collect();
+    Some((pixels, w, h))
+}
+
+pub(crate) fn load_earth_texture() -> EarthTexture {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        EarthTexture::load_from_path(&asset_path("textures/earth/earth_8k.jpg"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        EarthTexture::default_placeholder()
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    pub(crate) static TEXTURE_RESULT: std::cell::RefCell<Vec<((crate::celestial::CelestialBody, crate::celestial::Skin, crate::celestial::TextureResolution), Result<EarthTexture, String>)>> = std::cell::RefCell::new(Vec::new());
+    pub(crate) static STAR_TEXTURE_RESULT: std::cell::RefCell<Option<Result<EarthTexture, String>>> = std::cell::RefCell::new(None);
+    pub(crate) static MILKY_WAY_TEXTURE_RESULT: std::cell::RefCell<Option<Result<EarthTexture, String>>> = std::cell::RefCell::new(None);
+    pub(crate) static NIGHT_TEXTURE_RESULT: std::cell::RefCell<Option<Result<EarthTexture, String>>> = std::cell::RefCell::new(None);
+    pub(crate) static CLOUD_TEXTURE_RESULT: std::cell::RefCell<Option<(crate::celestial::TextureResolution, Result<EarthTexture, String>)>> = std::cell::RefCell::new(None);
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn fetch_texture(url: &str) -> Result<EarthTexture, String> {
+    use wasm_bindgen::JsCast as _;
+    use web_sys::{Request, RequestInit, RequestMode, Response};
+
+    let opts = RequestInit::new();
+    opts.set_method("GET");
+    opts.set_mode(RequestMode::Cors);
+
+    let request = Request::new_with_str_and_init(url, &opts)
+        .map_err(|e| format!("Failed to create request: {:?}", e))?;
+
+    let window = web_sys::window().ok_or("No window")?;
+    let resp_value = wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| format!("Fetch failed: {:?}", e))?;
+
+    let resp: Response = resp_value.dyn_into()
+        .map_err(|_| "Response is not a Response")?;
+
+    if !resp.ok() {
+        return Err(format!("HTTP error: {}", resp.status()));
+    }
+
+    let array_buffer = wasm_bindgen_futures::JsFuture::from(
+        resp.array_buffer().map_err(|e| format!("Failed to get array buffer: {:?}", e))?
+    )
+    .await
+    .map_err(|e| format!("Failed to read response: {:?}", e))?;
+
+    let uint8_array = js_sys::Uint8Array::new(&array_buffer);
+    let bytes: Vec<u8> = uint8_array.to_vec();
+
+    EarthTexture::from_bytes(&bytes)
 }
