@@ -2177,6 +2177,14 @@ impl PlanetConfig {
 
 #[derive(Clone)]
 struct TabSettings {
+    time: f64,
+    speed: f64,
+    animate: bool,
+    zoom: f64,
+    rotation: Matrix3<f64>,
+    earth_fixed_camera: bool,
+    follow_satellite: bool,
+    show_camera_windows: bool,
     show_orbits: bool,
     show_links: bool,
     show_intra_links: bool,
@@ -2191,15 +2199,35 @@ struct TabSettings {
     show_ground_track: bool,
     show_axes: bool,
     hide_behind_earth: bool,
-    follow_satellite: bool,
     render_planet: bool,
     show_altitude_lines: bool,
-    show_camera_windows: bool,
+    show_devices: bool,
+    show_polar_circle: bool,
+    show_equator: bool,
+    show_borders: bool,
+    show_cities: bool,
+    show_day_night: bool,
+    show_terminator: bool,
+    show_clouds: bool,
+    show_stars: bool,
+    show_milky_way: bool,
+    show_gravity_grid: bool,
+    sat_radius: f32,
+    link_width: f32,
+    fixed_sizes: bool,
 }
 
 impl Default for TabSettings {
     fn default() -> Self {
         Self {
+            time: 0.0,
+            speed: 50.0,
+            animate: true,
+            zoom: 1.0,
+            rotation: lat_lon_to_matrix(0.0, 0.0),
+            earth_fixed_camera: false,
+            follow_satellite: false,
+            show_camera_windows: false,
             show_orbits: true,
             show_links: true,
             show_intra_links: false,
@@ -2214,10 +2242,22 @@ impl Default for TabSettings {
             show_ground_track: false,
             show_axes: false,
             hide_behind_earth: true,
-            follow_satellite: false,
             render_planet: true,
             show_altitude_lines: false,
-            show_camera_windows: false,
+            show_devices: false,
+            show_polar_circle: false,
+            show_equator: false,
+            show_borders: false,
+            show_cities: false,
+            show_day_night: false,
+            show_terminator: false,
+            show_clouds: false,
+            show_stars: false,
+            show_milky_way: false,
+            show_gravity_grid: false,
+            sat_radius: 1.5,
+            link_width: 0.25,
+            fixed_sizes: false,
         }
     }
 }
@@ -2229,7 +2269,6 @@ struct TabConfig {
     show_stats: bool,
     use_local_settings: bool,
     local_settings: TabSettings,
-    show_settings_window: bool,
 }
 
 impl TabConfig {
@@ -2247,7 +2286,6 @@ impl TabConfig {
             show_stats: false,
             use_local_settings: false,
             local_settings: TabSettings::default(),
-            show_settings_window: false,
         }
     }
 
@@ -2333,6 +2371,8 @@ struct ViewerState {
     show_milky_way: bool,
     show_borders: bool,
     show_cities: bool,
+    show_gravity_grid: bool,
+    active_tab_idx: usize,
     #[cfg(not(target_arch = "wasm32"))]
     geo_data: GeoLoadState,
     #[cfg(not(target_arch = "wasm32"))]
@@ -2465,6 +2505,8 @@ impl App {
                 show_milky_way: false,
                 show_borders: false,
                 show_cities: false,
+                show_gravity_grid: false,
+                active_tab_idx: 0,
                 #[cfg(not(target_arch = "wasm32"))]
                 geo_data: GeoLoadState::NotLoaded,
                 #[cfg(not(target_arch = "wasm32"))]
@@ -2616,6 +2658,7 @@ impl TabViewer for ViewerState {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         if *tab < self.tabs.len() {
+            self.active_tab_idx = *tab;
             self.render_tab_ui(ui, *tab);
         }
     }
@@ -2650,16 +2693,7 @@ impl TabViewer for ViewerState {
 
     fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab, _surface: SurfaceIndex, _node: NodeIndex) {
         if *tab < self.tabs.len() {
-            let t = &mut self.tabs[*tab];
-            if ui.checkbox(&mut t.use_local_settings, "Override global settings").changed() {
-                if t.use_local_settings {
-                    t.show_settings_window = true;
-                }
-            }
-            if ui.button("Tab Settings").clicked() {
-                t.show_settings_window = !t.show_settings_window;
-                ui.close();
-            }
+            ui.checkbox(&mut self.tabs[*tab].use_local_settings, "Override global settings");
         }
     }
 }
@@ -2693,53 +2727,6 @@ impl ViewerState {
             }
             planet.satellite_cameras.retain(|c| !planet.cameras_to_remove.contains(&c.id));
             planet.cameras_to_remove.clear();
-        }
-
-        if self.tabs[tab_idx].show_settings_window {
-            let tab = &mut self.tabs[tab_idx];
-            egui::Window::new(format!("Tab Settings"))
-                .id(egui::Id::new(format!("tab_settings_{}", tab_idx)))
-                .open(&mut tab.show_settings_window)
-                .default_width(200.0)
-                .show(ui.ctx(), |ui| {
-                    ui.checkbox(&mut tab.use_local_settings, "Override global settings");
-                    ui.separator();
-                    ui.add_enabled_ui(tab.use_local_settings, |ui| {
-                        let s = &mut tab.local_settings;
-                        ui.checkbox(&mut s.show_orbits, "Show orbits");
-                        ui.checkbox(&mut s.show_links, "Inter-plane links");
-                        ui.checkbox(&mut s.show_intra_links, "Intra-plane links");
-                        ui.checkbox(&mut s.show_routing_paths, "Show routing paths");
-                        if s.show_routing_paths {
-                            ui.indent("local_routing", |ui| {
-                                ui.checkbox(&mut s.show_manhattan_path, "Manhattan (red)");
-                                ui.checkbox(&mut s.show_shortest_path, "Shortest (green)");
-                            });
-                        }
-                        ui.checkbox(&mut s.show_asc_desc_colors, "Asc/Desc colors");
-                        ui.checkbox(&mut s.show_torus, "Show torus");
-                        ui.checkbox(&mut s.show_ground_track, "Show ground");
-                        ui.checkbox(&mut s.show_axes, "Show axes");
-                        ui.checkbox(&mut s.show_altitude_lines, "Altitude lines");
-                        ui.checkbox(&mut s.show_coverage, "Show coverage");
-                        if s.show_coverage {
-                            ui.horizontal(|ui| {
-                                ui.label("Angle:");
-                                ui.add(egui::DragValue::new(&mut s.coverage_angle)
-                                    .range(0.5..=70.0).speed(0.1).suffix("°"));
-                            });
-                        }
-                        ui.checkbox(&mut s.render_planet, "Show planet");
-                        {
-                            let mut show_behind = !s.hide_behind_earth;
-                            if ui.add_enabled(s.render_planet, egui::Checkbox::new(&mut show_behind, "Show behind planet")).changed() {
-                                s.hide_behind_earth = !show_behind;
-                            }
-                        }
-                        ui.checkbox(&mut s.follow_satellite, "Follow satellite");
-                        ui.checkbox(&mut s.show_camera_windows, "Camera windows");
-                    });
-                });
         }
 
         let num_planets = self.tabs[tab_idx].planets.len();
@@ -3766,8 +3753,11 @@ impl ViewerState {
             let show_axes = if use_local { local.show_axes } else { self.show_axes };
             let show_coverage = if use_local { local.show_coverage } else { self.show_coverage };
             let coverage_angle = if use_local { local.coverage_angle } else { self.coverage_angle };
-            let rotation = self.rotation;
-            let body_rot_angle = body_rotation_angle(celestial_body, self.time, self.current_gmst);
+            let time = if use_local { local.time } else { self.time };
+            let rotation = if use_local { local.rotation } else { self.rotation };
+            let zoom = if use_local { local.zoom } else { self.zoom };
+            let earth_fixed_camera = if use_local { local.earth_fixed_camera } else { self.earth_fixed_camera };
+            let body_rot_angle = body_rotation_angle(celestial_body, time, self.current_gmst);
             let cos_a = body_rot_angle.cos();
             let sin_a = body_rot_angle.sin();
             let body_y_rotation = Matrix3::new(
@@ -3775,13 +3765,12 @@ impl ViewerState {
                 0.0, 1.0, 0.0,
                 -sin_a, 0.0, cos_a,
             );
-            let satellite_rotation = if self.earth_fixed_camera {
-                self.rotation * body_y_rotation.transpose()
+            let satellite_rotation = if earth_fixed_camera {
+                rotation * body_y_rotation.transpose()
             } else {
-                self.rotation
+                rotation
             };
-            let zoom = self.zoom;
-            let sat_radius = self.sat_radius;
+            let sat_radius = if use_local { local.sat_radius } else { self.sat_radius };
             let show_links = if use_local { local.show_links } else { self.show_links };
             let show_intra_links = if use_local { local.show_intra_links } else { self.show_intra_links };
             let render_planet = if use_local { local.render_planet } else { self.render_planet };
@@ -3795,15 +3784,21 @@ impl ViewerState {
             let show_altitude_lines = if use_local { local.show_altitude_lines } else { self.show_altitude_lines };
             let tex_res = self.texture_resolution;
             let planet_handle = self.planet_image_handles.get(&(celestial_body, skin, tex_res));
-            let time = self.time;
             let torus_rotation = self.torus_rotation;
             let torus_zoom = self.torus_zoom;
-            let link_width = self.link_width;
-            let fixed_sizes = self.fixed_sizes;
+            let link_width = if use_local { local.link_width } else { self.link_width };
+            let fixed_sizes = if use_local { local.fixed_sizes } else { self.fixed_sizes };
             let flattening = celestial_body.flattening();
-            let show_polar_circle = self.show_polar_circle;
-            let show_equator = self.show_equator;
-            let show_terminator = self.show_terminator && self.show_day_night;
+            let show_polar_circle = if use_local { local.show_polar_circle } else { self.show_polar_circle };
+            let show_equator = if use_local { local.show_equator } else { self.show_equator };
+            let show_day_night = if use_local { local.show_day_night } else { self.show_day_night };
+            let show_terminator = (if use_local { local.show_terminator } else { self.show_terminator }) && show_day_night;
+            let show_clouds = if use_local { local.show_clouds } else { self.show_clouds };
+            let show_stars = if use_local { local.show_stars } else { self.show_stars };
+            let show_milky_way = (if use_local { local.show_milky_way } else { self.show_milky_way }) && show_stars;
+            let show_devices = if use_local { local.show_devices } else { self.show_devices };
+            let show_borders = if use_local { local.show_borders } else { self.show_borders };
+            let show_cities = if use_local { local.show_cities } else { self.show_cities };
             let detail_gl_info = self.tile_overlay_detail_gl_info(celestial_body);
             self.view_width = half_width;
             self.view_height = view_size;
@@ -3851,13 +3846,13 @@ impl ViewerState {
                         self.sphere_renderer.as_ref(),
                         (celestial_body, skin, tex_res),
                         &body_y_rotation,
-                        self.earth_fixed_camera,
+                        earth_fixed_camera,
                         self.use_gpu_rendering,
-                        self.show_clouds,
-                        self.show_day_night,
+                        show_clouds,
+                        show_day_night,
                         {
                             use chrono::Datelike;
-                            let timestamp = self.start_timestamp + chrono::Duration::seconds(self.time as i64);
+                            let timestamp = self.start_timestamp + chrono::Duration::seconds(time as i64);
                             let day_of_year = timestamp.ordinal() as f64;
                             let declination: f64 = -23.45 * ((360.0_f64 / 365.0) * (day_of_year + 10.0)).to_radians().cos();
                             let decl_rad = declination.to_radians();
@@ -3870,29 +3865,34 @@ impl ViewerState {
                             let sun_shader = body_y_rotation.transpose() * sun_inertial;
                             [sun_shader.x as f32, sun_shader.y as f32, sun_shader.z as f32]
                         },
-                        self.time,
+                        time,
                         &mut planet.ground_stations,
                         &mut planet.areas_of_interest,
-                        if self.show_devices { &planet.device_layers } else { &[] },
+                        if show_devices { &planet.device_layers } else { &[] },
                         body_rot_angle,
                         &mut self.dragging_place,
                         (tab_idx, planet_idx),
                         detail_gl_info,
-                        self.show_stars,
-                        self.show_milky_way,
+                        show_stars,
+                        show_milky_way,
                         #[cfg(not(target_arch = "wasm32"))]
-                        { match &self.geo_data { GeoLoadState::Loaded(d) => d.borders.as_slice(), _ => &[] } },
+                        { match &self.geo_data { GeoLoadState::Loaded(d) => if show_borders { d.borders.as_slice() } else { &[] }, _ => &[] } },
                         #[cfg(target_arch = "wasm32")]
                         &[],
                         #[cfg(not(target_arch = "wasm32"))]
-                        { match &self.geo_data { GeoLoadState::Loaded(d) => d.cities.as_slice(), _ => &[] } },
+                        { match &self.geo_data { GeoLoadState::Loaded(d) => if show_cities { d.cities.as_slice() } else { &[] }, _ => &[] } },
                         #[cfg(target_arch = "wasm32")]
                         &[],
-                        self.show_borders,
-                        self.show_cities,
+                        show_borders,
+                        show_cities,
                     );
-                    self.rotation = rot;
-                    self.zoom = new_zoom;
+                    if use_local {
+                        self.tabs[tab_idx].local_settings.rotation = rot;
+                        self.tabs[tab_idx].local_settings.zoom = new_zoom;
+                    } else {
+                        self.rotation = rot;
+                        self.zoom = new_zoom;
+                    }
                 });
 
                 ui.add_space(5.0);
@@ -3950,8 +3950,11 @@ impl ViewerState {
             let show_axes = if use_local { local.show_axes } else { self.show_axes };
             let show_coverage = if use_local { local.show_coverage } else { self.show_coverage };
             let coverage_angle = if use_local { local.coverage_angle } else { self.coverage_angle };
-            let rotation = self.rotation;
-            let body_rot_angle = body_rotation_angle(celestial_body, self.time, self.current_gmst);
+            let time = if use_local { local.time } else { self.time };
+            let rotation = if use_local { local.rotation } else { self.rotation };
+            let zoom = if use_local { local.zoom } else { self.zoom };
+            let earth_fixed_camera = if use_local { local.earth_fixed_camera } else { self.earth_fixed_camera };
+            let body_rot_angle = body_rotation_angle(celestial_body, time, self.current_gmst);
             let cos_a = body_rot_angle.cos();
             let sin_a = body_rot_angle.sin();
             let body_y_rotation = Matrix3::new(
@@ -3959,13 +3962,12 @@ impl ViewerState {
                 0.0, 1.0, 0.0,
                 -sin_a, 0.0, cos_a,
             );
-            let satellite_rotation = if self.earth_fixed_camera {
-                self.rotation * body_y_rotation.transpose()
+            let satellite_rotation = if earth_fixed_camera {
+                rotation * body_y_rotation.transpose()
             } else {
-                self.rotation
+                rotation
             };
-            let zoom = self.zoom;
-            let sat_radius = self.sat_radius;
+            let sat_radius = if use_local { local.sat_radius } else { self.sat_radius };
             let show_links = if use_local { local.show_links } else { self.show_links };
             let show_intra_links = if use_local { local.show_intra_links } else { self.show_intra_links };
             let render_planet = if use_local { local.render_planet } else { self.render_planet };
@@ -3979,12 +3981,19 @@ impl ViewerState {
             let show_altitude_lines = if use_local { local.show_altitude_lines } else { self.show_altitude_lines };
             let tex_res = self.texture_resolution;
             let planet_handle = self.planet_image_handles.get(&(celestial_body, skin, tex_res));
-            let link_width = self.link_width;
-            let fixed_sizes = self.fixed_sizes;
+            let link_width = if use_local { local.link_width } else { self.link_width };
+            let fixed_sizes = if use_local { local.fixed_sizes } else { self.fixed_sizes };
             let flattening = celestial_body.flattening();
-            let show_polar_circle = self.show_polar_circle;
-            let show_equator = self.show_equator;
-            let show_terminator = self.show_terminator && self.show_day_night;
+            let show_polar_circle = if use_local { local.show_polar_circle } else { self.show_polar_circle };
+            let show_equator = if use_local { local.show_equator } else { self.show_equator };
+            let show_day_night = if use_local { local.show_day_night } else { self.show_day_night };
+            let show_terminator = (if use_local { local.show_terminator } else { self.show_terminator }) && show_day_night;
+            let show_clouds = if use_local { local.show_clouds } else { self.show_clouds };
+            let show_stars = if use_local { local.show_stars } else { self.show_stars };
+            let show_milky_way = (if use_local { local.show_milky_way } else { self.show_milky_way }) && show_stars;
+            let show_devices = if use_local { local.show_devices } else { self.show_devices };
+            let show_borders = if use_local { local.show_borders } else { self.show_borders };
+            let show_cities = if use_local { local.show_cities } else { self.show_cities };
             let detail_gl_info = self.tile_overlay_detail_gl_info(celestial_body);
             self.view_width = viz_width;
             self.view_height = earth_height;
@@ -4030,13 +4039,13 @@ impl ViewerState {
                 self.sphere_renderer.as_ref(),
                 (celestial_body, skin, tex_res),
                 &body_y_rotation,
-                self.earth_fixed_camera,
+                earth_fixed_camera,
                 self.use_gpu_rendering,
-                self.show_clouds,
-                self.show_day_night,
+                show_clouds,
+                show_day_night,
                 {
                     use chrono::Datelike;
-                    let timestamp = self.start_timestamp + chrono::Duration::seconds(self.time as i64);
+                    let timestamp = self.start_timestamp + chrono::Duration::seconds(time as i64);
                     let day_of_year = timestamp.ordinal() as f64;
                     let declination: f64 = -23.45 * ((360.0_f64 / 365.0) * (day_of_year + 10.0)).to_radians().cos();
                     let decl_rad = declination.to_radians();
@@ -4049,29 +4058,34 @@ impl ViewerState {
                     let sun_shader = body_y_rotation.transpose() * sun_inertial;
                     [sun_shader.x as f32, sun_shader.y as f32, sun_shader.z as f32]
                 },
-                self.time,
+                time,
                 &mut planet.ground_stations,
                 &mut planet.areas_of_interest,
-                if self.show_devices { &planet.device_layers } else { &[] },
+                if show_devices { &planet.device_layers } else { &[] },
                 body_rot_angle,
                 &mut self.dragging_place,
                 (tab_idx, planet_idx),
                 detail_gl_info,
-                self.show_stars,
-                self.show_milky_way,
+                show_stars,
+                show_milky_way,
                 #[cfg(not(target_arch = "wasm32"))]
-                { match &self.geo_data { GeoLoadState::Loaded(d) => d.borders.as_slice(), _ => &[] } },
+                { match &self.geo_data { GeoLoadState::Loaded(d) => if show_borders { d.borders.as_slice() } else { &[] }, _ => &[] } },
                 #[cfg(target_arch = "wasm32")]
                 &[],
                 #[cfg(not(target_arch = "wasm32"))]
-                { match &self.geo_data { GeoLoadState::Loaded(d) => d.cities.as_slice(), _ => &[] } },
+                { match &self.geo_data { GeoLoadState::Loaded(d) => if show_cities { d.cities.as_slice() } else { &[] }, _ => &[] } },
                 #[cfg(target_arch = "wasm32")]
                 &[],
-                self.show_borders,
-                self.show_cities,
+                show_borders,
+                show_cities,
             );
-            self.rotation = rot;
-            self.zoom = new_zoom;
+            if use_local {
+                self.tabs[tab_idx].local_settings.rotation = rot;
+                self.tabs[tab_idx].local_settings.zoom = new_zoom;
+            } else {
+                self.rotation = rot;
+                self.zoom = new_zoom;
+            }
 
             if has_secondary {
                 let separator_rect = ui.available_rect_before_wrap();
@@ -4202,11 +4216,27 @@ impl ViewerState {
             .and_then(|t| t.planets.first())
             .map(|p| p.celestial_body)
             .unwrap_or(CelestialBody::Earth);
-        let body_rotation = body_rotation_angle(current_body, self.time, self.current_gmst);
+
+        let active = self.active_tab_idx;
+        let use_local = active < self.tabs.len() && self.tabs[active].use_local_settings;
+
+        if use_local {
+            ui.colored_label(egui::Color32::from_rgb(255, 200, 80), "Tab Override");
+            ui.separator();
+        }
+
+        let (time_ref, rotation_ref, zoom_ref, speed_ref, animate_ref, earth_fixed_ref, follow_sat_ref, show_cam_ref) = if use_local {
+            let s = &mut self.tabs[active].local_settings;
+            (&mut s.time, &mut s.rotation, &mut s.zoom, &mut s.speed, &mut s.animate, &mut s.earth_fixed_camera, &mut s.follow_satellite, &mut s.show_camera_windows)
+        } else {
+            (&mut self.time, &mut self.rotation, &mut self.zoom, &mut self.speed, &mut self.animate, &mut self.earth_fixed_camera, &mut self.follow_satellite, &mut self.show_camera_windows)
+        };
+
+        let body_rotation = body_rotation_angle(current_body, *time_ref, self.current_gmst);
 
         ui.label(egui::RichText::new("Camera").strong());
-        let (lat, base_lon) = matrix_to_lat_lon(&self.rotation);
-        let geo_lon = if self.earth_fixed_camera {
+        let (lat, base_lon) = matrix_to_lat_lon(rotation_ref);
+        let geo_lon = if *earth_fixed_ref {
             base_lon
         } else {
             let mut l = base_lon - body_rotation;
@@ -4222,25 +4252,25 @@ impl ViewerState {
             ui.label("Lon:");
             let lon_changed = ui.add(egui::DragValue::new(&mut lon_deg).speed(0.5).max_decimals(1).suffix("°")).changed();
             ui.label("Alt:");
-            let mut alt_km = 10000.0 / self.zoom;
+            let mut alt_km = 10000.0 / *zoom_ref;
             if ui.add(egui::DragValue::new(&mut alt_km).range(0.5..=1000000.0).speed(100.0).suffix(" km")).changed() {
-                self.zoom = (10000.0 / alt_km).clamp(0.01, 20000.0);
+                *zoom_ref = (10000.0 / alt_km).clamp(0.01, 20000.0);
             }
             lat_deg = lat_deg.clamp(-90.0, 90.0);
             while lon_deg > 180.0 { lon_deg -= 360.0; }
             while lon_deg < -180.0 { lon_deg += 360.0; }
             if lat_changed || lon_changed {
-                let target_lon = if self.earth_fixed_camera {
+                let target_lon = if *earth_fixed_ref {
                     lon_deg.to_radians()
                 } else {
                     lon_deg.to_radians() + body_rotation
                 };
-                self.rotation = lat_lon_to_matrix(lat_deg.to_radians(), target_lon);
+                *rotation_ref = lat_lon_to_matrix(lat_deg.to_radians(), target_lon);
             }
         });
-        let was_earth_fixed = self.earth_fixed_camera;
-        ui.checkbox(&mut self.earth_fixed_camera, "Fixed Lat/Lon");
-        if self.earth_fixed_camera != was_earth_fixed {
+        let was_earth_fixed = *earth_fixed_ref;
+        ui.checkbox(earth_fixed_ref, "Fixed Lat/Lon");
+        if *earth_fixed_ref != was_earth_fixed {
             let cos_a = body_rotation.cos();
             let sin_a = body_rotation.sin();
             let body_y_rot = Matrix3::new(
@@ -4248,53 +4278,53 @@ impl ViewerState {
                 0.0, 1.0, 0.0,
                 -sin_a, 0.0, cos_a,
             );
-            if self.earth_fixed_camera {
-                self.rotation = self.rotation * body_y_rot;
+            if *earth_fixed_ref {
+                *rotation_ref = *rotation_ref * body_y_rot;
             } else {
-                self.rotation = self.rotation * body_y_rot.transpose();
+                *rotation_ref = *rotation_ref * body_y_rot.transpose();
             }
         }
         ui.horizontal(|ui| {
             for (label, lat, lon) in [("N", 90.0_f64, 0.0_f64), ("S", -90.0, 0.0), ("E", 0.0, 90.0), ("W", 0.0, -90.0)] {
                 if ui.button(label).clicked() {
-                    let target_lon = if self.earth_fixed_camera {
+                    let target_lon = if *earth_fixed_ref {
                         lon.to_radians()
                     } else {
                         lon.to_radians() + body_rotation
                     };
-                    self.rotation = lat_lon_to_matrix(lat.to_radians(), target_lon);
+                    *rotation_ref = lat_lon_to_matrix(lat.to_radians(), target_lon);
                 }
             }
         });
 
-        ui.checkbox(&mut self.follow_satellite, "Follow satellite");
-        ui.checkbox(&mut self.show_camera_windows, "Show camera windows");
+        ui.checkbox(follow_sat_ref, "Follow satellite");
+        ui.checkbox(show_cam_ref, "Show camera windows");
 
         ui.separator();
         ui.label(egui::RichText::new("Simulation").strong());
         ui.horizontal(|ui| {
             ui.label("Speed:");
-            ui.add(egui::DragValue::new(&mut self.speed).range(-86400.0..=86400.0).speed(1.0));
+            ui.add(egui::DragValue::new(speed_ref).range(-86400.0..=86400.0).speed(1.0));
             if ui.button("⏪").clicked() {
-                self.speed = -self.speed;
+                *speed_ref = -*speed_ref;
             }
-            let pause_label = if self.animate { "⏸" } else { "▶" };
+            let pause_label = if *animate_ref { "⏸" } else { "▶" };
             if ui.button(pause_label).clicked() {
-                self.animate = !self.animate;
+                *animate_ref = !*animate_ref;
             }
         });
         let start = self.start_timestamp;
         let real_timestamp = start + Duration::seconds(self.real_time as i64);
-        let current_ts = start + Duration::seconds(self.time as i64);
+        let current_ts = start + Duration::seconds(*time_ref as i64);
         {
             use chrono::Timelike;
             use chrono::Datelike;
             let local = current_ts.with_timezone(&Local);
-            let orig_time = self.time;
-            let mut t_sec = self.time;
-            let mut t_min = self.time;
-            let mut t_hour = self.time;
-            let mut t_day = self.time;
+            let orig_time = *time_ref;
+            let mut t_sec = *time_ref;
+            let mut t_min = *time_ref;
+            let mut t_hour = *time_ref;
+            let mut t_day = *time_ref;
             let total_months = local.year() as f64 * 12.0 + local.month() as f64 - 1.0;
             let mut t_month = total_months;
             let mut t_year = total_months;
@@ -4382,18 +4412,18 @@ impl ViewerState {
                         }
                     }));
             });
-            if t_sec != self.time { self.time = t_sec; }
-            else if t_min != self.time {
-                let d = t_min - self.time;
-                self.time += (d / 60.0).round() * 60.0;
+            if t_sec != *time_ref { *time_ref = t_sec; }
+            else if t_min != *time_ref {
+                let d = t_min - *time_ref;
+                *time_ref += (d / 60.0).round() * 60.0;
             }
-            else if t_hour != self.time {
-                let d = t_hour - self.time;
-                self.time += (d / 3600.0).round() * 3600.0;
+            else if t_hour != *time_ref {
+                let d = t_hour - *time_ref;
+                *time_ref += (d / 3600.0).round() * 3600.0;
             }
-            else if t_day != self.time {
-                let d = t_day - self.time;
-                self.time += (d / 86400.0).round() * 86400.0;
+            else if t_day != *time_ref {
+                let d = t_day - *time_ref;
+                *time_ref += (d / 86400.0).round() * 86400.0;
             }
             else {
                 let apply_month_delta = |raw: f64, unit: f64| -> Option<i32> {
@@ -4422,7 +4452,7 @@ impl ViewerState {
                     if let Some(date) = chrono::NaiveDate::from_ymd_opt(y, m as u32, d) {
                         if let Some(dt) = date.and_time(local.time()).and_local_timezone(Local).single() {
                             let diff = dt.with_timezone(&Utc).signed_duration_since(start);
-                            self.time = diff.num_seconds() as f64;
+                            *time_ref = diff.num_seconds() as f64;
                         }
                     }
                 }
@@ -4431,92 +4461,152 @@ impl ViewerState {
         let real_local = real_timestamp.with_timezone(&Local);
         ui.label(format!("Real: {}", real_local.format("%H:%M:%S %d/%m/%Y %Z")));
         if ui.button("Sync time").clicked() {
-            self.time = self.real_time;
-        }
-        ui.separator();
-        ui.label(egui::RichText::new("Display").strong());
-        ui.checkbox(&mut self.show_orbits, "Show orbits");
-        ui.checkbox(&mut self.show_intra_links, "Intra-plane links");
-        ui.checkbox(&mut self.show_links, "Inter-plane links");
-        ui.checkbox(&mut self.show_routing_paths, "Show routing paths");
-        if self.show_routing_paths {
-            ui.indent("routing_opts", |ui| {
-                ui.checkbox(&mut self.show_manhattan_path, "Manhattan (red)");
-                ui.checkbox(&mut self.show_shortest_path, "Shortest distance (green)");
-            });
-        }
-        ui.checkbox(&mut self.show_asc_desc_colors, "Asc/Desc colors");
-        ui.checkbox(&mut self.single_color, "Monochrome planes");
-        ui.checkbox(&mut self.show_torus, "Show torus");
-        ui.checkbox(&mut self.auto_cycle_tabs, "Auto-cycle tabs");
-        if self.auto_cycle_tabs {
-            ui.horizontal(|ui| {
-                ui.label("Interval:");
-                ui.add(egui::DragValue::new(&mut self.cycle_interval).range(1.0..=60.0).speed(0.5).suffix("s"));
-            });
+            *time_ref = self.real_time;
         }
 
-        ui.separator();
-        ui.label(egui::RichText::new("Overlays").strong());
-        ui.checkbox(&mut self.show_coverage, "Show coverage");
-        if self.show_coverage {
-            ui.horizontal(|ui| {
-                ui.label("Angle:");
-                ui.add(egui::DragValue::new(&mut self.coverage_angle)
-                    .range(0.5..=70.0)
-                    .speed(0.1)
-                    .max_decimals(1)
-                    .suffix("°"));
-            });
-        }
-        ui.checkbox(&mut self.show_altitude_lines, "Altitude lines");
-        ui.checkbox(&mut self.show_ground_track, "Show ground");
-        ui.checkbox(&mut self.show_devices, "Show devices");
-        ui.checkbox(&mut self.show_axes, "Show axes");
-        ui.checkbox(&mut self.show_polar_circle, "Show polar circle");
-        ui.checkbox(&mut self.show_equator, "Show equator");
-        ui.checkbox(&mut self.show_borders, "Country borders");
-        ui.checkbox(&mut self.show_cities, "City labels");
-        ui.checkbox(&mut self.show_day_night, "Day/night cycle");
-        ui.add_enabled(self.show_day_night, egui::Checkbox::new(&mut self.show_terminator, "Show terminator"));
+        if use_local {
+            let s = &mut self.tabs[active].local_settings;
 
-        ui.separator();
-        ui.label(egui::RichText::new("Rendering").strong());
-        ui.checkbox(&mut self.dark_mode, "Dark mode");
-        ui.horizontal(|ui| {
-            ui.label("Texture:");
-            egui::ComboBox::from_id_salt("tex_res")
-                .selected_text(self.texture_resolution.label())
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R512, "512");
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R1024, "1K");
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R2048, "2K");
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R8192, "8K");
-                    #[cfg(not(target_arch = "wasm32"))]
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R21504, "21K");
+            ui.separator();
+            ui.label(egui::RichText::new("Display").strong());
+            ui.checkbox(&mut s.show_orbits, "Show orbits");
+            ui.checkbox(&mut s.show_intra_links, "Intra-plane links");
+            ui.checkbox(&mut s.show_links, "Inter-plane links");
+            ui.checkbox(&mut s.show_routing_paths, "Show routing paths");
+            if s.show_routing_paths {
+                ui.indent("routing_opts", |ui| {
+                    ui.checkbox(&mut s.show_manhattan_path, "Manhattan (red)");
+                    ui.checkbox(&mut s.show_shortest_path, "Shortest distance (green)");
                 });
-        });
-        ui.checkbox(&mut self.use_gpu_rendering, "GPU rendering");
-        #[cfg(not(target_arch = "wasm32"))]
-        ui.checkbox(&mut self.tile_overlay.enabled, "Satellite tiles (Esri)");
-        ui.checkbox(&mut self.render_planet, "Show planet");
-        {
-            let mut show_behind = !self.hide_behind_earth;
-            if ui.add_enabled(self.render_planet, egui::Checkbox::new(&mut show_behind, "Show behind planet")).changed() {
-                self.hide_behind_earth = !show_behind;
             }
-        }
-        ui.checkbox(&mut self.show_clouds, "Show clouds");
-        ui.checkbox(&mut self.show_stars, "Show stars");
-        ui.add_enabled(self.show_stars, egui::Checkbox::new(&mut self.show_milky_way, "Show Milky Way"));
-        ui.horizontal(|ui| {
-            ui.label("Sat:");
-            ui.add(egui::DragValue::new(&mut self.sat_radius).range(1.0..=15.0).speed(0.1));
-            ui.label("Link:");
-            ui.add(egui::DragValue::new(&mut self.link_width).range(0.1..=5.0).speed(0.1));
-        });
-        ui.checkbox(&mut self.fixed_sizes, "Fixed sizes (ignore alt)");
+            ui.checkbox(&mut s.show_asc_desc_colors, "Asc/Desc colors");
+            ui.checkbox(&mut s.single_color, "Monochrome planes");
+            ui.checkbox(&mut s.show_torus, "Show torus");
 
+            ui.separator();
+            ui.label(egui::RichText::new("Overlays").strong());
+            ui.checkbox(&mut s.show_coverage, "Show coverage");
+            if s.show_coverage {
+                ui.horizontal(|ui| {
+                    ui.label("Angle:");
+                    ui.add(egui::DragValue::new(&mut s.coverage_angle)
+                        .range(0.5..=70.0).speed(0.1).max_decimals(1).suffix("°"));
+                });
+            }
+            ui.checkbox(&mut s.show_altitude_lines, "Altitude lines");
+            ui.checkbox(&mut s.show_ground_track, "Show ground");
+            ui.checkbox(&mut s.show_devices, "Show devices");
+            ui.checkbox(&mut s.show_axes, "Show axes");
+            ui.checkbox(&mut s.show_polar_circle, "Show polar circle");
+            ui.checkbox(&mut s.show_equator, "Show equator");
+            ui.checkbox(&mut s.show_borders, "Country borders");
+            ui.checkbox(&mut s.show_cities, "City labels");
+            ui.checkbox(&mut s.show_day_night, "Day/night cycle");
+            ui.add_enabled(s.show_day_night, egui::Checkbox::new(&mut s.show_terminator, "Show terminator"));
+
+            ui.separator();
+            ui.label(egui::RichText::new("Rendering").strong());
+            ui.checkbox(&mut s.render_planet, "Show planet");
+            {
+                let mut show_behind = !s.hide_behind_earth;
+                if ui.add_enabled(s.render_planet, egui::Checkbox::new(&mut show_behind, "Show behind planet")).changed() {
+                    s.hide_behind_earth = !show_behind;
+                }
+            }
+            ui.checkbox(&mut s.show_clouds, "Show clouds");
+            ui.checkbox(&mut s.show_stars, "Show stars");
+            ui.add_enabled(s.show_stars, egui::Checkbox::new(&mut s.show_milky_way, "Show Milky Way"));
+            ui.checkbox(&mut s.show_gravity_grid, "Gravity grid");
+            ui.horizontal(|ui| {
+                ui.label("Sat:");
+                ui.add(egui::DragValue::new(&mut s.sat_radius).range(1.0..=15.0).speed(0.1));
+                ui.label("Link:");
+                ui.add(egui::DragValue::new(&mut s.link_width).range(0.1..=5.0).speed(0.1));
+            });
+            ui.checkbox(&mut s.fixed_sizes, "Fixed sizes (ignore alt)");
+        } else {
+            ui.separator();
+            ui.label(egui::RichText::new("Display").strong());
+            ui.checkbox(&mut self.show_orbits, "Show orbits");
+            ui.checkbox(&mut self.show_intra_links, "Intra-plane links");
+            ui.checkbox(&mut self.show_links, "Inter-plane links");
+            ui.checkbox(&mut self.show_routing_paths, "Show routing paths");
+            if self.show_routing_paths {
+                ui.indent("routing_opts", |ui| {
+                    ui.checkbox(&mut self.show_manhattan_path, "Manhattan (red)");
+                    ui.checkbox(&mut self.show_shortest_path, "Shortest distance (green)");
+                });
+            }
+            ui.checkbox(&mut self.show_asc_desc_colors, "Asc/Desc colors");
+            ui.checkbox(&mut self.single_color, "Monochrome planes");
+            ui.checkbox(&mut self.show_torus, "Show torus");
+            ui.checkbox(&mut self.auto_cycle_tabs, "Auto-cycle tabs");
+            if self.auto_cycle_tabs {
+                ui.horizontal(|ui| {
+                    ui.label("Interval:");
+                    ui.add(egui::DragValue::new(&mut self.cycle_interval).range(1.0..=60.0).speed(0.5).suffix("s"));
+                });
+            }
+
+            ui.separator();
+            ui.label(egui::RichText::new("Overlays").strong());
+            ui.checkbox(&mut self.show_coverage, "Show coverage");
+            if self.show_coverage {
+                ui.horizontal(|ui| {
+                    ui.label("Angle:");
+                    ui.add(egui::DragValue::new(&mut self.coverage_angle)
+                        .range(0.5..=70.0).speed(0.1).max_decimals(1).suffix("°"));
+                });
+            }
+            ui.checkbox(&mut self.show_altitude_lines, "Altitude lines");
+            ui.checkbox(&mut self.show_ground_track, "Show ground");
+            ui.checkbox(&mut self.show_devices, "Show devices");
+            ui.checkbox(&mut self.show_axes, "Show axes");
+            ui.checkbox(&mut self.show_polar_circle, "Show polar circle");
+            ui.checkbox(&mut self.show_equator, "Show equator");
+            ui.checkbox(&mut self.show_borders, "Country borders");
+            ui.checkbox(&mut self.show_cities, "City labels");
+            ui.checkbox(&mut self.show_day_night, "Day/night cycle");
+            ui.add_enabled(self.show_day_night, egui::Checkbox::new(&mut self.show_terminator, "Show terminator"));
+
+            ui.separator();
+            ui.label(egui::RichText::new("Rendering").strong());
+            ui.checkbox(&mut self.dark_mode, "Dark mode");
+            ui.horizontal(|ui| {
+                ui.label("Texture:");
+                egui::ComboBox::from_id_salt("tex_res")
+                    .selected_text(self.texture_resolution.label())
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.texture_resolution, TextureResolution::R512, "512");
+                        ui.selectable_value(&mut self.texture_resolution, TextureResolution::R1024, "1K");
+                        ui.selectable_value(&mut self.texture_resolution, TextureResolution::R2048, "2K");
+                        ui.selectable_value(&mut self.texture_resolution, TextureResolution::R8192, "8K");
+                        #[cfg(not(target_arch = "wasm32"))]
+                        ui.selectable_value(&mut self.texture_resolution, TextureResolution::R21504, "21K");
+                    });
+            });
+            ui.checkbox(&mut self.use_gpu_rendering, "GPU rendering");
+            #[cfg(not(target_arch = "wasm32"))]
+            ui.checkbox(&mut self.tile_overlay.enabled, "Satellite tiles (Esri)");
+            ui.checkbox(&mut self.render_planet, "Show planet");
+            {
+                let mut show_behind = !self.hide_behind_earth;
+                if ui.add_enabled(self.render_planet, egui::Checkbox::new(&mut show_behind, "Show behind planet")).changed() {
+                    self.hide_behind_earth = !show_behind;
+                }
+            }
+            ui.checkbox(&mut self.show_clouds, "Show clouds");
+            ui.checkbox(&mut self.show_stars, "Show stars");
+            ui.add_enabled(self.show_stars, egui::Checkbox::new(&mut self.show_milky_way, "Show Milky Way"));
+            ui.checkbox(&mut self.show_gravity_grid, "Gravity grid");
+            ui.horizontal(|ui| {
+                ui.label("Sat:");
+                ui.add(egui::DragValue::new(&mut self.sat_radius).range(1.0..=15.0).speed(0.1));
+                ui.label("Link:");
+                ui.add(egui::DragValue::new(&mut self.link_width).range(0.1..=5.0).speed(0.1));
+            });
+            ui.checkbox(&mut self.fixed_sizes, "Fixed sizes (ignore alt)");
+        }
     }
 
     #[allow(unused_variables)]
@@ -5516,26 +5606,39 @@ impl eframe::App for App {
         v.real_time += dt;
 
         ctx.request_repaint();
+
         if v.animate {
             v.time += dt * v.speed;
-            let sim_seconds = dt * v.speed;
-            for tab in &mut v.tabs {
-                for planet in &mut tab.planets {
-                    let mu = planet.celestial_body.mu();
-                    let r_planet = planet.celestial_body.radius_km();
-                    for cons in &mut planet.constellations {
-                        if cons.drag_enabled && cons.altitude_km > 0.0 {
-                            let h = cons.altitude_km;
-                            let r = r_planet + h;
-                            let scale_height = 60.0;
-                            let rho_ref = 2.8e-12;
-                            let h_ref = 400.0;
-                            let rho = rho_ref * ((h_ref - h) / scale_height).exp();
-                            let v_ms = (mu / r).sqrt() * 1000.0;
-                            let a_m = r * 1000.0;
-                            let dh_ms = -rho * v_ms * a_m / cons.ballistic_coeff;
-                            cons.altitude_km = (h + dh_ms * sim_seconds / 1000.0).max(0.0);
-                        }
+        }
+        for tab in &mut v.tabs {
+            if tab.use_local_settings && tab.local_settings.animate {
+                tab.local_settings.time += dt * tab.local_settings.speed;
+            }
+        }
+
+        let global_sim_seconds = if v.animate { dt * v.speed } else { 0.0 };
+        for tab in &mut v.tabs {
+            let sim_seconds = if tab.use_local_settings {
+                if tab.local_settings.animate { dt * tab.local_settings.speed } else { 0.0 }
+            } else {
+                global_sim_seconds
+            };
+            if sim_seconds.abs() < 1e-9 { continue; }
+            for planet in &mut tab.planets {
+                let mu = planet.celestial_body.mu();
+                let r_planet = planet.celestial_body.radius_km();
+                for cons in &mut planet.constellations {
+                    if cons.drag_enabled && cons.altitude_km > 0.0 {
+                        let h = cons.altitude_km;
+                        let r = r_planet + h;
+                        let scale_height = 60.0;
+                        let rho_ref = 2.8e-12;
+                        let h_ref = 400.0;
+                        let rho = rho_ref * ((h_ref - h) / scale_height).exp();
+                        let v_ms = (mu / r).sqrt() * 1000.0;
+                        let a_m = r * 1000.0;
+                        let dh_ms = -rho * v_ms * a_m / cons.ballistic_coeff;
+                        cons.altitude_km = (h + dh_ms * sim_seconds / 1000.0).max(0.0);
                     }
                 }
             }
@@ -5981,6 +6084,56 @@ impl eframe::App for App {
                     ui.horizontal(|ui| {
                         ui.add_space(4.0);
                         ui.strong("Settings");
+                        let active = self.viewer.active_tab_idx;
+                        if active < self.viewer.tabs.len() {
+                            let overriding = self.viewer.tabs[active].use_local_settings;
+                            let label = if overriding { "[Tab ✓]" } else { "[Tab]" };
+                            if ui.button(label).on_hover_text("Override settings for this tab").clicked() {
+                                if !overriding {
+                                    self.viewer.tabs[active].local_settings = TabSettings {
+                                        time: self.viewer.time,
+                                        speed: self.viewer.speed,
+                                        animate: self.viewer.animate,
+                                        zoom: self.viewer.zoom,
+                                        rotation: self.viewer.rotation,
+                                        earth_fixed_camera: self.viewer.earth_fixed_camera,
+                                        follow_satellite: self.viewer.follow_satellite,
+                                        show_camera_windows: self.viewer.show_camera_windows,
+                                        show_orbits: self.viewer.show_orbits,
+                                        show_links: self.viewer.show_links,
+                                        show_intra_links: self.viewer.show_intra_links,
+                                        show_coverage: self.viewer.show_coverage,
+                                        coverage_angle: self.viewer.coverage_angle,
+                                        show_routing_paths: self.viewer.show_routing_paths,
+                                        show_manhattan_path: self.viewer.show_manhattan_path,
+                                        show_shortest_path: self.viewer.show_shortest_path,
+                                        show_asc_desc_colors: self.viewer.show_asc_desc_colors,
+                                        single_color: self.viewer.single_color,
+                                        show_torus: self.viewer.show_torus,
+                                        show_ground_track: self.viewer.show_ground_track,
+                                        show_axes: self.viewer.show_axes,
+                                        hide_behind_earth: self.viewer.hide_behind_earth,
+                                        render_planet: self.viewer.render_planet,
+                                        show_altitude_lines: self.viewer.show_altitude_lines,
+                                        show_devices: self.viewer.show_devices,
+                                        show_polar_circle: self.viewer.show_polar_circle,
+                                        show_equator: self.viewer.show_equator,
+                                        show_borders: self.viewer.show_borders,
+                                        show_cities: self.viewer.show_cities,
+                                        show_day_night: self.viewer.show_day_night,
+                                        show_terminator: self.viewer.show_terminator,
+                                        show_clouds: self.viewer.show_clouds,
+                                        show_stars: self.viewer.show_stars,
+                                        show_milky_way: self.viewer.show_milky_way,
+                                        show_gravity_grid: self.viewer.show_gravity_grid,
+                                        sat_radius: self.viewer.sat_radius,
+                                        link_width: self.viewer.link_width,
+                                        fixed_sizes: self.viewer.fixed_sizes,
+                                    };
+                                }
+                                self.viewer.tabs[active].use_local_settings = !overriding;
+                            }
+                        }
                         if ui.button("[Info]").clicked() {
                             self.viewer.show_info = !self.viewer.show_info;
                         }
