@@ -1,3 +1,8 @@
+//! Walker constellation calculations.
+//!
+//! Implements Walker Delta and Walker Star satellite constellation patterns,
+//! computing orbital positions, RAAN drift, and inter-satellite neighbor links.
+
 use std::f64::consts::PI;
 
 #[derive(Clone, Copy, PartialEq)]

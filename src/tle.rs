@@ -1,3 +1,8 @@
+//! Two-Line Element (TLE) satellite tracking.
+//!
+//! Parses and manages TLE data from CelesTrak for real satellite positions.
+//! Supports 50+ satellite groups including Starlink, GPS, ISS, and debris.
+
 use sgp4::Constants;
 
 use crate::celestial::CelestialBody;
