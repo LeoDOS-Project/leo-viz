@@ -1751,7 +1751,6 @@ struct TabSettings {
     show_clouds: bool,
     show_stars: bool,
     show_milky_way: bool,
-    show_gravity_grid: bool,
     sat_radius: f32,
     link_width: f32,
     fixed_sizes: bool,
@@ -1794,7 +1793,6 @@ impl Default for TabSettings {
             show_clouds: false,
             show_stars: false,
             show_milky_way: false,
-            show_gravity_grid: false,
             sat_radius: 1.5,
             link_width: 0.25,
             fixed_sizes: false,
@@ -1911,7 +1909,6 @@ struct ViewerState {
     show_milky_way: bool,
     show_borders: bool,
     show_cities: bool,
-    show_gravity_grid: bool,
     active_tab_idx: usize,
     #[cfg(not(target_arch = "wasm32"))]
     geo_data: GeoLoadState,
@@ -2045,7 +2042,6 @@ impl App {
                 show_milky_way: false,
                 show_borders: false,
                 show_cities: false,
-                show_gravity_grid: false,
                 active_tab_idx: 0,
                 #[cfg(not(target_arch = "wasm32"))]
                 geo_data: GeoLoadState::NotLoaded,
@@ -4004,7 +4000,6 @@ impl ViewerState {
             ui.checkbox(&mut s.show_clouds, "Show clouds");
             ui.checkbox(&mut s.show_stars, "Show stars");
             ui.add_enabled(s.show_stars, egui::Checkbox::new(&mut s.show_milky_way, "Show Milky Way"));
-            ui.checkbox(&mut s.show_gravity_grid, "Gravity grid");
             ui.horizontal(|ui| {
                 ui.label("Sat:");
                 ui.add(egui::DragValue::new(&mut s.sat_radius).range(1.0..=15.0).speed(0.1));
@@ -4086,7 +4081,6 @@ impl ViewerState {
             ui.checkbox(&mut self.show_clouds, "Show clouds");
             ui.checkbox(&mut self.show_stars, "Show stars");
             ui.add_enabled(self.show_stars, egui::Checkbox::new(&mut self.show_milky_way, "Show Milky Way"));
-            ui.checkbox(&mut self.show_gravity_grid, "Gravity grid");
             ui.horizontal(|ui| {
                 ui.label("Sat:");
                 ui.add(egui::DragValue::new(&mut self.sat_radius).range(1.0..=15.0).speed(0.1));
@@ -5613,7 +5607,6 @@ impl eframe::App for App {
                                         show_clouds: self.viewer.show_clouds,
                                         show_stars: self.viewer.show_stars,
                                         show_milky_way: self.viewer.show_milky_way,
-                                        show_gravity_grid: self.viewer.show_gravity_grid,
                                         sat_radius: self.viewer.sat_radius,
                                         link_width: self.viewer.link_width,
                                         fixed_sizes: self.viewer.fixed_sizes,
