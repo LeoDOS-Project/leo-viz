@@ -312,7 +312,7 @@ pub fn draw_3d_view(
         show_manhattan_path, show_shortest_path, show_asc_desc_colors,
         show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
         show_equator, show_terminator, earth_fixed_camera, use_gpu_rendering,
-        show_clouds, show_day_night, show_stars, show_milky_way, show_borders, show_cities,
+        show_clouds, show_day_night, show_stars, show_borders, show_cities,
     } = flags;
     let max_altitude = constellations.iter()
         .map(|(c, _, _, _, _, _)| c.altitude_km)
@@ -366,9 +366,9 @@ pub fn draw_3d_view(
                         },
                         gl_texture: Some(detail_tex),
                     };
-                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, Some(&dt), show_stars, show_milky_way, bg_color);
+                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, Some(&dt), show_stars, show_stars, bg_color);
                 } else {
-                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, None, show_stars, show_milky_way, bg_color);
+                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, None, show_stars, show_stars, bg_color);
                 }
             })),
         };
@@ -392,7 +392,6 @@ pub fn draw_3d_view(
 
     let mut surface_labels: Vec<([f64; 2], String, egui::Color32, bool, usize)> = Vec::new();
     let mut device_cluster_labels: Vec<([f64; 2], usize, egui::Color32)> = Vec::new();
-
     let response = plot.show(ui, |plot_ui| {
         let ground_stations = &*ground_stations;
         let areas_of_interest = &*areas_of_interest;
@@ -1393,6 +1392,7 @@ pub fn draw_3d_view(
                 }
             }
         }
+
     });
 
     let label_font_size = (14.0 * zoom as f32).clamp(10.0, 28.0);
@@ -1935,6 +1935,7 @@ pub fn draw_torus(
         .show_grid(false)
         .show_x(false)
         .show_y(false)
+        .show_background(false)
         .allow_drag(false)
         .allow_zoom(false)
         .allow_scroll(false)

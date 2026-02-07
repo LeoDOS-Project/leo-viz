@@ -49,8 +49,6 @@ pub(crate) struct ViewerState {
     pub(crate) time: f64,
     pub(crate) zoom: f64,
     pub(crate) torus_zoom: f64,
-    pub(crate) vertical_split: f32,
-    pub(crate) sat_radius: f32,
     pub(crate) torus_rotation: Matrix3<f64>,
     pub(crate) planet_textures: HashMap<(CelestialBody, Skin, TextureResolution), Arc<EarthTexture>>,
     pub(crate) ring_textures: HashMap<CelestialBody, Arc<RingTexture>>,
@@ -70,6 +68,8 @@ pub(crate) struct ViewerState {
     pub(crate) pending_add_tab: Option<usize>,
     pub(crate) current_gmst: f64,
     pub(crate) auto_cycle_tabs: bool,
+    pub(crate) auto_hide_tab_bar: bool,
+    pub(crate) ui_visible: bool,
     pub(crate) cycle_interval: f64,
     pub(crate) last_cycle_time: f64,
     pub(crate) use_gpu_rendering: bool,
@@ -101,6 +101,22 @@ pub(crate) struct ViewerState {
     pub(crate) tile_overlay: TileOverlayState,
     pub(crate) view_width: f32,
     pub(crate) view_height: f32,
+    pub(crate) solar_system_handles: HashMap<CelestialBody, egui::TextureHandle>,
+    pub(crate) ss_last_render_instant: Option<std::time::Instant>,
+    pub(crate) show_planet_sizes: bool,
+    pub(crate) planet_sizes_t: f64,
+    pub(crate) planet_sizes_auto_zoom: bool,
+    pub(crate) planet_sizes_zoom_duration: f32,
+    pub(crate) planet_sizes_stay_duration: f32,
+    pub(crate) planet_sizes_auto_time: f64,
+    pub(crate) ss_auto_zoom: bool,
+    pub(crate) ss_auto_zoom_duration: f32,
+    pub(crate) ss_auto_zoom_stay: f32,
+    pub(crate) ss_auto_zoom_time: f64,
+    pub(crate) asteroid_sprite: Option<egui::TextureHandle>,
+    pub(crate) asteroid_state: crate::solar_system::AsteroidLoadState,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) asteroid_rx: Option<mpsc::Receiver<Result<Vec<crate::solar_system::Asteroid>, String>>>,
 }
 
 
@@ -239,6 +255,7 @@ impl ViewerState {
         let show_places = self.tabs[tab_idx].planets[planet_idx].show_gs_aoi_window;
         let show_config = self.tabs[tab_idx].planets[planet_idx].show_config_window;
 
+        if self.ui_visible {
         ui.horizontal(|ui| {
             ui.strong(&planet_name);
             if ui.small_button("+").clicked() {
@@ -258,7 +275,32 @@ impl ViewerState {
             egui::ComboBox::from_id_salt(format!("body_{}_{}", tab_idx, planet_idx))
                 .selected_text(current_body.label())
                 .show_ui(ui, |ui| {
+                    let mut last_cat = "";
+                    let mut last_parent = None::<CelestialBody>;
                     for body in CelestialBody::ALL {
+                        let cat = body.category();
+                        if cat != last_cat {
+                            if !last_cat.is_empty() {
+                                ui.separator();
+                            }
+                            ui.label(egui::RichText::new(cat).small().weak());
+                            last_cat = cat;
+                            last_parent = None;
+                        }
+                        if cat == "Moons" {
+                            let parent = body.parent_body();
+                            if parent != last_parent {
+                                if last_parent.is_some() {
+                                    ui.separator();
+                                }
+                                if let Some(p) = parent {
+                                    ui.label(egui::RichText::new(
+                                        format!("  {}", p.label())
+                                    ).small().weak());
+                                }
+                                last_parent = parent;
+                            }
+                        }
                         if ui.selectable_value(&mut new_body, body, body.label()).changed() {
                             reset_skin = true;
                         }
@@ -297,6 +339,7 @@ impl ViewerState {
                 self.tabs[tab_idx].planets[planet_idx].show_tle_window = !show_tle;
             }
         });
+        } // ui_visible
 
         if remove_planet {
             return (add_planet, remove_planet);
@@ -1185,436 +1228,335 @@ impl ViewerState {
 
         let available = ui.available_size();
         let settings = &self.tabs[tab_idx].settings;
+        let render_planet = settings.render_planet;
         let show_torus = settings.show_torus;
         let show_ground_track = settings.show_ground_track;
-        let use_horizontal = show_torus && !show_ground_track;
+        let show_solar_system = settings.show_solar_system;
+        let show_orbits = settings.show_orbits;
+        let show_axes = settings.show_axes;
+        let show_coverage = settings.show_coverage;
+        let coverage_angle = settings.coverage_angle;
+        let time = settings.time;
+        let rotation = settings.rotation;
+        let zoom = settings.zoom;
+        let earth_fixed_camera = settings.earth_fixed_camera;
+        let body_rot_angle = body_rotation_angle(celestial_body, time, self.current_gmst);
+        let cos_a = body_rot_angle.cos();
+        let sin_a = body_rot_angle.sin();
+        let body_y_rotation = Matrix3::new(
+            cos_a, 0.0, sin_a,
+            0.0, 1.0, 0.0,
+            -sin_a, 0.0, cos_a,
+        );
+        let satellite_rotation = if earth_fixed_camera {
+            rotation * body_y_rotation.transpose()
+        } else {
+            rotation
+        };
+        let sat_radius = settings.sat_radius;
+        let show_links = settings.show_links;
+        let show_intra_links = settings.show_intra_links;
+        let hide_behind_earth = render_planet && settings.hide_behind_earth;
+        let single_color = settings.single_color || constellations_data.len() > 1;
+        let dark_mode = self.dark_mode;
+        let show_routing_paths = settings.show_routing_paths;
+        let show_manhattan_path = settings.show_manhattan_path;
+        let show_shortest_path = settings.show_shortest_path;
+        let show_asc_desc_colors = settings.show_asc_desc_colors;
+        let show_altitude_lines = settings.show_altitude_lines;
+        let tex_res = self.texture_resolution;
+        let planet_handle = self.planet_image_handles.get(&(celestial_body, skin, tex_res));
+        let torus_rotation = self.torus_rotation;
+        let torus_zoom = self.torus_zoom;
+        let link_width = settings.link_width;
+        let fixed_sizes = settings.fixed_sizes;
+        let flattening = celestial_body.flattening();
+        let show_polar_circle = settings.show_polar_circle;
+        let show_equator = settings.show_equator;
+        let show_day_night = settings.show_day_night;
+        let show_terminator = settings.show_terminator;
+        let show_clouds = settings.show_clouds;
+        let show_stars = settings.show_stars;
+        let show_devices = settings.show_devices;
+        let show_borders = settings.show_borders;
+        let show_cities = settings.show_cities;
+        let log_power = settings.solar_system_log_power;
+        let detail_gl_info = self.tile_overlay_detail_gl_info(celestial_body);
 
-        if use_horizontal {
-            let half_width = available.x / 2.0;
+        let show_torus = show_torus && render_planet;
+        let show_planet_sizes = self.show_planet_sizes;
+
+        let num_views = [render_planet, show_torus, show_solar_system, show_ground_track, show_planet_sizes]
+            .iter().filter(|v| **v).count();
+
+        if num_views > 0 {
+            let separator_w = if num_views > 1 { 1.0 } else { 0.0 };
+            let total_sep = separator_w * (num_views as f32 - 1.0);
+            let view_width = (available.x - total_sep) / num_views as f32;
             let view_height = available.y - 20.0;
-            let view_size = half_width.min(view_height);
-
-            let show_orbits = settings.show_orbits;
-            let show_axes = settings.show_axes;
-            let show_coverage = settings.show_coverage;
-            let coverage_angle = settings.coverage_angle;
-            let time = settings.time;
-            let rotation = settings.rotation;
-            let zoom = settings.zoom;
-            let earth_fixed_camera = settings.earth_fixed_camera;
-            let body_rot_angle = body_rotation_angle(celestial_body, time, self.current_gmst);
-            let cos_a = body_rot_angle.cos();
-            let sin_a = body_rot_angle.sin();
-            let body_y_rotation = Matrix3::new(
-                cos_a, 0.0, sin_a,
-                0.0, 1.0, 0.0,
-                -sin_a, 0.0, cos_a,
-            );
-            let satellite_rotation = if earth_fixed_camera {
-                rotation * body_y_rotation.transpose()
-            } else {
-                rotation
-            };
-            let sat_radius = settings.sat_radius;
-            let show_links = settings.show_links;
-            let show_intra_links = settings.show_intra_links;
-            let render_planet = settings.render_planet;
-            let hide_behind_earth = render_planet && settings.hide_behind_earth;
-            let single_color = settings.single_color || constellations_data.len() > 1;
-            let dark_mode = self.dark_mode;
-            let show_routing_paths = settings.show_routing_paths;
-            let show_manhattan_path = settings.show_manhattan_path;
-            let show_shortest_path = settings.show_shortest_path;
-            let show_asc_desc_colors = settings.show_asc_desc_colors;
-            let show_altitude_lines = settings.show_altitude_lines;
-            let tex_res = self.texture_resolution;
-            let planet_handle = self.planet_image_handles.get(&(celestial_body, skin, tex_res));
-            let torus_rotation = self.torus_rotation;
-            let torus_zoom = self.torus_zoom;
-            let link_width = settings.link_width;
-            let fixed_sizes = settings.fixed_sizes;
-            let flattening = celestial_body.flattening();
-            let show_polar_circle = settings.show_polar_circle;
-            let show_equator = settings.show_equator;
-            let show_day_night = settings.show_day_night;
-            let show_terminator = settings.show_terminator && show_day_night;
-            let show_clouds = settings.show_clouds;
-            let show_stars = settings.show_stars;
-            let show_milky_way = settings.show_milky_way && show_stars;
-            let show_devices = settings.show_devices;
-            let show_borders = settings.show_borders;
-            let show_cities = settings.show_cities;
-            let detail_gl_info = self.tile_overlay_detail_gl_info(celestial_body);
-            self.view_width = half_width;
-            self.view_height = view_size;
+            self.view_width = view_width;
+            self.view_height = view_height;
 
             ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    let planet = &mut self.tabs[tab_idx].planets[planet_idx];
-                    let view_flags = View3DFlags {
-                        show_orbits, show_axes, show_coverage, show_links, show_intra_links,
-                        hide_behind_earth, single_color, dark_mode, show_routing_paths,
-                        show_manhattan_path, show_shortest_path, show_asc_desc_colors,
-                        show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
-                        show_equator, show_terminator, earth_fixed_camera,
-                        use_gpu_rendering: self.use_gpu_rendering, show_clouds, show_day_night,
-                        show_stars, show_milky_way, show_borders, show_cities,
-                    };
-                    let sun_dir = {
-                        use chrono::Datelike;
-                        let timestamp = self.start_timestamp + chrono::Duration::seconds(time as i64);
-                        let day_of_year = timestamp.ordinal() as f64;
-                        let declination: f64 = SOLAR_DECLINATION_MAX * ((360.0 / DAYS_PER_YEAR) * (day_of_year + 10.0)).to_radians().cos();
-                        let decl_rad = declination.to_radians();
-                        let sun_ra = ((day_of_year - 80.0) * 360.0 / 365.0).to_radians();
-                        let sun_inertial = Vector3::new(
-                            decl_rad.cos() * sun_ra.cos(),
-                            decl_rad.sin(),
-                            -decl_rad.cos() * sun_ra.sin(),
+                let mut needs_sep = false;
+                if render_planet {
+                    needs_sep = true;
+                    ui.vertical(|ui| {
+                        let planet = &mut self.tabs[tab_idx].planets[planet_idx];
+                        let view_flags = View3DFlags {
+                            show_orbits, show_axes, show_coverage, show_links, show_intra_links,
+                            hide_behind_earth, single_color, dark_mode, show_routing_paths,
+                            show_manhattan_path, show_shortest_path, show_asc_desc_colors,
+                            show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
+                            show_equator, show_terminator, earth_fixed_camera,
+                            use_gpu_rendering: self.use_gpu_rendering, show_clouds, show_day_night,
+                            show_stars, show_borders, show_cities,
+                        };
+                        let sun_dir = {
+                            use chrono::Datelike;
+                            let timestamp = self.start_timestamp + chrono::Duration::seconds(time as i64);
+                            let day_of_year = timestamp.ordinal() as f64;
+                            let declination: f64 = SOLAR_DECLINATION_MAX * ((360.0 / DAYS_PER_YEAR) * (day_of_year + 10.0)).to_radians().cos();
+                            let decl_rad = declination.to_radians();
+                            let sun_ra = ((day_of_year - 80.0) * 360.0 / 365.0).to_radians();
+                            let sun_inertial = Vector3::new(
+                                decl_rad.cos() * sun_ra.cos(),
+                                decl_rad.sin(),
+                                -decl_rad.cos() * sun_ra.sin(),
+                            );
+                            let sun_shader = body_y_rotation.transpose() * sun_inertial;
+                            [sun_shader.x as f32, sun_shader.y as f32, sun_shader.z as f32]
+                        };
+                        let device_layers_ref: &[DeviceLayer] = if show_devices { &planet.device_layers } else { &[] };
+                        let (rot, new_zoom) = draw_3d_view(
+                            ui,
+                            &view_name,
+                            &constellations_data,
+                            view_flags,
+                            coverage_angle,
+                            rotation,
+                            satellite_rotation,
+                            view_width,
+                            view_height,
+                            planet_handle,
+                            zoom,
+                            sat_radius,
+                            link_width,
+                            &mut planet.pending_cameras,
+                            &mut self.camera_id_counter,
+                            &mut planet.satellite_cameras,
+                            &mut planet.cameras_to_remove,
+                            planet_radius,
+                            flattening,
+                            self.sphere_renderer.as_ref(),
+                            (celestial_body, skin, tex_res),
+                            &body_y_rotation,
+                            sun_dir,
+                            time,
+                            &mut planet.ground_stations,
+                            &mut planet.areas_of_interest,
+                            device_layers_ref,
+                            body_rot_angle,
+                            &mut self.dragging_place,
+                            (tab_idx, planet_idx),
+                            detail_gl_info,
+                            #[cfg(not(target_arch = "wasm32"))]
+                            { match &self.geo_data { GeoLoadState::Loaded(d) => if show_borders { d.borders.as_slice() } else { &[] }, _ => &[] } },
+                            #[cfg(target_arch = "wasm32")]
+                            &[],
+                            #[cfg(not(target_arch = "wasm32"))]
+                            { match &self.geo_data { GeoLoadState::Loaded(d) => if show_cities { d.cities.as_slice() } else { &[] }, _ => &[] } },
+                            #[cfg(target_arch = "wasm32")]
+                            &[],
                         );
-                        let sun_shader = body_y_rotation.transpose() * sun_inertial;
-                        [sun_shader.x as f32, sun_shader.y as f32, sun_shader.z as f32]
-                    };
-                    let device_layers_ref: &[DeviceLayer] = if show_devices { &planet.device_layers } else { &[] };
-                    let (rot, new_zoom) = draw_3d_view(
-                        ui,
-                        &view_name,
-                        &constellations_data,
-                        view_flags,
-                        coverage_angle,
-                        rotation,
-                        satellite_rotation,
-                        half_width,
-                        view_size,
-                        planet_handle,
-                        zoom,
-                        sat_radius,
-                        link_width,
-                        &mut planet.pending_cameras,
-                        &mut self.camera_id_counter,
-                        &mut planet.satellite_cameras,
-                        &mut planet.cameras_to_remove,
-                        planet_radius,
-                        flattening,
-                        self.sphere_renderer.as_ref(),
-                        (celestial_body, skin, tex_res),
-                        &body_y_rotation,
-                        sun_dir,
-                        time,
-                        &mut planet.ground_stations,
-                        &mut planet.areas_of_interest,
-                        device_layers_ref,
-                        body_rot_angle,
-                        &mut self.dragging_place,
-                        (tab_idx, planet_idx),
-                        detail_gl_info,
-                        #[cfg(not(target_arch = "wasm32"))]
-                        { match &self.geo_data { GeoLoadState::Loaded(d) => if show_borders { d.borders.as_slice() } else { &[] }, _ => &[] } },
-                        #[cfg(target_arch = "wasm32")]
-                        &[],
-                        #[cfg(not(target_arch = "wasm32"))]
-                        { match &self.geo_data { GeoLoadState::Loaded(d) => if show_cities { d.cities.as_slice() } else { &[] }, _ => &[] } },
-                        #[cfg(target_arch = "wasm32")]
-                        &[],
-                    );
-                    self.tabs[tab_idx].settings.rotation = rot;
-                    self.tabs[tab_idx].settings.zoom = new_zoom;
-                });
+                        self.tabs[tab_idx].settings.rotation = rot;
+                        self.tabs[tab_idx].settings.zoom = new_zoom;
+                    });
+                }
 
-                ui.add_space(5.0);
+                if show_torus {
+                    if needs_sep { ui.separator(); }
+                    needs_sep = true;
+                    ui.vertical(|ui| {
+                        let planet = &mut self.tabs[tab_idx].planets[planet_idx];
+                        let (trot, tzoom) = draw_torus(
+                            ui,
+                            &format!("torus_{}", view_name),
+                            &constellations_data,
+                            time,
+                            torus_rotation,
+                            view_width,
+                            view_height,
+                            sat_radius,
+                            show_links,
+                            single_color,
+                            torus_zoom,
+                            &mut planet.satellite_cameras,
+                            show_routing_paths,
+                            show_manhattan_path,
+                            show_shortest_path,
+                            show_asc_desc_colors,
+                            planet_radius,
+                            &mut planet.pending_cameras,
+                            &mut self.camera_id_counter,
+                            &mut planet.cameras_to_remove,
+                            link_width,
+                            fixed_sizes,
+                        );
+                        self.torus_rotation = trot;
+                        self.torus_zoom = tzoom;
+                    });
+                }
 
-                ui.vertical(|ui| {
-                    let planet = &mut self.tabs[tab_idx].planets[planet_idx];
-                    let (trot, tzoom) = draw_torus(
-                        ui,
-                        &format!("torus_{}", view_name),
-                        &constellations_data,
-                        time,
-                        torus_rotation,
-                        half_width,
-                        view_size,
-                        sat_radius,
-                        show_links,
-                        single_color,
-                        torus_zoom,
-                        &mut planet.satellite_cameras,
-                        show_routing_paths,
-                        show_manhattan_path,
-                        show_shortest_path,
-                        show_asc_desc_colors,
-                        planet_radius,
-                        &mut planet.pending_cameras,
-                        &mut self.camera_id_counter,
-                        &mut planet.cameras_to_remove,
-                        link_width,
-                        fixed_sizes,
-                    );
-                    self.torus_rotation = trot;
-                    self.torus_zoom = tzoom;
-                });
+                if show_solar_system {
+                    if needs_sep { ui.separator(); }
+                    needs_sep = true;
+                    ui.vertical(|ui| {
+                        let ss_timestamp = self.start_timestamp + chrono::Duration::seconds(time as i64);
+                        let lp = log_power;
+                        let plot = egui_plot::Plot::new(format!("solar_{}", view_name))
+                            .width(view_width)
+                            .height(view_height)
+                            .data_aspect(1.0)
+                            .show_axes(false)
+                            .show_grid(false)
+                            .show_background(false)
+                            .allow_boxed_zoom(false)
+                            .allow_scroll(false)
+                            .allow_zoom(false)
+                            .show_x(false)
+                            .show_y(false)
+                            .coordinates_formatter(
+                                egui_plot::Corner::RightBottom,
+                                egui_plot::CoordinatesFormatter::new(move |pt, _| {
+                                    let sr = (pt.x.powi(2) + pt.y.powi(2)).sqrt();
+                                    let au = if sr > 1e-6 { sr.powf(1.0 / lp) } else { 0.0 };
+                                    format!("{:.2} AU", au)
+                                }),
+                            );
+                        let ss_handles = &self.solar_system_handles;
+                        let ss_auto = self.ss_auto_zoom;
+                        let ss_dur = self.ss_auto_zoom_duration;
+                        let ss_stay = self.ss_auto_zoom_stay;
+                        let ss_time = &mut self.ss_auto_zoom_time;
+                        let ss_result = plot.show(ui, |plot_ui| {
+                            if ss_auto {
+                                let dt = plot_ui.ctx().input(|i| i.stable_dt) as f64;
+                                *ss_time += dt;
+
+                                let lp = log_power;
+                                let sc = |au: f64| -> f64 {
+                                    (au + crate::solar_system::SCALE_OFFSET).powf(lp)
+                                        - crate::solar_system::SCALE_OFFSET.powf(lp)
+                                };
+                                let start = (sc(0.1) * 1.5).ln();
+                                let end = (sc(460.0) * 1.4).ln();
+
+                                let scroll = ss_dur as f64;
+                                let stay = ss_stay as f64;
+                                let cycle = 2.0 * (stay + scroll);
+                                let t = *ss_time % cycle;
+                                let frac = if t < stay {
+                                    0.0
+                                } else if t < stay + scroll {
+                                    (t - stay) / scroll
+                                } else if t < 2.0 * stay + scroll {
+                                    1.0
+                                } else {
+                                    1.0 - (t - 2.0 * stay - scroll) / scroll
+                                };
+
+                                let half = (start + (end - start) * frac).exp();
+
+                                plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
+                                    [-half, -half],
+                                    [half, half],
+                                ));
+                                plot_ui.ctx().request_repaint();
+                            } else if plot_ui.response().hovered() {
+                                let scroll = plot_ui.ctx().input(|i| i.smooth_scroll_delta.y);
+                                if scroll.abs() > 0.0 {
+                                    let bounds = plot_ui.plot_bounds();
+                                    let factor = (-scroll as f64 * 0.002).exp();
+                                    let cx = (bounds.min()[0] + bounds.max()[0]) / 2.0;
+                                    let cy = (bounds.min()[1] + bounds.max()[1]) / 2.0;
+                                    let hw = (bounds.max()[0] - bounds.min()[0]) / 2.0;
+                                    let hh = (bounds.max()[1] - bounds.min()[1]) / 2.0;
+                                    let (px, py) = plot_ui.pointer_coordinate()
+                                        .map(|p| (p.x, p.y))
+                                        .unwrap_or((cx, cy));
+                                    let ncx = px + (cx - px) * factor;
+                                    let ncy = py + (cy - py) * factor;
+                                    let nhw = hw * factor;
+                                    let nhh = hh * factor;
+                                    plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
+                                        [ncx - nhw, ncy - nhh],
+                                        [ncx + nhw, ncy + nhh],
+                                    ));
+                                }
+                            }
+                            let ast_slice = match &self.asteroid_state {
+                                crate::solar_system::AsteroidLoadState::Loaded(v) => v.as_slice(),
+                                _ => &[],
+                            };
+                            crate::solar_system::draw_solar_system_view(
+                                plot_ui,
+                                celestial_body,
+                                ss_timestamp,
+                                ss_handles,
+                                dark_mode,
+                                log_power,
+                                ast_slice,
+                                self.asteroid_sprite.as_ref(),
+                            )
+                        });
+                        if let Some(new_body) = ss_result.inner {
+                            self.tabs[tab_idx].planets[planet_idx].celestial_body = new_body;
+                        }
+                    });
+                }
+
+                if show_ground_track {
+                    if needs_sep { ui.separator(); }
+                    needs_sep = true;
+                    ui.vertical(|ui| {
+                        draw_ground_track(
+                            ui,
+                            &format!("ground_{}", view_name),
+                            &constellations_data,
+                            view_width,
+                            view_height,
+                            sat_radius,
+                            single_color,
+                        );
+                    });
+                }
+
+                if show_planet_sizes {
+                    if needs_sep { ui.separator(); }
+                    ui.vertical(|ui| {
+                        ui.set_width(view_width);
+                        ui.set_height(view_height);
+                        let mut az = crate::solar_system::AutoZoomState {
+                            enabled: self.planet_sizes_auto_zoom,
+                            total_duration: self.planet_sizes_zoom_duration,
+                            stay_duration: self.planet_sizes_stay_duration,
+                            time: self.planet_sizes_auto_time,
+                        };
+                        if let Some(body) = crate::solar_system::draw_planet_sizes(
+                            ui,
+                            &self.solar_system_handles,
+                            &mut self.planet_sizes_t,
+                            &mut az,
+                        ) {
+                            self.tabs[tab_idx].planets[planet_idx].celestial_body = body;
+                        }
+                        self.planet_sizes_auto_time = az.time;
+                    });
+                }
             });
-        } else {
-            let viz_width = available.x;
-            let available_for_views = available.y - 20.0;
-
-            let has_secondary = show_torus || show_ground_track;
-            let separator_height = if has_secondary { 8.0 } else { 0.0 };
-
-            let earth_height = if has_secondary {
-                (available_for_views - separator_height) * self.vertical_split
-            } else {
-                available_for_views
-            }.min(viz_width);
-
-            let secondary_height = if has_secondary {
-                (available_for_views - separator_height) * (1.0 - self.vertical_split)
-            } else {
-                0.0
-            };
-
-            let show_orbits = settings.show_orbits;
-            let show_axes = settings.show_axes;
-            let show_coverage = settings.show_coverage;
-            let coverage_angle = settings.coverage_angle;
-            let time = settings.time;
-            let rotation = settings.rotation;
-            let zoom = settings.zoom;
-            let earth_fixed_camera = settings.earth_fixed_camera;
-            let body_rot_angle = body_rotation_angle(celestial_body, time, self.current_gmst);
-            let cos_a = body_rot_angle.cos();
-            let sin_a = body_rot_angle.sin();
-            let body_y_rotation = Matrix3::new(
-                cos_a, 0.0, sin_a,
-                0.0, 1.0, 0.0,
-                -sin_a, 0.0, cos_a,
-            );
-            let satellite_rotation = if earth_fixed_camera {
-                rotation * body_y_rotation.transpose()
-            } else {
-                rotation
-            };
-            let sat_radius = settings.sat_radius;
-            let show_links = settings.show_links;
-            let show_intra_links = settings.show_intra_links;
-            let render_planet = settings.render_planet;
-            let hide_behind_earth = render_planet && settings.hide_behind_earth;
-            let single_color = settings.single_color || constellations_data.len() > 1;
-            let dark_mode = self.dark_mode;
-            let show_routing_paths = settings.show_routing_paths;
-            let show_manhattan_path = settings.show_manhattan_path;
-            let show_shortest_path = settings.show_shortest_path;
-            let show_asc_desc_colors = settings.show_asc_desc_colors;
-            let show_altitude_lines = settings.show_altitude_lines;
-            let tex_res = self.texture_resolution;
-            let planet_handle = self.planet_image_handles.get(&(celestial_body, skin, tex_res));
-            let link_width = settings.link_width;
-            let fixed_sizes = settings.fixed_sizes;
-            let flattening = celestial_body.flattening();
-            let show_polar_circle = settings.show_polar_circle;
-            let show_equator = settings.show_equator;
-            let show_day_night = settings.show_day_night;
-            let show_terminator = settings.show_terminator && show_day_night;
-            let show_clouds = settings.show_clouds;
-            let show_stars = settings.show_stars;
-            let show_milky_way = settings.show_milky_way && show_stars;
-            let show_devices = settings.show_devices;
-            let show_borders = settings.show_borders;
-            let show_cities = settings.show_cities;
-            let detail_gl_info = self.tile_overlay_detail_gl_info(celestial_body);
-            self.view_width = viz_width;
-            self.view_height = earth_height;
-
-            let planet = &mut self.tabs[tab_idx].planets[planet_idx];
-            let view_flags = View3DFlags {
-                show_orbits, show_axes, show_coverage, show_links, show_intra_links,
-                hide_behind_earth, single_color, dark_mode, show_routing_paths,
-                show_manhattan_path, show_shortest_path, show_asc_desc_colors,
-                show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
-                show_equator, show_terminator, earth_fixed_camera,
-                use_gpu_rendering: self.use_gpu_rendering, show_clouds, show_day_night,
-                show_stars, show_milky_way, show_borders, show_cities,
-            };
-            let sun_dir = {
-                use chrono::Datelike;
-                let timestamp = self.start_timestamp + chrono::Duration::seconds(time as i64);
-                let day_of_year = timestamp.ordinal() as f64;
-                let declination: f64 = SOLAR_DECLINATION_MAX * ((360.0 / DAYS_PER_YEAR) * (day_of_year + 10.0)).to_radians().cos();
-                let decl_rad = declination.to_radians();
-                let sun_ra = ((day_of_year - 80.0) * 360.0 / 365.0).to_radians();
-                let sun_inertial = Vector3::new(
-                    decl_rad.cos() * sun_ra.cos(),
-                    decl_rad.sin(),
-                    -decl_rad.cos() * sun_ra.sin(),
-                );
-                let sun_shader = body_y_rotation.transpose() * sun_inertial;
-                [sun_shader.x as f32, sun_shader.y as f32, sun_shader.z as f32]
-            };
-            let device_layers_ref: &[DeviceLayer] = if show_devices { &planet.device_layers } else { &[] };
-            let (rot, new_zoom) = draw_3d_view(
-                ui,
-                &view_name,
-                &constellations_data,
-                view_flags,
-                coverage_angle,
-                rotation,
-                satellite_rotation,
-                viz_width,
-                earth_height,
-                planet_handle,
-                zoom,
-                sat_radius,
-                link_width,
-                &mut planet.pending_cameras,
-                &mut self.camera_id_counter,
-                &mut planet.satellite_cameras,
-                &mut planet.cameras_to_remove,
-                planet_radius,
-                flattening,
-                self.sphere_renderer.as_ref(),
-                (celestial_body, skin, tex_res),
-                &body_y_rotation,
-                sun_dir,
-                time,
-                &mut planet.ground_stations,
-                &mut planet.areas_of_interest,
-                device_layers_ref,
-                body_rot_angle,
-                &mut self.dragging_place,
-                (tab_idx, planet_idx),
-                detail_gl_info,
-                #[cfg(not(target_arch = "wasm32"))]
-                { match &self.geo_data { GeoLoadState::Loaded(d) => if show_borders { d.borders.as_slice() } else { &[] }, _ => &[] } },
-                #[cfg(target_arch = "wasm32")]
-                &[],
-                #[cfg(not(target_arch = "wasm32"))]
-                { match &self.geo_data { GeoLoadState::Loaded(d) => if show_cities { d.cities.as_slice() } else { &[] }, _ => &[] } },
-                #[cfg(target_arch = "wasm32")]
-                &[],
-            );
-            self.tabs[tab_idx].settings.rotation = rot;
-            self.tabs[tab_idx].settings.zoom = new_zoom;
-
-            if has_secondary {
-                let separator_rect = ui.available_rect_before_wrap();
-                let separator_rect = egui::Rect::from_min_size(
-                    separator_rect.min,
-                    egui::vec2(viz_width, separator_height),
-                );
-                let response = ui.allocate_rect(separator_rect, egui::Sense::drag());
-
-                ui.painter().rect_filled(
-                    separator_rect,
-                    0.0,
-                    if response.hovered() || response.dragged() {
-                        egui::Color32::WHITE
-                    } else {
-                        egui::Color32::from_rgb(200, 200, 200)
-                    },
-                );
-                ui.painter().line_segment(
-                    [separator_rect.center() - egui::vec2(20.0, 0.0),
-                     separator_rect.center() + egui::vec2(20.0, 0.0)],
-                    egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 100, 100)),
-                );
-
-                if response.dragged() {
-                    let delta = response.drag_delta().y / available_for_views;
-                    self.vertical_split = (self.vertical_split + delta).clamp(0.2, 0.9);
-                }
-
-                if response.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
-                }
-            }
-
-            if show_torus && show_ground_track {
-                let torus_height = secondary_height * 0.6;
-                let time = self.time;
-                let torus_rotation = self.torus_rotation;
-                let sat_radius = self.sat_radius;
-                let torus_zoom = self.torus_zoom;
-                let planet = &mut self.tabs[tab_idx].planets[planet_idx];
-                let (trot, tzoom) = draw_torus(
-                    ui,
-                    &format!("torus_{}", view_name),
-                    &constellations_data,
-                    time,
-                    torus_rotation,
-                    viz_width,
-                    torus_height,
-                    sat_radius,
-                    show_links,
-                    single_color,
-                    torus_zoom,
-                    &mut planet.satellite_cameras,
-                    show_routing_paths,
-                    show_manhattan_path,
-                    show_shortest_path,
-                    show_asc_desc_colors,
-                    planet_radius,
-                    &mut planet.pending_cameras,
-                    &mut self.camera_id_counter,
-                    &mut planet.cameras_to_remove,
-                    link_width,
-                    fixed_sizes,
-                );
-                self.torus_rotation = trot;
-                self.torus_zoom = tzoom;
-
-                let ground_height = secondary_height * 0.4;
-                draw_ground_track(
-                    ui,
-                    &format!("ground_{}", view_name),
-                    &constellations_data,
-                    viz_width,
-                    ground_height,
-                    self.sat_radius,
-                    constellations_data.len() > 1,
-                );
-            } else if show_torus {
-                let time = self.time;
-                let torus_rotation = self.torus_rotation;
-                let sat_radius = self.sat_radius;
-                let torus_zoom = self.torus_zoom;
-                let planet = &mut self.tabs[tab_idx].planets[planet_idx];
-                let (trot, tzoom) = draw_torus(
-                    ui,
-                    &format!("torus_{}", view_name),
-                    &constellations_data,
-                    time,
-                    torus_rotation,
-                    viz_width,
-                    secondary_height,
-                    sat_radius,
-                    show_links,
-                    single_color,
-                    torus_zoom,
-                    &mut planet.satellite_cameras,
-                    show_routing_paths,
-                    show_manhattan_path,
-                    show_shortest_path,
-                    show_asc_desc_colors,
-                    planet_radius,
-                    &mut planet.pending_cameras,
-                    &mut self.camera_id_counter,
-                    &mut planet.cameras_to_remove,
-                    link_width,
-                    fixed_sizes,
-                );
-                self.torus_rotation = trot;
-                self.torus_zoom = tzoom;
-            } else if show_ground_track {
-                draw_ground_track(
-                    ui,
-                    &format!("ground_{}", view_name),
-                    &constellations_data,
-                    viz_width,
-                    secondary_height,
-                    self.sat_radius,
-                    single_color,
-                );
-            }
         }
+
         (add_planet, remove_planet)
     }
 

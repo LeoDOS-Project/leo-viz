@@ -21,8 +21,10 @@ cargo build --release
 
 ## TODO
 
+- Ability to see other planets around the one currently being viewed. When 
+zoomed out, we should be able to see the solar system.
+- Clicking another planet should make that planet be focused instead.
 - Camera tilt (Ctrl+drag) with perspective projection for viewing satellites from the side
-- Fix Mercator projection for non-texture rendering (satellites, links, coverage polygons)
 
 ## Image Credits
 
@@ -37,6 +39,30 @@ Planet textures are from:
 - Mercury (16K diffuse, normal, specular, roughness, displacement)
 - Venus (16K diffuse, normal, roughness, displacement)
 
+**[Steve Albers' Planetary Maps](https://stevealbers.net/albers/sos/sos.html)**
+- Ganymede (4K, Bjorn Jonsson modified)
+- Io (2K, Voyager + Galileo composite)
+- Europa (4K, Juno data)
+- Charon (8K)
+- Enceladus (8K, Cassini)
+
+**[Askaniy on DeviantArt](https://www.deviantart.com/askaniy)** (CC BY 3.0)
+- Titan True Color Map (2K, Cassini infrared + Huygens data)
+- Triton Texture Map (2K, Voyager 2 calibrated color)
+- Phobos Texture Map (2K, Mars Express)
+
+**[Oleg-Pluton on DeviantArt](https://www.deviantart.com/oleg-pluton)**
+- Mimas Texture Map (2K, Cassini)
+
+**[FarGetaNik on DeviantArt](https://www.deviantart.com/fargetanik)**
+- Iapetus Truecolor Texture Map (2K, Cassini)
+
+**[Bjorn Jonsson's Planetary Maps](https://bjj.mmedia.is/)**
+- Callisto (4K)
+
+**[Celestia Project](https://github.com/CelestiaProject/CelestiaContent)** (GPL)
+- Vesta (4K, Dawn mission mosaic)
+
 **[NASA Science Assets](https://assets.science.nasa.gov/)**
 - Additional planetary imagery
 
@@ -44,9 +70,8 @@ Planet textures are from:
 
 Real-time satellite tracking data is fetched from
 [CelesTrak](https://celestrak.org/) maintained by Dr. T.S. Kelso.
-
-Available constellations:
 - ISS, Starlink, OneWeb, Kuiper
 - Iridium, Iridium NEXT, Globalstar, Orbcomm
 - GPS, Galileo, GLONASS, Beidou
 - Molniya, Planet
+- ...

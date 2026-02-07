@@ -42,6 +42,7 @@ use glow::HasContext as _;
 pub(crate) struct App {
     pub(crate) dock_state: DockState<usize>,
     pub(crate) viewer: ViewerState,
+    first_frame: bool,
 }
 
 impl App {
@@ -77,8 +78,6 @@ impl App {
                 time: 0.0,
                 zoom: 1.0,
                 torus_zoom: 1.0,
-                vertical_split: 0.6,
-                sat_radius: 1.5,
                 torus_rotation: torus_initial,
                 planet_textures: {
                     let mut map = HashMap::new();
@@ -107,6 +106,8 @@ impl App {
                 pending_add_tab: None,
                 current_gmst: 0.0,
                 auto_cycle_tabs: false,
+                auto_hide_tab_bar: false,
+                ui_visible: true,
                 cycle_interval: 5.0,
                 last_cycle_time: 0.0,
                 use_gpu_rendering: true,
@@ -250,7 +251,24 @@ impl App {
                 },
                 view_width: 800.0,
                 view_height: 600.0,
+                solar_system_handles: HashMap::new(),
+                ss_last_render_instant: None,
+                show_planet_sizes: false,
+                planet_sizes_t: 0.0,
+                planet_sizes_auto_zoom: false,
+                planet_sizes_zoom_duration: 30.0,
+                planet_sizes_stay_duration: 3.0,
+                planet_sizes_auto_time: 0.0,
+                ss_auto_zoom: false,
+                ss_auto_zoom_duration: 30.0,
+                ss_auto_zoom_stay: 3.0,
+                ss_auto_zoom_time: 0.0,
+                asteroid_sprite: None,
+                asteroid_state: crate::solar_system::AsteroidLoadState::NotLoaded,
+                #[cfg(not(target_arch = "wasm32"))]
+                asteroid_rx: None,
             },
+            first_frame: true,
         }
     }
 }
@@ -291,9 +309,25 @@ impl eframe::App for App {
             v.load_texture_for_body(*body, *skin, ctx);
         }
 
-        let (show_clouds, show_day_night, show_stars, show_milky_way) = v.tabs.get(active_tab_idx)
-            .map(|t| (t.settings.show_clouds, t.settings.show_day_night, t.settings.show_stars, t.settings.show_milky_way))
-            .unwrap_or((false, false, false, false));
+        #[cfg(not(target_arch = "wasm32"))]
+        for body in CelestialBody::ALL {
+            let key = (body, Skin::Default, TextureResolution::R512);
+            if v.planet_textures.contains_key(&key) {
+                continue;
+            }
+            if let Some(filename) = Skin::Default.filename(body, TextureResolution::R512) {
+                if let Ok(bytes) = std::fs::read(crate::texture::asset_path(filename)) {
+                    if let Ok(tex) = crate::texture::EarthTexture::from_bytes(&bytes) {
+                        let tex = tex.downscale((tex.width / 512).max(1));
+                        v.planet_textures.insert(key, std::sync::Arc::new(tex));
+                    }
+                }
+            }
+        }
+
+        let (show_clouds, show_day_night, show_stars) = v.tabs.get(active_tab_idx)
+            .map(|t| (t.settings.show_clouds, t.settings.show_day_night, t.settings.show_stars))
+            .unwrap_or((false, false, false));
 
         if show_clouds {
             v.load_cloud_texture(ctx);
@@ -329,10 +363,8 @@ impl eframe::App for App {
                     if let Some(star_tex) = &v.star_texture {
                         renderer.upload_star_texture(gl, star_tex);
                     }
-                    if show_milky_way {
-                        if let Some(mw_tex) = &v.milky_way_texture {
-                            renderer.upload_milky_way_texture(gl, mw_tex);
-                        }
+                    if let Some(mw_tex) = &v.milky_way_texture {
+                        renderer.upload_milky_way_texture(gl, mw_tex);
                     }
                 }
                 for (body, ring_tex) in &v.ring_textures {
@@ -343,7 +375,7 @@ impl eframe::App for App {
         }
 
         let bodies_set: std::collections::HashSet<_> = bodies_needed.iter().copied().collect();
-        v.planet_textures.retain(|k, _| bodies_set.contains(k));
+        v.planet_textures.retain(|k, _| bodies_set.contains(k) || (k.1 == Skin::Default && k.2 == TextureResolution::R512));
         v.planet_image_handles.retain(|k, _| bodies_set.contains(k));
         let body_set: std::collections::HashSet<CelestialBody> = bodies_needed.iter().map(|k| k.0).collect();
         v.ring_textures.retain(|b, _| body_set.contains(b));
@@ -983,6 +1015,184 @@ impl eframe::App for App {
             }
         }
 
+        {
+            let show_ss = v.tabs.get(active_tab_idx)
+                .map(|t| t.settings.show_solar_system)
+                .unwrap_or(false);
+            let tab_time = v.tabs.get(active_tab_idx)
+                .map(|t| t.settings.time)
+                .unwrap_or(0.0);
+
+            if show_ss || v.show_planet_sizes {
+                #[cfg(not(target_arch = "wasm32"))]
+                for &body in &CelestialBody::ALL {
+                    let key = (body, Skin::Default, TextureResolution::R512);
+                    if !v.planet_textures.contains_key(&key) {
+                        if let Some(filename) = Skin::Default.filename(body, TextureResolution::R512) {
+                            if let Ok(bytes) = std::fs::read(crate::texture::asset_path(filename)) {
+                                if let Ok(tex) = crate::texture::EarthTexture::from_bytes(&bytes) {
+                                    v.planet_textures.insert(key, Arc::new(tex));
+                                }
+                            }
+                        }
+                    }
+                    if body.ring_params().is_some() && !v.ring_textures.contains_key(&body) {
+                        if let Some((ring_path, _, _)) = body.ring_params() {
+                            if let Ok(ring_bytes) = std::fs::read(crate::texture::asset_path(ring_path)) {
+                                if let Ok(ring_tex) = crate::texture::RingTexture::from_bytes(&ring_bytes) {
+                                    v.ring_textures.insert(body, Arc::new(ring_tex));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if v.asteroid_sprite.is_none() {
+                    let size = 16usize;
+                    let center = size as f64 / 2.0;
+                    let radius = center - 1.0;
+                    let mut pixels = vec![egui::Color32::TRANSPARENT; size * size];
+                    for py in 0..size {
+                        for px in 0..size {
+                            let dx = px as f64 - center;
+                            let dy = py as f64 - center;
+                            let dist = (dx * dx + dy * dy).sqrt();
+                            if dist < radius {
+                                let z = (radius * radius - dist * dist).sqrt() / radius;
+                                let noise = ((px * 7 + py * 13) % 17) as f64 / 34.0;
+                                let shade = (0.25 + 0.55 * z + noise * 0.2).clamp(0.0, 1.0);
+                                let base = (140.0 * shade) as u8;
+                                let r = base.saturating_add(((px * 3 + py * 5) % 11) as u8);
+                                let g = base.saturating_add(((px * 5 + py * 3) % 9) as u8);
+                                let b = base;
+                                let edge = ((radius - dist) / 1.5).clamp(0.0, 1.0);
+                                let alpha = (edge * 255.0) as u8;
+                                pixels[py * size + px] = egui::Color32::from_rgba_unmultiplied(r, g, b, alpha);
+                            }
+                        }
+                    }
+                    let image = egui::ColorImage {
+                        size: [size, size],
+                        pixels,
+                        source_size: egui::Vec2::ZERO,
+                    };
+                    v.asteroid_sprite = Some(ctx.load_texture(
+                        "asteroid_sprite",
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    ));
+                }
+
+                let render_interval = if v.show_planet_sizes { 200 } else if v.ss_auto_zoom { 5000 } else { 1000 };
+                let needs_render = v.solar_system_handles.is_empty()
+                    || v.ss_last_render_instant.map_or(true, |t| t.elapsed().as_millis() > render_interval);
+                if needs_render {
+                    v.ss_last_render_instant = Some(std::time::Instant::now());
+                    let tilt = 30.0_f64.to_radians();
+                    let cos_t = tilt.cos();
+                    let sin_t = tilt.sin();
+                    let tilt_mat = Matrix3::new(
+                        1.0, 0.0, 0.0,
+                        0.0, cos_t, -sin_t,
+                        0.0, sin_t, cos_t,
+                    );
+
+                    let mut sorted_bodies: Vec<CelestialBody> = CelestialBody::ALL.to_vec();
+                    sorted_bodies.sort_by(|a, b| b.radius_km().partial_cmp(&a.radius_km()).unwrap());
+                    let focus_idx = (v.planet_sizes_t as usize).min(sorted_bodies.len().saturating_sub(1));
+                    let focus_radius = sorted_bodies[focus_idx].radius_km();
+                    let max_render = if v.show_planet_sizes { 192 } else { 64 };
+
+                    let gpu_ok = frame.gl().is_some() && v.sphere_renderer.is_some();
+                    if gpu_ok {
+                        let gl = frame.gl().unwrap();
+                        let sr = v.sphere_renderer.as_ref().unwrap();
+                        let mut renderer = sr.lock();
+                        for body in CelestialBody::ALL {
+                            let key = (body, Skin::Default, TextureResolution::R512);
+                            if let Some(tex) = v.planet_textures.get(&key) {
+                                renderer.upload_texture(gl, key, tex);
+                            }
+                            if let Some(ring_tex) = v.ring_textures.get(&body) {
+                                renderer.upload_ring_texture(gl, body, ring_tex);
+                            }
+                        }
+                        for body in CelestialBody::ALL {
+                            let key = (body, Skin::Default, TextureResolution::R512);
+                            let ratio = (body.radius_km() / focus_radius).min(1.0);
+                            let body_render_size = if ratio > 0.1 { max_render } else { ((max_render as f64 * ratio * 10.0) as usize).clamp(32, max_render) };
+                            let body_rot = body_rotation_angle(body, tab_time, v.current_gmst)
+                                + 30.0_f64.to_radians();
+                            let cos_a = body_rot.cos();
+                            let sin_a = body_rot.sin();
+                            let y_rot = Matrix3::new(
+                                cos_a, 0.0, sin_a,
+                                0.0, 1.0, 0.0,
+                                -sin_a, 0.0, cos_a,
+                            );
+                            let combined = tilt_mat * y_rot;
+                            let inv_rotation = combined.transpose();
+                            let image = renderer.render_to_image(gl, key, &inv_rotation, body.flattening(), body_render_size);
+                            let handle = ctx.load_texture(
+                                format!("ss_{:?}", body),
+                                image,
+                                egui::TextureOptions::LINEAR,
+                            );
+                            v.solar_system_handles.insert(body, handle);
+                        }
+                    } else {
+                        for body in CelestialBody::ALL {
+                            let key = (body, Skin::Default, TextureResolution::R512);
+                            if let Some(texture) = v.planet_textures.get(&key) {
+                                let ratio = (body.radius_km() / focus_radius).min(1.0);
+                                let body_render_size = ((max_render as f64 * ratio) as usize).clamp(32, max_render);
+                                let body_rot = body_rotation_angle(body, tab_time, v.current_gmst)
+                                    + 30.0_f64.to_radians();
+                                let cos_a = body_rot.cos();
+                                let sin_a = body_rot.sin();
+                                let y_rot = Matrix3::new(
+                                    cos_a, 0.0, sin_a,
+                                    0.0, 1.0, 0.0,
+                                    -sin_a, 0.0, cos_a,
+                                );
+                                let combined = tilt_mat * y_rot;
+                                let ring_tex = v.ring_textures.get(&body).map(|r| r.as_ref());
+                                let image = texture.render_sphere_with_rings(
+                                    body_render_size, &combined, body.flattening(), body, ring_tex,
+                                );
+                                let handle = ctx.load_texture(
+                                    format!("ss_{:?}", body),
+                                    image,
+                                    egui::TextureOptions::LINEAR,
+                                );
+                                v.solar_system_handles.insert(body, handle);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if matches!(v.asteroid_state, crate::solar_system::AsteroidLoadState::NotLoaded) {
+                v.asteroid_state = crate::solar_system::AsteroidLoadState::Loading;
+                let (tx, rx) = mpsc::channel();
+                v.asteroid_rx = Some(rx);
+                std::thread::spawn(move || {
+                    let _ = tx.send(crate::solar_system::fetch_asteroids());
+                });
+            }
+            if let Some(rx) = &v.asteroid_rx {
+                if let Ok(result) = rx.try_recv() {
+                    match result {
+                        Ok(data) => v.asteroid_state = crate::solar_system::AsteroidLoadState::Loaded(data),
+                        Err(e) => v.asteroid_state = crate::solar_system::AsteroidLoadState::Failed(e),
+                    }
+                    v.asteroid_rx = None;
+                }
+            }
+        }
 
         if self.viewer.show_info {
             egui::Window::new("Info")
@@ -1208,6 +1418,7 @@ impl eframe::App for App {
                 });
         }
 
+
         if self.viewer.show_side_panel {
             egui::SidePanel::left("settings_panel")
                 .resizable(true)
@@ -1230,7 +1441,11 @@ impl eframe::App for App {
                         }
                     });
                     ui.separator();
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    let mut scroll = egui::ScrollArea::vertical().id_salt("settings_scroll");
+                    if self.first_frame {
+                        scroll = scroll.vertical_scroll_offset(0.0);
+                    }
+                    scroll.show(ui, |ui| {
                         self.viewer.show_settings(ui);
                     });
                 });
@@ -1238,13 +1453,28 @@ impl eframe::App for App {
 
         let mut dock_style = egui_dock::Style::from_egui(ctx.style().as_ref());
         dock_style.main_surface_border_stroke = egui::Stroke::NONE;
+        let full_tab_bar_height = dock_style.tab_bar.height;
+        let ui_visible = if self.viewer.auto_hide_tab_bar {
+            let hover_zone = full_tab_bar_height + 50.0;
+            ctx.input(|i| {
+                i.pointer.hover_pos().map_or(false, |p| p.y < hover_zone)
+            })
+        } else {
+            true
+        };
+        self.viewer.ui_visible = ui_visible;
+        if !ui_visible {
+            dock_style.tab_bar.height = 0.0;
+        }
         let tab_bar_height = dock_style.tab_bar.height;
-        DockArea::new(&mut self.dock_state)
-            .show_add_buttons(true)
-            .style(dock_style)
-            .show(ctx, &mut self.viewer);
+        let mut dock = DockArea::new(&mut self.dock_state)
+            .style(dock_style);
+        if ui_visible {
+            dock = dock.show_add_buttons(true);
+        }
+        dock.show(ctx, &mut self.viewer);
 
-        if !self.viewer.show_side_panel {
+        if !self.viewer.show_side_panel && ui_visible {
             egui::Area::new(egui::Id::new("settings_btn"))
                 .fixed_pos(egui::pos2(4.0, (tab_bar_height - 16.0) / 2.0))
                 .order(egui::Order::Foreground)
@@ -1324,6 +1554,7 @@ impl eframe::App for App {
                 }
             }
         }
+        self.first_frame = false;
     }
 
     fn on_exit(&mut self, gl: Option<&glow::Context>) {

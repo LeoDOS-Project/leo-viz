@@ -76,6 +76,7 @@ impl SphereRenderer {
                 uniform float u_ring_outer;
                 uniform float u_adams_arc;
                 uniform float u_epsilon_wobble;
+                uniform float u_transparent_bg;
 
                 const float PI = 3.14159265359;
                 const vec3 ATMO_COLOR = vec3(0.4, 0.7, 1.0);
@@ -193,6 +194,7 @@ impl SphereRenderer {
                             }
                         }
 
+                        if (u_transparent_bg > 0.5) { discard; }
                         out_color = vec4(mix(u_bg_color, bg, bg_alpha), 1.0);
                         return;
                     }
@@ -210,6 +212,10 @@ impl SphereRenderer {
                             float sv = (PI / 2.0 - slat) / PI;
                             bg = texture(u_stars, vec2(su, sv)).rgb;
                             bg_alpha = 1.0;
+                        }
+                        if (u_transparent_bg > 0.5) {
+                            out_color = vec4(ring_color, ring_alpha);
+                            return;
                         }
                         vec3 base = mix(u_bg_color, bg, bg_alpha);
                         vec3 final_color = mix(base, ring_color, ring_alpha);
@@ -269,7 +275,11 @@ impl SphereRenderer {
                         color = mix(color, ring_color, ring_alpha);
                     }
 
-                    out_color = vec4(mix(u_bg_color, color, alpha), 1.0);
+                    if (u_transparent_bg > 0.5) {
+                        out_color = vec4(color, 1.0);
+                    } else {
+                        out_color = vec4(mix(u_bg_color, color, alpha), 1.0);
+                    }
                 }
             "#;
 
@@ -628,11 +638,160 @@ impl SphereRenderer {
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_show_day_night").as_ref(), if day_night_enabled { 1.0 } else { 0.0 });
             gl.uniform_3_f32(gl.get_uniform_location(self.program, "u_sun_dir").as_ref(), sun_dir[0], sun_dir[1], sun_dir[2]);
             gl.uniform_3_f32(gl.get_uniform_location(self.program, "u_bg_color").as_ref(), bg_color[0], bg_color[1], bg_color[2]);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_transparent_bg").as_ref(), 0.0);
 
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
 
             gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+        }
+    }
+
+    pub fn render_to_image(
+        &self,
+        gl: &glow::Context,
+        key: (CelestialBody, Skin, TextureResolution),
+        inv_rotation: &Matrix3<f64>,
+        flattening: f64,
+        size: usize,
+    ) -> egui::ColorImage {
+        let Some(texture) = self.textures.get(&key) else {
+            return egui::ColorImage {
+                size: [size, size],
+                pixels: vec![egui::Color32::TRANSPARENT; size * size],
+                source_size: egui::Vec2::ZERO,
+            };
+        };
+
+        let ring_params = key.0.ring_params();
+        let outer_ratio = ring_params.map(|(_, _, o)| o as f64).unwrap_or(1.0);
+        let img_scale = if outer_ratio > 1.0 { outer_ratio } else { 1.0 };
+        let fbo_size = (size as f64 * img_scale).ceil() as usize;
+        let scale = (size as f32) / (fbo_size as f32);
+
+        unsafe {
+            let fbo = gl.create_framebuffer().expect("Cannot create FBO");
+            let render_tex = gl.create_texture().expect("Cannot create render texture");
+
+            gl.bind_texture(glow::TEXTURE_2D, Some(render_tex));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D, 0, glow::RGBA as i32,
+                fbo_size as i32, fbo_size as i32, 0,
+                glow::RGBA, glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(None),
+            );
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+            gl.framebuffer_texture_2d(
+                glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0,
+                glow::TEXTURE_2D, Some(render_tex), 0,
+            );
+
+            gl.viewport(0, 0, fbo_size as i32, fbo_size as i32);
+            gl.clear_color(0.0, 0.0, 0.0, 0.0);
+            gl.clear(glow::COLOR_BUFFER_BIT);
+
+            gl.use_program(Some(self.program));
+            gl.bind_vertex_array(Some(self.vertex_array));
+
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(*texture));
+            gl.uniform_1_i32(gl.get_uniform_location(self.program, "u_texture").as_ref(), 0);
+
+            gl.active_texture(glow::TEXTURE1);
+            gl.bind_texture(glow::TEXTURE_2D, Some(*texture));
+            gl.uniform_1_i32(gl.get_uniform_location(self.program, "u_clouds").as_ref(), 1);
+
+            gl.active_texture(glow::TEXTURE2);
+            gl.bind_texture(glow::TEXTURE_2D, Some(*texture));
+            gl.uniform_1_i32(gl.get_uniform_location(self.program, "u_night").as_ref(), 2);
+
+            gl.active_texture(glow::TEXTURE3);
+            gl.bind_texture(glow::TEXTURE_2D, Some(*texture));
+            gl.uniform_1_i32(gl.get_uniform_location(self.program, "u_detail").as_ref(), 3);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_use_detail").as_ref(), 0.0);
+
+            gl.active_texture(glow::TEXTURE4);
+            gl.bind_texture(glow::TEXTURE_2D, Some(*texture));
+            gl.uniform_1_i32(gl.get_uniform_location(self.program, "u_stars").as_ref(), 4);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_show_stars").as_ref(), 0.0);
+
+            gl.active_texture(glow::TEXTURE5);
+            let has_rings = if let Some(rt) = self.ring_textures.get(&key.0) {
+                gl.bind_texture(glow::TEXTURE_2D, Some(*rt));
+                true
+            } else {
+                gl.bind_texture(glow::TEXTURE_2D, Some(*texture));
+                false
+            };
+            gl.uniform_1_i32(gl.get_uniform_location(self.program, "u_ring_texture").as_ref(), 5);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_has_rings").as_ref(), if has_rings { 1.0 } else { 0.0 });
+            let (ring_inner, ring_outer) = ring_params.map(|(_, i, o)| (i, o)).unwrap_or((0.0, 0.0));
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_ring_inner").as_ref(), ring_inner);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_ring_outer").as_ref(), ring_outer);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_adams_arc").as_ref(),
+                if has_rings && key.0 == CelestialBody::Neptune { 1.0 } else { 0.0 });
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_epsilon_wobble").as_ref(),
+                if has_rings && key.0 == CelestialBody::Uranus { 1.0 } else { 0.0 });
+
+            let rot_data: [f32; 9] = [
+                inv_rotation[(0, 0)] as f32, inv_rotation[(1, 0)] as f32, inv_rotation[(2, 0)] as f32,
+                inv_rotation[(0, 1)] as f32, inv_rotation[(1, 1)] as f32, inv_rotation[(2, 1)] as f32,
+                inv_rotation[(0, 2)] as f32, inv_rotation[(1, 2)] as f32, inv_rotation[(2, 2)] as f32,
+            ];
+            gl.uniform_matrix_3_f32_slice(
+                gl.get_uniform_location(self.program, "u_inv_rotation").as_ref(),
+                false, &rot_data,
+            );
+
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_flattening").as_ref(), flattening as f32);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_aspect").as_ref(), 1.0);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_scale").as_ref(), scale);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_atmosphere").as_ref(), 0.0);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_show_clouds").as_ref(), 0.0);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_show_day_night").as_ref(), 0.0);
+            gl.uniform_3_f32(gl.get_uniform_location(self.program, "u_sun_dir").as_ref(), 0.0, 0.0, -1.0);
+            gl.uniform_3_f32(gl.get_uniform_location(self.program, "u_bg_color").as_ref(), 0.0, 0.0, 0.0);
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_transparent_bg").as_ref(), 1.0);
+            gl.uniform_4_f32(gl.get_uniform_location(self.program, "u_detail_bounds").as_ref(), 0.0, 0.0, 0.0, 0.0);
+
+            gl.disable(glow::BLEND);
+
+            gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+
+            gl.enable(glow::BLEND);
+
+            let mut pixel_data = vec![0u8; fbo_size * fbo_size * 4];
+            gl.read_pixels(
+                0, 0, fbo_size as i32, fbo_size as i32,
+                glow::RGBA, glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(pixel_data.as_mut_slice())),
+            );
+
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            gl.delete_framebuffer(fbo);
+            gl.delete_texture(render_tex);
+
+            let mut pixels = Vec::with_capacity(fbo_size * fbo_size);
+            for y in (0..fbo_size).rev() {
+                for x in 0..fbo_size {
+                    let idx = (y * fbo_size + x) * 4;
+                    pixels.push(egui::Color32::from_rgba_unmultiplied(
+                        pixel_data[idx],
+                        pixel_data[idx + 1],
+                        pixel_data[idx + 2],
+                        pixel_data[idx + 3],
+                    ));
+                }
+            }
+
+            egui::ColorImage {
+                size: [fbo_size, fbo_size],
+                pixels,
+                source_size: egui::Vec2::ZERO,
+            }
         }
     }
 

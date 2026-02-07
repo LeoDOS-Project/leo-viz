@@ -93,14 +93,55 @@ impl EarthTexture {
     }
 
     pub fn render_sphere(&self, size: usize, rot: &Matrix3<f64>, flattening: f64) -> egui::ColorImage {
-        let mut pixels = vec![Color32::TRANSPARENT; size * size];
-        let center = size as f64 / 2.0;
-        let radius = center;
+        self.render_sphere_with_rings(size, rot, flattening, crate::celestial::CelestialBody::Earth, None)
+    }
+
+    pub fn render_sphere_with_rings(
+        &self, size: usize, rot: &Matrix3<f64>, flattening: f64,
+        body: crate::celestial::CelestialBody,
+        ring_texture: Option<&RingTexture>,
+    ) -> egui::ColorImage {
+        let ring = body.ring_params();
+        let outer_ratio = ring.map(|(_, _, o)| o as f64).unwrap_or(1.0);
+        let img_scale = if outer_ratio > 1.0 { outer_ratio } else { 1.0 };
+        let img_size = (size as f64 * img_scale).ceil() as usize;
+        let mut pixels = vec![Color32::TRANSPARENT; img_size * img_size];
+        let center = img_size as f64 / 2.0;
+        let radius = size as f64 / 2.0;
         let inv_rot = rot.transpose();
         let polar_scale = 1.0 - flattening;
 
-        for py in 0..size {
-            for px in 0..size {
+        if let Some((_, inner_r, outer_r)) = ring {
+            if let Some(ring_tex) = ring_texture {
+                let inner = inner_r as f64 * radius;
+                let outer = outer_r as f64 * radius;
+                for py in 0..img_size {
+                    for px in 0..img_size {
+                        let dx = px as f64 - center;
+                        let dy = py as f64 - center;
+                        let screen_pt = Vector3::new(dx / radius, -dy / radius, 0.0);
+                        let world_pt = inv_rot * screen_pt;
+                        if world_pt.y.abs() > 0.05 { continue; }
+                        let ring_r = (world_pt.x.powi(2) + world_pt.z.powi(2)).sqrt() * radius;
+                        if ring_r >= inner && ring_r <= outer {
+                            let ru = ((ring_r - inner) / (outer - inner)).clamp(0.0, 1.0);
+                            let tx = (ru * ring_tex.width as f64) as u32;
+                            let tx = tx.min(ring_tex.width - 1);
+                            let [r, g, b, a] = ring_tex.pixels[(ring_tex.height / 2 * ring_tex.width + tx) as usize];
+                            if a > 10 {
+                                let dist_sq = dx * dx + (dy / polar_scale).powi(2);
+                                let behind = dist_sq < radius * radius && world_pt.y < 0.0;
+                                let alpha = if behind { a / 3 } else { a };
+                                pixels[py * img_size + px] = Color32::from_rgba_unmultiplied(r, g, b, alpha);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for py in 0..img_size {
+            for px in 0..img_size {
                 let dx = px as f64 - center;
                 let dy = py as f64 - center;
                 let dy_scaled = dy / polar_scale;
@@ -127,13 +168,13 @@ impl EarthTexture {
                     let g = (g as f32 * shade) as u8;
                     let b = (b as f32 * shade) as u8;
 
-                    pixels[py * size + px] = Color32::from_rgb(r, g, b);
+                    pixels[py * img_size + px] = Color32::from_rgb(r, g, b);
                 }
             }
         }
 
         egui::ColorImage {
-            size: [size, size],
+            size: [img_size, img_size],
             pixels,
             source_size: egui::Vec2::ZERO,
         }
