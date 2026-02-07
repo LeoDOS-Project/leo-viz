@@ -46,8 +46,6 @@ pub(crate) struct ViewerState {
     pub(crate) tabs: Vec<TabConfig>,
     pub(crate) camera_id_counter: usize,
     pub(crate) tab_counter: usize,
-    pub(crate) time: f64,
-    pub(crate) zoom: f64,
     pub(crate) torus_zoom: f64,
     pub(crate) torus_rotation: Matrix3<f64>,
     pub(crate) planet_textures: HashMap<(CelestialBody, Skin, TextureResolution), Arc<EarthTexture>>,
@@ -117,6 +115,7 @@ pub(crate) struct ViewerState {
     pub(crate) asteroid_state: crate::solar_system::AsteroidLoadState,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) asteroid_rx: Option<mpsc::Receiver<Result<Vec<crate::solar_system::Asteroid>, String>>>,
+    pub(crate) hohmann: crate::solar_system::HohmannState,
 }
 
 
@@ -346,9 +345,10 @@ impl ViewerState {
         }
 
         {
-            let planet = &mut self.tabs[tab_idx].planets[planet_idx];
+            let tab = &mut self.tabs[tab_idx];
+            let planet = &mut tab.planets[planet_idx];
             if new_body != planet.celestial_body {
-                self.zoom = 1.0;
+                tab.settings.zoom = 1.0;
             }
             planet.celestial_body = new_body;
             if reset_skin {
@@ -1113,7 +1113,7 @@ impl ViewerState {
         let skin = planet.skin;
         let view_name = planet.name.clone();
 
-        let hide_sats = self.zoom > 100.0;
+        let hide_sats = self.tabs[tab_idx].settings.zoom > 100.0;
         let mut constellations_data: Vec<_> = if hide_sats {
             Vec::new()
         } else {
@@ -1122,7 +1122,7 @@ impl ViewerState {
                 .filter(|(_, c)| !c.hidden)
                 .map(|(orig_idx, c)| {
                     let wc = c.constellation(planet_radius, planet_mu, planet_j2, planet_eq_radius);
-                    let pos = wc.satellite_positions(self.time);
+                    let pos = wc.satellite_positions(self.tabs[tab_idx].settings.time);
                     let name = c.preset_name().to_string();
                     (wc, pos, c.color_offset, 0u8, orig_idx, name)
                 })
@@ -1130,7 +1130,7 @@ impl ViewerState {
         };
 
         if planet.show_tle_window {
-            let propagation_minutes = self.start_timestamp.timestamp() as f64 / 60.0 + self.time / 60.0;
+            let propagation_minutes = self.start_timestamp.timestamp() as f64 / 60.0 + self.tabs[tab_idx].settings.time / 60.0;
             for preset in TlePreset::ALL.iter() {
                 let Some((selected, state, shells)) = planet.tle_selections.get(preset) else { continue };
                 if !*selected { continue; }
@@ -1499,7 +1499,7 @@ impl ViewerState {
                                 crate::solar_system::AsteroidLoadState::Loaded(v) => v.as_slice(),
                                 _ => &[],
                             };
-                            crate::solar_system::draw_solar_system_view(
+                            let ss_click = crate::solar_system::draw_solar_system_view(
                                 plot_ui,
                                 celestial_body,
                                 ss_timestamp,
@@ -1508,7 +1508,40 @@ impl ViewerState {
                                 log_power,
                                 ast_slice,
                                 self.asteroid_sprite.as_ref(),
-                            )
+                            );
+                            if self.tabs[tab_idx].settings.show_hohmann {
+                                let ss_j2000 = ss_timestamp.signed_duration_since(*crate::solar_system::J2000_EPOCH_PUB).num_seconds() as f64 / 86400.0;
+                                if self.hohmann.launched {
+                                    let elapsed = ss_j2000 - self.hohmann.launch_j2000_days;
+                                    self.hohmann.mission_elapsed_days = elapsed.max(0.0);
+                                    if !self.hohmann.arrived {
+                                        let params = crate::solar_system::hohmann_transfer_params(self.hohmann.origin, self.hohmann.dest);
+                                        if let Some(p) = params {
+                                            if self.hohmann.mission_elapsed_days >= p.transfer_time_days {
+                                                self.hohmann.mission_elapsed_days = p.transfer_time_days;
+                                                self.hohmann.arrived = true;
+                                            }
+                                        }
+                                    }
+                                    if let Some(pos) = crate::solar_system::hohmann_spacecraft_position_au(&self.hohmann, ss_j2000) {
+                                        let last = self.hohmann.trail.last();
+                                        let dominated = last.map_or(false, |l| {
+                                            (l[0] - pos[0]).powi(2) + (l[1] - pos[1]).powi(2) < 1e-8
+                                        });
+                                        if !dominated {
+                                            self.hohmann.trail.push(pos);
+                                        }
+                                    }
+                                }
+                                crate::solar_system::draw_hohmann_overlay(
+                                    plot_ui,
+                                    &self.hohmann,
+                                    ss_j2000,
+                                    log_power,
+                                    dark_mode,
+                                );
+                            }
+                            ss_click
                         });
                         if let Some(new_body) = ss_result.inner {
                             self.tabs[tab_idx].planets[planet_idx].celestial_body = new_body;

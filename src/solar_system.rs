@@ -5,6 +5,324 @@ use std::f64::consts::PI;
 
 pub const SCALE_OFFSET: f64 = 1.0;
 
+const MU_AU3_DAY2: f64 = (2.0 * PI) * (2.0 * PI) / (365.25 * 365.25);
+const AU_KM: f64 = 149_597_870.7;
+
+pub const HOHMANN_PLANETS: [CelestialBody; 8] = [
+    CelestialBody::Mercury,
+    CelestialBody::Venus,
+    CelestialBody::Earth,
+    CelestialBody::Mars,
+    CelestialBody::Jupiter,
+    CelestialBody::Saturn,
+    CelestialBody::Uranus,
+    CelestialBody::Neptune,
+];
+
+#[allow(dead_code)]
+pub struct HohmannParams {
+    pub transfer_sma: f64,
+    pub eccentricity: f64,
+    pub transfer_time_days: f64,
+    pub departure_dv_km_s: f64,
+    pub arrival_dv_km_s: f64,
+    pub phase_angle_rad: f64,
+    pub synodic_period_days: f64,
+}
+
+pub fn hohmann_transfer_params(
+    origin: CelestialBody,
+    dest: CelestialBody,
+) -> Option<HohmannParams> {
+    let r1 = origin.semi_major_axis_au()?;
+    let r2 = dest.semi_major_axis_au()?;
+    let t1 = origin.orbital_period_days()?;
+    let t2 = dest.orbital_period_days()?;
+
+    let a_t = (r1 + r2) / 2.0;
+    let e = (r2 - r1).abs() / (r1 + r2);
+    let transfer_time = PI * (a_t.powi(3) / MU_AU3_DAY2).sqrt();
+
+    let mu_km3_s2 = 1.32712440018e11;
+    let r1_km = r1 * AU_KM;
+    let r2_km = r2 * AU_KM;
+    let v_circ1 = (mu_km3_s2 / r1_km).sqrt();
+    let v_circ2 = (mu_km3_s2 / r2_km).sqrt();
+    let a_t_km = a_t * AU_KM;
+    let v_dep = (mu_km3_s2 * (2.0 / r1_km - 1.0 / a_t_km)).sqrt();
+    let v_arr = (mu_km3_s2 * (2.0 / r2_km - 1.0 / a_t_km)).sqrt();
+    let departure_dv = (v_dep - v_circ1).abs();
+    let arrival_dv = (v_circ2 - v_arr).abs();
+
+    let ratio = ((r1 / r2 + 1.0).powi(3) / 8.0).sqrt();
+    let phase_angle = PI * (1.0 - ratio);
+
+    let synodic = (1.0 / t1 - 1.0 / t2).abs();
+    let synodic_period = if synodic > 1e-12 { 1.0 / synodic } else { f64::INFINITY };
+
+    Some(HohmannParams {
+        transfer_sma: a_t,
+        eccentricity: e,
+        transfer_time_days: transfer_time,
+        departure_dv_km_s: departure_dv,
+        arrival_dv_km_s: arrival_dv,
+        phase_angle_rad: phase_angle,
+        synodic_period_days: synodic_period,
+    })
+}
+
+pub fn next_launch_window_days(
+    origin: CelestialBody,
+    dest: CelestialBody,
+    j2000_days: f64,
+) -> Option<f64> {
+    let params = hohmann_transfer_params(origin, dest)?;
+    let pos_o = compute_body_position_au(origin, j2000_days)?;
+    let pos_d = compute_body_position_au(dest, j2000_days)?;
+    let angle_o = pos_o[1].atan2(pos_o[0]);
+    let angle_d = pos_d[1].atan2(pos_d[0]);
+    let mut current_phase = angle_d - angle_o;
+    while current_phase < -PI { current_phase += 2.0 * PI; }
+    while current_phase > PI { current_phase -= 2.0 * PI; }
+
+    let required = params.phase_angle_rad;
+    let t1 = origin.orbital_period_days()?;
+    let t2 = dest.orbital_period_days()?;
+    let rel_rate = 2.0 * PI / t2 - 2.0 * PI / t1;
+    if rel_rate.abs() < 1e-15 { return None; }
+
+    let mut diff = required - current_phase;
+    if rel_rate > 0.0 {
+        while diff < 0.0 { diff += 2.0 * PI; }
+    } else {
+        while diff > 0.0 { diff -= 2.0 * PI; }
+    }
+    let wait = diff / rel_rate;
+    Some(wait.max(0.0))
+}
+
+pub struct HohmannState {
+    pub origin: CelestialBody,
+    pub dest: CelestialBody,
+    pub launched: bool,
+    pub launch_j2000_days: f64,
+    pub mission_elapsed_days: f64,
+    pub trail: Vec<[f64; 2]>,
+    pub departure_angle: f64,
+    pub arrival_angle: f64,
+    pub arrived: bool,
+}
+
+impl Default for HohmannState {
+    fn default() -> Self {
+        Self {
+            origin: CelestialBody::Earth,
+            dest: CelestialBody::Mars,
+            launched: false,
+            launch_j2000_days: 0.0,
+            mission_elapsed_days: 0.0,
+            trail: Vec::new(),
+            departure_angle: 0.0,
+            arrival_angle: 0.0,
+            arrived: false,
+        }
+    }
+}
+
+fn transfer_point(
+    fraction: f64,
+    a_t: f64,
+    e: f64,
+    going_outward: bool,
+    departure_angle: f64,
+) -> [f64; 2] {
+    let m = if going_outward { PI * fraction } else { PI * (1.0 + fraction) };
+    let ea = solve_kepler(m, e);
+    let r = a_t * (1.0 - e * ea.cos());
+    let true_anomaly = 2.0
+        * ((1.0 + e).sqrt() * (ea / 2.0).sin())
+            .atan2((1.0 - e).sqrt() * (ea / 2.0).cos());
+    let angle = if going_outward {
+        departure_angle + true_anomaly
+    } else {
+        departure_angle - PI + true_anomaly
+    };
+    [r * angle.cos(), r * angle.sin()]
+}
+
+pub fn hohmann_spacecraft_position_au(
+    state: &HohmannState,
+    j2000_days: f64,
+) -> Option<[f64; 2]> {
+    if state.arrived {
+        return compute_body_position_au(state.dest, j2000_days);
+    }
+
+    let params = hohmann_transfer_params(state.origin, state.dest)?;
+    let r1 = state.origin.semi_major_axis_au()?;
+    let r2 = state.dest.semi_major_axis_au()?;
+    let going_outward = r2 >= r1;
+
+    let fraction = (state.mission_elapsed_days / params.transfer_time_days)
+        .clamp(0.0, 1.0);
+
+    Some(transfer_point(
+        fraction, params.transfer_sma, params.eccentricity,
+        going_outward, state.departure_angle,
+    ))
+}
+
+pub fn draw_hohmann_overlay(
+    plot_ui: &mut egui_plot::PlotUi,
+    state: &HohmannState,
+    j2000_days: f64,
+    log_power: f64,
+    dark_mode: bool,
+) {
+    let params = match hohmann_transfer_params(state.origin, state.dest) {
+        Some(p) => p,
+        None => return,
+    };
+    let r1 = match state.origin.semi_major_axis_au() {
+        Some(r) => r,
+        None => return,
+    };
+    let r2 = match state.dest.semi_major_axis_au() {
+        Some(r) => r,
+        None => return,
+    };
+
+    if !state.launched { return; }
+
+    let depart_angle = state.departure_angle;
+    let going_outward = r2 >= r1;
+
+    let n_pts = 200;
+    let mut ellipse_pts: Vec<[f64; 2]> = Vec::with_capacity(n_pts + 1);
+    for i in 0..=n_pts {
+        let frac = i as f64 / n_pts as f64;
+        let pt = transfer_point(
+            frac, params.transfer_sma, params.eccentricity,
+            going_outward, depart_angle,
+        );
+        ellipse_pts.push(scale_position(pt[0], pt[1], log_power));
+    }
+    let ellipse_color = if dark_mode {
+        eframe::egui::Color32::from_rgba_unmultiplied(100, 255, 100, 120)
+    } else {
+        eframe::egui::Color32::from_rgba_unmultiplied(0, 180, 0, 140)
+    };
+    plot_ui.line(
+        Line::new("", ellipse_pts)
+            .color(ellipse_color)
+            .width(2.0)
+            .style(egui_plot::LineStyle::dashed_dense()),
+    );
+
+    if let Some(pos) = hohmann_spacecraft_position_au(state, j2000_days) {
+        let sp = scale_position(pos[0], pos[1], log_power);
+
+        if state.trail.len() >= 2 {
+            let max_trail = 500;
+            let start = if state.trail.len() > max_trail {
+                state.trail.len() - max_trail
+            } else {
+                0
+            };
+            let trail_pts: Vec<[f64; 2]> = state.trail[start..]
+                .iter()
+                .map(|p| scale_position(p[0], p[1], log_power))
+                .collect();
+            let trail_color = if dark_mode {
+                eframe::egui::Color32::from_rgba_unmultiplied(255, 200, 50, 100)
+            } else {
+                eframe::egui::Color32::from_rgba_unmultiplied(200, 150, 0, 120)
+            };
+            plot_ui.line(
+                Line::new("", trail_pts)
+                    .color(trail_color)
+                    .width(2.5),
+            );
+        }
+
+        let bounds = plot_ui.plot_bounds();
+        let view_size = (bounds.max()[0] - bounds.min()[0])
+            .max(bounds.max()[1] - bounds.min()[1]);
+        let marker_r = view_size * 0.008;
+        let marker_pts = circle_points(sp[0], sp[1], marker_r, 16);
+        let sc_color = eframe::egui::Color32::from_rgb(255, 220, 50);
+        plot_ui.line(
+            Line::new("", marker_pts)
+                .color(sc_color)
+                .width(3.0),
+        );
+        plot_ui.points(
+            egui_plot::Points::new("", vec![sp])
+                .color(sc_color)
+                .radius(5.0),
+        );
+
+        let dep_pos = scale_position(
+            r1 * depart_angle.cos(),
+            r1 * depart_angle.sin(),
+            log_power,
+        );
+        let dv1_text = format!("\u{0394}v1: {:.2} km/s", params.departure_dv_km_s);
+        plot_ui.text(
+            Text::new(
+                "",
+                PlotPoint::new(dep_pos[0], dep_pos[1] - view_size * 0.03),
+                eframe::egui::RichText::new(dv1_text)
+                    .size(11.0)
+                    .color(eframe::egui::Color32::from_rgb(100, 255, 100)),
+            )
+            .color(eframe::egui::Color32::from_rgb(100, 255, 100)),
+        );
+
+        let arr_angle = depart_angle + PI;
+        let arr_pos = scale_position(
+            r2 * arr_angle.cos(),
+            r2 * arr_angle.sin(),
+            log_power,
+        );
+        let dv2_text = format!("\u{0394}v2: {:.2} km/s", params.arrival_dv_km_s);
+        plot_ui.text(
+            Text::new(
+                "",
+                PlotPoint::new(arr_pos[0], arr_pos[1] - view_size * 0.03),
+                eframe::egui::RichText::new(dv2_text)
+                    .size(11.0)
+                    .color(eframe::egui::Color32::from_rgb(100, 255, 100)),
+            )
+            .color(eframe::egui::Color32::from_rgb(100, 255, 100)),
+        );
+
+        let met_days = state.mission_elapsed_days;
+        let info_x = bounds.min()[0] + view_size * 0.02;
+        let info_y = bounds.max()[1] - view_size * 0.02;
+        let total_dv = params.departure_dv_km_s + params.arrival_dv_km_s;
+        let progress = (met_days / params.transfer_time_days * 100.0).min(100.0);
+        let info = format!(
+            "MET: {:.1} days  ({:.0}%)\n\u{0394}v total: {:.2} km/s",
+            met_days, progress, total_dv,
+        );
+        let info_color = if dark_mode {
+            eframe::egui::Color32::from_rgb(200, 200, 200)
+        } else {
+            eframe::egui::Color32::from_rgb(40, 40, 40)
+        };
+        plot_ui.text(
+            Text::new(
+                "",
+                PlotPoint::new(info_x, info_y),
+                eframe::egui::RichText::new(info).size(12.0),
+            )
+            .color(info_color)
+            .anchor(eframe::egui::Align2::LEFT_TOP),
+        );
+    }
+}
+
 struct MoonOrbit {
     parent: CelestialBody,
     distance_au: f64,
@@ -156,6 +474,9 @@ static J2000_EPOCH: std::sync::LazyLock<chrono::DateTime<chrono::Utc>> =
             .unwrap()
             .with_timezone(&chrono::Utc)
     });
+
+pub static J2000_EPOCH_PUB: std::sync::LazyLock<chrono::DateTime<chrono::Utc>> =
+    std::sync::LazyLock::new(|| *J2000_EPOCH);
 
 fn scale_position(x: f64, y: f64, power: f64) -> [f64; 2] {
     let r = (x * x + y * y).sqrt();
@@ -317,10 +638,12 @@ pub fn draw_solar_system_view(
 
     let mut ast_positions: Vec<(usize, f64, f64)> = Vec::new();
     if !asteroids.is_empty() {
+        let belt_scaled = (3.0 + SCALE_OFFSET).powf(log_power) - SCALE_OFFSET.powf(log_power);
+        let alpha = ((belt_scaled / view_size * 4.0).clamp(0.0, 1.0).powi(2) * 255.0) as u8;
         let asteroid_color = if dark_mode {
-            eframe::egui::Color32::from_rgba_unmultiplied(180, 160, 140, 120)
+            eframe::egui::Color32::from_rgba_unmultiplied(180, 160, 140, alpha.min(120))
         } else {
-            eframe::egui::Color32::from_rgba_unmultiplied(120, 100, 80, 140)
+            eframe::egui::Color32::from_rgba_unmultiplied(120, 100, 80, alpha.min(140))
         };
         let mut pts: Vec<[f64; 2]> = Vec::with_capacity(asteroids.len());
         for (idx, ast) in asteroids.iter().enumerate() {
@@ -329,10 +652,11 @@ pub fn draw_solar_system_view(
             ast_positions.push((idx, scaled[0], scaled[1]));
             pts.push([scaled[0], scaled[1]]);
         }
+        let ast_radius = (belt_scaled / view_size * 6.0).clamp(0.5, 4.0) as f32;
         plot_ui.points(
             egui_plot::Points::new("", pts)
                 .color(asteroid_color)
-                .radius(1.5),
+                .radius(ast_radius),
         );
     }
 

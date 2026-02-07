@@ -331,7 +331,97 @@ impl ViewerState {
                         ui.add(egui::DragValue::new(&mut self.ss_auto_zoom_stay).range(0.0..=30.0).speed(0.1).suffix("s"));
                     });
                 });
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_hohmann, "Hohmann transfer"));
+                let h_on = on && s.show_hohmann;
+                let h_sim_time = s.time;
+                ui.indent("hohmann_opts", |ui| {
+                    ui.add_enabled_ui(h_on, |ui| {
+                        use crate::solar_system::{HOHMANN_PLANETS, hohmann_transfer_params, next_launch_window_days};
+                        let h = &mut self.hohmann;
+                        ui.horizontal(|ui| {
+                            ui.label("From:");
+                            egui::ComboBox::from_id_salt("hohmann_origin")
+                                .selected_text(h.origin.label())
+                                .show_ui(ui, |ui| {
+                                    for &body in &HOHMANN_PLANETS {
+                                        ui.selectable_value(&mut h.origin, body, body.label());
+                                    }
+                                });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("To:");
+                            egui::ComboBox::from_id_salt("hohmann_dest")
+                                .selected_text(h.dest.label())
+                                .show_ui(ui, |ui| {
+                                    for &body in &HOHMANN_PLANETS {
+                                        ui.selectable_value(&mut h.dest, body, body.label());
+                                    }
+                                });
+                        });
+                        if h.origin == h.dest {
+                            ui.label("Origin and destination must differ");
+                        } else if let Some(params) = hohmann_transfer_params(h.origin, h.dest) {
+                            ui.label(format!(
+                                "Transfer: {:.1} days ({:.2} yr)",
+                                params.transfer_time_days,
+                                params.transfer_time_days / 365.25,
+                            ));
+                            ui.label(format!(
+                                "\u{0394}v1: {:.2} km/s  \u{0394}v2: {:.2} km/s",
+                                params.departure_dv_km_s,
+                                params.arrival_dv_km_s,
+                            ));
+                            ui.label(format!(
+                                "Total \u{0394}v: {:.2} km/s",
+                                params.departure_dv_km_s + params.arrival_dv_km_s,
+                            ));
+                            let ss_ts = self.start_timestamp + Duration::seconds(h_sim_time as i64);
+                            let j2000 = ss_ts.signed_duration_since(*crate::solar_system::J2000_EPOCH_PUB).num_seconds() as f64 / 86400.0;
+                            let window_wait = next_launch_window_days(h.origin, h.dest, j2000);
+                            if let Some(wait) = window_wait {
+                                ui.label(format!("Next window: {:.1} days", wait));
+                            }
+                            if !h.launched {
+                                if ui.button("Fast forward and launch").clicked() {
+                                    let wait = window_wait.unwrap_or(0.0);
+                                    s.time += wait * 86400.0;
+                                    let launch_j2000 = j2000 + wait;
+                                    if let Some(pos) = crate::solar_system::compute_body_position_au(h.origin, launch_j2000) {
+                                        h.departure_angle = pos[1].atan2(pos[0]);
+                                    }
+                                    let arrival_j2000 = launch_j2000 + params.transfer_time_days;
+                                    if let Some(dest_pos) = crate::solar_system::compute_body_position_au(h.dest, arrival_j2000) {
+                                        h.arrival_angle = dest_pos[1].atan2(dest_pos[0]);
+                                    }
+                                    h.launched = true;
+                                    h.arrived = false;
+                                    h.launch_j2000_days = launch_j2000;
+                                    h.mission_elapsed_days = 0.0;
+                                    h.trail.clear();
+                                }
+                            } else {
+                                ui.label(format!(
+                                    "MET: {:.1} days",
+                                    h.mission_elapsed_days,
+                                ));
+                                if h.arrived {
+                                    ui.label("Arrived!");
+                                }
+                                if ui.button("Reset").clicked() {
+                                    h.launched = false;
+                                    h.arrived = false;
+                                    h.mission_elapsed_days = 0.0;
+                                    h.trail.clear();
+                                }
+                            }
+                        }
+                    });
+                });
             });
+        }
+
+        {
+            let s = &mut self.tabs[active].settings;
 
             ui.checkbox(&mut self.show_planet_sizes, "Show planet sizes");
             ui.indent("planet_sizes_opts", |ui| {
