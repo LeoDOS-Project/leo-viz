@@ -92,13 +92,29 @@ impl ViewerState {
         ui.label(egui::RichText::new("Simulation").strong());
         ui.horizontal(|ui| {
             ui.label("Speed:");
-            ui.add(egui::DragValue::new(speed_ref).range(-86400.0..=86400.0).speed(1.0));
+            let abs_speed = speed_ref.abs();
+            let drag_speed = if abs_speed > 31_536_000.0 { 100_000.0 } else if abs_speed > 86400.0 { 1000.0 } else if abs_speed > 3600.0 { 100.0 } else { 1.0 };
+            ui.add(egui::DragValue::new(speed_ref).range(-3_153_600_000.0..=3_153_600_000.0).speed(drag_speed));
             if ui.button("⏪").clicked() {
                 *speed_ref = -*speed_ref;
             }
             let pause_label = if *animate_ref { "⏸" } else { "▶" };
             if ui.button(pause_label).clicked() {
                 *animate_ref = !*animate_ref;
+            }
+            if abs_speed > 60.0 {
+                let label = if abs_speed >= 31_536_000.0 {
+                    format!("{:.1} earth years/s", abs_speed / 31_536_000.0)
+                } else if abs_speed >= 2_592_000.0 {
+                    format!("{:.1} earth months/s", abs_speed / 2_592_000.0)
+                } else if abs_speed >= 86400.0 {
+                    format!("{:.1} earth days/s", abs_speed / 86400.0)
+                } else if abs_speed >= 3600.0 {
+                    format!("{:.1} earth hours/s", abs_speed / 3600.0)
+                } else {
+                    format!("{:.1} earth minutes/s", abs_speed / 60.0)
+                };
+                ui.label(egui::RichText::new(label).weak());
             }
         });
         let start = self.start_timestamp;
@@ -239,87 +255,132 @@ impl ViewerState {
 
             ui.separator();
             ui.label(egui::RichText::new("Display").strong());
-            ui.checkbox(&mut s.show_orbits, "Show orbits");
-            ui.checkbox(&mut s.show_intra_links, "Intra-plane links");
-            ui.checkbox(&mut s.show_links, "Inter-plane links");
-            ui.checkbox(&mut s.show_routing_paths, "Show routing paths");
-            if s.show_routing_paths {
-                ui.indent("routing_opts", |ui| {
-                    ui.checkbox(&mut s.show_manhattan_path, "Manhattan (red)");
-                    ui.checkbox(&mut s.show_shortest_path, "Shortest distance (green)");
-                });
-            }
-            ui.checkbox(&mut s.show_asc_desc_colors, "Asc/Desc colors");
-            ui.checkbox(&mut s.single_color, "Monochrome planes");
-            ui.checkbox(&mut s.show_torus, "Show torus");
 
-            ui.separator();
-            ui.label(egui::RichText::new("Overlays").strong());
-            ui.checkbox(&mut s.show_coverage, "Show coverage");
-            if s.show_coverage {
-                ui.horizontal(|ui| {
-                    ui.label("Angle:");
-                    ui.add(egui::DragValue::new(&mut s.coverage_angle)
-                        .range(0.5..=70.0).speed(0.1).max_decimals(1).suffix("°"));
+            ui.checkbox(&mut s.render_planet, "Show planet");
+            ui.indent("planet_opts", |ui| {
+                let on = s.render_planet;
+                {
+                    let mut show_behind = !s.hide_behind_earth;
+                    if ui.add_enabled(on, egui::Checkbox::new(&mut show_behind, "Show behind planet")).changed() {
+                        s.hide_behind_earth = !show_behind;
+                    }
+                }
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_clouds, "Show clouds"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_day_night, "Show day/night"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_terminator, "Show sunrise/sunset circle"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_orbits, "Show orbits"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_coverage, "Show coverage"));
+                ui.indent("coverage_opts", |ui| {
+                    ui.add_enabled_ui(on && s.show_coverage, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Angle:");
+                            ui.add(egui::DragValue::new(&mut s.coverage_angle)
+                                .range(0.5..=70.0).speed(0.1).max_decimals(1).suffix("°"));
+                        });
+                    });
                 });
-            }
-            ui.checkbox(&mut s.show_altitude_lines, "Altitude lines");
-            ui.checkbox(&mut s.show_ground_track, "Show ground");
-            ui.checkbox(&mut s.show_devices, "Show devices");
-            ui.checkbox(&mut s.show_axes, "Show axes");
-            ui.checkbox(&mut s.show_polar_circle, "Show polar circle");
-            ui.checkbox(&mut s.show_equator, "Show equator");
-            ui.checkbox(&mut s.show_borders, "Country borders");
-            ui.checkbox(&mut s.show_cities, "City labels");
-            ui.checkbox(&mut s.show_day_night, "Day/night cycle");
-            ui.add_enabled(s.show_day_night, egui::Checkbox::new(&mut s.show_terminator, "Show terminator"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_altitude_lines, "Altitude lines"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_axes, "Show axes"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_polar_circle, "Show polar circle"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_equator, "Show equator"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_borders, "Country borders"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_cities, "City labels"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_devices, "Show devices"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_stars, "Show stars and milky way"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_torus, "Show torus"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_asc_desc_colors, "Asc/Desc colors"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.single_color, "Monochrome planes"));
+                ui.horizontal(|ui| {
+                    ui.add_enabled_ui(on, |ui| {
+                        ui.label("Sat:");
+                        ui.add(egui::DragValue::new(&mut s.sat_radius).range(1.0..=15.0).speed(0.1));
+                        ui.label("Link:");
+                        ui.add(egui::DragValue::new(&mut s.link_width).range(0.1..=5.0).speed(0.1));
+                    });
+                });
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.fixed_sizes, "Fixed sizes (ignore alt)"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_intra_links, "Intra-plane links"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_links, "Inter-plane links"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_routing_paths, "Show routing paths"));
+                ui.indent("routing_opts", |ui| {
+                    ui.add_enabled(on && s.show_routing_paths, egui::Checkbox::new(&mut s.show_manhattan_path, "Manhattan (red)"));
+                    ui.add_enabled(on && s.show_routing_paths, egui::Checkbox::new(&mut s.show_shortest_path, "Shortest distance (green)"));
+                });
+            });
+
+            ui.checkbox(&mut s.show_solar_system, "Show solar system");
+            ui.indent("solar_system_opts", |ui| {
+                let on = s.show_solar_system;
+                ui.horizontal(|ui| {
+                    ui.add_enabled_ui(on, |ui| {
+                        ui.label("Scale:");
+                        ui.add(egui::DragValue::new(&mut s.solar_system_log_power)
+                            .range(0.1..=1.0).speed(0.01).max_decimals(2));
+                    });
+                });
+                ui.add_enabled_ui(on, |ui| {
+                    ui.horizontal(|ui| {
+                        let label = if self.ss_auto_zoom { "\u{23f8}" } else { "\u{25b6}" };
+                        if ui.button(label).clicked() {
+                            self.ss_auto_zoom = !self.ss_auto_zoom;
+                            if self.ss_auto_zoom { self.ss_auto_zoom_time = 0.0; }
+                        }
+                        ui.label("Auto-zoom");
+                        ui.add(egui::DragValue::new(&mut self.ss_auto_zoom_duration).range(5.0..=120.0).speed(0.5).suffix("s"));
+                        ui.label("Stay:");
+                        ui.add(egui::DragValue::new(&mut self.ss_auto_zoom_stay).range(0.0..=30.0).speed(0.1).suffix("s"));
+                    });
+                });
+            });
+
+            ui.checkbox(&mut self.show_planet_sizes, "Show planet sizes");
+            ui.indent("planet_sizes_opts", |ui| {
+                ui.add_enabled_ui(self.show_planet_sizes, |ui| {
+                    ui.horizontal(|ui| {
+                        let label = if self.planet_sizes_auto_zoom { "\u{23f8}" } else { "\u{25b6}" };
+                        if ui.button(label).clicked() {
+                            self.planet_sizes_auto_zoom = !self.planet_sizes_auto_zoom;
+                            if self.planet_sizes_auto_zoom { self.planet_sizes_auto_time = 0.0; }
+                        }
+                        ui.label("Auto-zoom");
+                        ui.add(egui::DragValue::new(&mut self.planet_sizes_zoom_duration).range(5.0..=120.0).speed(0.5).suffix("s"));
+                        ui.label("Stay:");
+                        ui.add(egui::DragValue::new(&mut self.planet_sizes_stay_duration).range(0.0..=30.0).speed(0.1).suffix("s"));
+                    });
+                });
+            });
+            ui.checkbox(&mut s.show_ground_track, "Show ground track");
+
+            ui.checkbox(&mut self.auto_hide_tab_bar, "Auto-hide UI");
+            ui.checkbox(&mut self.auto_cycle_tabs, "Auto-cycle tabs");
+            ui.indent("cycle_opts", |ui| {
+                ui.add_enabled_ui(self.auto_cycle_tabs, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Interval:");
+                        ui.add(egui::DragValue::new(&mut self.cycle_interval).range(1.0..=60.0).speed(0.5).suffix("s"));
+                    });
+                });
+            });
 
             ui.separator();
             ui.label(egui::RichText::new("Rendering").strong());
-            ui.checkbox(&mut s.render_planet, "Show planet");
-            {
-                let mut show_behind = !s.hide_behind_earth;
-                if ui.add_enabled(s.render_planet, egui::Checkbox::new(&mut show_behind, "Show behind planet")).changed() {
-                    s.hide_behind_earth = !show_behind;
-                }
-            }
-            ui.checkbox(&mut s.show_clouds, "Show clouds");
-            ui.checkbox(&mut s.show_stars, "Show stars");
-            ui.add_enabled(s.show_stars, egui::Checkbox::new(&mut s.show_milky_way, "Show Milky Way"));
+            ui.checkbox(&mut self.dark_mode, "Dark mode");
             ui.horizontal(|ui| {
-                ui.label("Sat:");
-                ui.add(egui::DragValue::new(&mut s.sat_radius).range(1.0..=15.0).speed(0.1));
-                ui.label("Link:");
-                ui.add(egui::DragValue::new(&mut s.link_width).range(0.1..=5.0).speed(0.1));
+                ui.label("Texture:");
+                egui::ComboBox::from_id_salt("tex_res")
+                    .selected_text(self.texture_resolution.label())
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.texture_resolution, TextureResolution::R512, "512");
+                        ui.selectable_value(&mut self.texture_resolution, TextureResolution::R1024, "1K");
+                        ui.selectable_value(&mut self.texture_resolution, TextureResolution::R2048, "2K");
+                        ui.selectable_value(&mut self.texture_resolution, TextureResolution::R8192, "8K");
+                        #[cfg(not(target_arch = "wasm32"))]
+                        ui.selectable_value(&mut self.texture_resolution, TextureResolution::R21504, "21K");
+                    });
             });
-            ui.checkbox(&mut s.fixed_sizes, "Fixed sizes (ignore alt)");
-        }
-
-        ui.separator();
-        ui.label(egui::RichText::new("Global").strong());
-        ui.checkbox(&mut self.dark_mode, "Dark mode");
-        ui.horizontal(|ui| {
-            ui.label("Texture:");
-            egui::ComboBox::from_id_salt("tex_res")
-                .selected_text(self.texture_resolution.label())
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R512, "512");
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R1024, "1K");
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R2048, "2K");
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R8192, "8K");
-                    #[cfg(not(target_arch = "wasm32"))]
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R21504, "21K");
-                });
-        });
-        ui.checkbox(&mut self.use_gpu_rendering, "GPU rendering");
-        #[cfg(not(target_arch = "wasm32"))]
-        ui.checkbox(&mut self.tile_overlay.enabled, "Satellite tiles (Esri)");
-        ui.checkbox(&mut self.auto_cycle_tabs, "Auto-cycle tabs");
-        if self.auto_cycle_tabs {
-            ui.horizontal(|ui| {
-                ui.label("Interval:");
-                ui.add(egui::DragValue::new(&mut self.cycle_interval).range(1.0..=60.0).speed(0.5).suffix("s"));
-            });
+            ui.checkbox(&mut self.use_gpu_rendering, "GPU rendering");
+            #[cfg(not(target_arch = "wasm32"))]
+            ui.checkbox(&mut self.tile_overlay.enabled, "Satellite tiles (Esri)");
         }
     }
 }
