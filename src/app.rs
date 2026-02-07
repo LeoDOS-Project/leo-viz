@@ -75,8 +75,6 @@ impl App {
                 tabs: vec![TabConfig::new("View 1".to_string())],
                 camera_id_counter: 0,
                 tab_counter: 1,
-                time: 0.0,
-                zoom: 1.0,
                 torus_zoom: 1.0,
                 torus_rotation: torus_initial,
                 planet_textures: {
@@ -267,6 +265,7 @@ impl App {
                 asteroid_state: crate::solar_system::AsteroidLoadState::NotLoaded,
                 #[cfg(not(target_arch = "wasm32"))]
                 asteroid_rx: None,
+                hohmann: crate::solar_system::HohmannState::default(),
             },
             first_frame: true,
         }
@@ -533,7 +532,7 @@ impl eframe::App for App {
                 let margin = 1.5;
                 let lon_center = (min_lon + max_lon) / 2.0;
                 let lat_center = (min_lat + max_lat) / 2.0;
-                let tile_deg = 360.0 / (1u64 << camera_zoom_to_tile_zoom(v.zoom).clamp(2, 18)) as f64;
+                let tile_deg = 360.0 / (1u64 << camera_zoom_to_tile_zoom(tile_zoom).clamp(2, 18)) as f64;
                 let min_half = tile_deg * 3.0;
                 let lon_half = ((max_lon - min_lon) / 2.0 * margin).max(min_half);
                 let lat_half = ((max_lat - min_lat) / 2.0 * margin).max(min_half);
@@ -543,7 +542,7 @@ impl eframe::App for App {
                 max_lat = (lat_center + lat_half).min(85.0);
                 let lon_span = max_lon - min_lon;
 
-                let mut tile_zoom = camera_zoom_to_tile_zoom(v.zoom).max(2);
+                let mut tile_zoom = camera_zoom_to_tile_zoom(tile_zoom).max(2);
                 let (needed, x_origin) = loop {
                     let n = 1u32 << tile_zoom;
                     let tl = lon_lat_to_tile(min_lon, max_lat, tile_zoom);
