@@ -400,7 +400,7 @@ pub fn draw_3d_view(
             [margin, margin],
         ));
 
-        let visual_earth_r = planet_radius * 0.95;
+        let visual_earth_r = planet_radius;
         let earth_r_sq = visual_earth_r * visual_earth_r;
 
         if show_orbits && !hide_behind_earth {
