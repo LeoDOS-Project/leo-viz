@@ -26,6 +26,47 @@ use crate::EARTH_VISUAL_SCALE;
 pub const COLOR_ASCENDING: egui::Color32 = egui::Color32::from_rgb(200, 120, 50);
 pub const COLOR_DESCENDING: egui::Color32 = egui::Color32::from_rgb(50, 100, 180);
 
+fn clip_link_at_earth(
+    rx1: f64, ry1: f64, rz1: f64, visible1: bool,
+    rx2: f64, ry2: f64, rz2: f64, visible2: bool,
+    earth_r_sq: f64,
+) -> Option<([f64; 2], [f64; 2])> {
+    if visible1 && visible2 {
+        return Some(([rx1, ry1], [rx2, ry2]));
+    }
+    if !visible1 && !visible2 {
+        return None;
+    }
+    let (vx, vy, vz, hx, hy, hz) = if visible1 {
+        (rx1, ry1, rz1, rx2, ry2, rz2)
+    } else {
+        (rx2, ry2, rz2, rx1, ry1, rz1)
+    };
+    let dx = hx - vx;
+    let dy = hy - vy;
+    let dz = hz - vz;
+    let mut lo = 0.0_f64;
+    let mut hi = 1.0_f64;
+    for _ in 0..20 {
+        let mid = (lo + hi) * 0.5;
+        let mx = vx + mid * dx;
+        let my = vy + mid * dy;
+        let mz = vz + mid * dz;
+        if mz >= 0.0 || (mx * mx + my * my) >= earth_r_sq {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let cx = vx + lo * dx;
+    let cy = vy + lo * dy;
+    if visible1 {
+        Some(([rx1, ry1], [cx, cy]))
+    } else {
+        Some(([cx, cy], [rx2, ry2]))
+    }
+}
+
 pub fn draw_satellite_camera(
     ui: &mut egui::Ui,
     camera_id: usize,
@@ -250,23 +291,28 @@ pub fn draw_routing_path(
             let visible1 = rz1 >= 0.0 || (rx1 * rx1 + ry1 * ry1) >= earth_r_sq;
             let visible2 = rz2 >= 0.0 || (rx2 * rx2 + ry2 * ry2) >= earth_r_sq;
 
-            if hide_behind_earth && !visible1 && !visible2 {
-                continue;
-            }
-
-            let line_color = if visible1 && visible2 {
-                color
+            if hide_behind_earth {
+                if let Some((p1, p2)) = clip_link_at_earth(rx1, ry1, rz1, visible1, rx2, ry2, rz2, visible2, earth_r_sq) {
+                    plot_ui.line(
+                        Line::new("", PlotPoints::new(vec![p1, p2]))
+                            .color(color)
+                            .width(width),
+                    );
+                }
             } else {
-                egui::Color32::from_rgba_unmultiplied(
-                    color.r() / 2, color.g() / 2, color.b() / 2, 150,
-                )
-            };
-
-            plot_ui.line(
-                Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
-                    .color(line_color)
-                    .width(width),
-            );
+                let line_color = if visible1 && visible2 {
+                    color
+                } else {
+                    egui::Color32::from_rgba_unmultiplied(
+                        color.r() / 2, color.g() / 2, color.b() / 2, 150,
+                    )
+                };
+                plot_ui.line(
+                    Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
+                        .color(line_color)
+                        .width(width),
+                );
+            }
         }
     }
 }
@@ -1016,16 +1062,22 @@ pub fn draw_3d_view(
                         let (rx2, ry2, rz2) = rotate_point_matrix(neighbor.x, neighbor.y, neighbor.z, &satellite_rotation);
                         let visible1 = rz1 >= 0.0 || (rx1 * rx1 + ry1 * ry1) >= earth_r_sq;
                         let visible2 = rz2 >= 0.0 || (rx2 * rx2 + ry2 * ry2) >= earth_r_sq;
-                        let both_visible = visible1 && visible2;
-                        if hide_behind_earth && !both_visible {
-                            continue;
+                        if hide_behind_earth {
+                            if let Some((p1, p2)) = clip_link_at_earth(rx1, ry1, rz1, visible1, rx2, ry2, rz2, visible2, earth_r_sq) {
+                                plot_ui.line(
+                                    Line::new("", PlotPoints::new(vec![p1, p2]))
+                                        .color(base_link_color)
+                                        .width(scaled_link_width),
+                                );
+                            }
+                        } else {
+                            let color = if visible1 && visible2 { base_link_color } else { link_dim };
+                            plot_ui.line(
+                                Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
+                                    .color(color)
+                                    .width(scaled_link_width),
+                            );
                         }
-                        let color = if both_visible { base_link_color } else { link_dim };
-                        plot_ui.line(
-                            Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
-                                .color(color)
-                                .width(scaled_link_width),
-                        );
                     }
                 }
             }
@@ -1051,16 +1103,22 @@ pub fn draw_3d_view(
                         let (rx2, ry2, rz2) = rotate_point_matrix(next.x, next.y, next.z, &satellite_rotation);
                         let visible1 = rz1 >= 0.0 || (rx1 * rx1 + ry1 * ry1) >= earth_r_sq;
                         let visible2 = rz2 >= 0.0 || (rx2 * rx2 + ry2 * ry2) >= earth_r_sq;
-                        let both_visible = visible1 && visible2;
-                        if hide_behind_earth && !both_visible {
-                            continue;
+                        if hide_behind_earth {
+                            if let Some((p1, p2)) = clip_link_at_earth(rx1, ry1, rz1, visible1, rx2, ry2, rz2, visible2, earth_r_sq) {
+                                plot_ui.line(
+                                    Line::new("", PlotPoints::new(vec![p1, p2]))
+                                        .color(base_link_color)
+                                        .width(scaled_link_width),
+                                );
+                            }
+                        } else {
+                            let color = if visible1 && visible2 { base_link_color } else { link_dim };
+                            plot_ui.line(
+                                Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
+                                    .color(color)
+                                    .width(scaled_link_width),
+                            );
                         }
-                        let color = if both_visible { base_link_color } else { link_dim };
-                        plot_ui.line(
-                            Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
-                                .color(color)
-                                .width(scaled_link_width),
-                        );
                     }
                 }
             }

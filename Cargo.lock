@@ -1371,6 +1371,7 @@ checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 name = "leo-viz"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
  "eframe",
  "egui",
@@ -1380,6 +1381,7 @@ dependencies = [
  "js-sys",
  "log",
  "nalgebra",
+ "serde",
  "serde_json",
  "sgp4",
  "ureq",

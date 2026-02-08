@@ -337,3 +337,88 @@ pub struct SatelliteCamera {
     pub sat_index: usize,
     pub screen_pos: Option<egui::Pos2>,
 }
+
+#[cfg(target_arch = "wasm32")]
+mod shareable {
+    use super::*;
+    use base64::Engine;
+
+    #[derive(serde::Serialize, serde::Deserialize)]
+    pub struct ShareableShell {
+        pub s: usize,
+        pub p: usize,
+        pub a: f64,
+        pub i: f64,
+        pub w: WalkerType,
+        pub ph: f64,
+        pub ro: f64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub rs: Option<f64>,
+        #[serde(default)]
+        pub e: f64,
+        #[serde(default)]
+        pub ap: f64,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize)]
+    pub struct ShareableConfig {
+        pub body: CelestialBody,
+        pub shells: Vec<ShareableShell>,
+    }
+
+    impl ShareableConfig {
+        pub fn from_planet(planet: &PlanetConfig) -> Self {
+            Self {
+                body: planet.celestial_body,
+                shells: planet.constellations.iter().map(|c| ShareableShell {
+                    s: c.sats_per_plane,
+                    p: c.num_planes,
+                    a: c.altitude_km,
+                    i: c.inclination,
+                    w: c.walker_type,
+                    ph: c.phasing,
+                    ro: c.raan_offset,
+                    rs: c.raan_spacing,
+                    e: c.eccentricity,
+                    ap: c.arg_periapsis,
+                }).collect(),
+            }
+        }
+
+        pub fn apply_to_planet(&self, planet: &mut PlanetConfig) {
+            planet.celestial_body = self.body;
+            planet.constellations.clear();
+            planet.constellation_counter = 0;
+            for shell in &self.shells {
+                let mut c = ConstellationConfig::new(planet.constellation_counter);
+                planet.constellation_counter += 1;
+                c.sats_per_plane = shell.s;
+                c.num_planes = shell.p;
+                c.altitude_km = shell.a;
+                c.inclination = shell.i;
+                c.walker_type = shell.w;
+                c.phasing = shell.ph;
+                c.raan_offset = shell.ro;
+                c.raan_spacing = shell.rs;
+                c.eccentricity = shell.e;
+                c.arg_periapsis = shell.ap;
+                planet.constellations.push(c);
+            }
+        }
+
+        pub fn to_url_hash(&self) -> String {
+            let json = serde_json::to_string(self).unwrap_or_default();
+            let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json.as_bytes());
+            format!("#c={encoded}")
+        }
+
+        pub fn from_url_hash(hash: &str) -> Option<Self> {
+            let data = hash.strip_prefix("#c=").or_else(|| hash.strip_prefix("c="))?;
+            let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(data).ok()?;
+            serde_json::from_slice(&bytes).ok()
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub use shareable::ShareableConfig;
