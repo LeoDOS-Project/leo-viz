@@ -105,6 +105,7 @@ pub struct GroundStation {
     pub lon: f64,
     pub radius_km: f64,
     pub color: egui::Color32,
+    pub selected: bool,
 }
 
 #[derive(Clone)]
@@ -115,6 +116,7 @@ pub struct AreaOfInterest {
     pub radius_km: f64,
     pub color: egui::Color32,
     pub ground_station_idx: Option<usize>,
+    pub selected: bool,
 }
 
 #[derive(Clone)]
@@ -141,6 +143,7 @@ pub struct PlanetConfig {
     pub ground_stations: Vec<GroundStation>,
     pub areas_of_interest: Vec<AreaOfInterest>,
     pub device_layers: Vec<DeviceLayer>,
+    pub pass_cache: PassPredictionCache,
 }
 
 impl PlanetConfig {
@@ -169,6 +172,7 @@ impl PlanetConfig {
                 color: egui::Color32::from_rgb(80, 140, 255),
                 devices: vec![(59.40481807006525, 17.949657783197082), (59.41, 17.96)],
             }],
+            pass_cache: PassPredictionCache::default(),
         }
     }
 
@@ -336,6 +340,35 @@ pub struct SatelliteCamera {
     pub plane: usize,
     pub sat_index: usize,
     pub screen_pos: Option<egui::Pos2>,
+}
+
+#[derive(Clone)]
+pub struct PassInfo {
+    pub constellation_idx: usize,
+    pub sat_plane: usize,
+    pub sat_index: usize,
+    pub sat_name: String,
+    pub time_to_aos: f64,
+    pub max_elevation: f64,
+    pub duration: f64,
+    pub ascending: bool,
+}
+
+#[derive(Clone)]
+pub struct PassPredictionCache {
+    pub passes: HashMap<usize, Vec<PassInfo>>,
+    pub last_compute_time: f64,
+    pub prediction_window_min: f64,
+}
+
+impl Default for PassPredictionCache {
+    fn default() -> Self {
+        Self {
+            passes: HashMap::new(),
+            last_compute_time: f64::NEG_INFINITY,
+            prediction_window_min: 30.0,
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

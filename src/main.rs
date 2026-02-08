@@ -15,6 +15,7 @@ mod tle;
 mod viewer;
 mod app;
 mod walker;
+mod pass;
 mod solar_system;
 
 pub(crate) use viewer::ViewerState;
