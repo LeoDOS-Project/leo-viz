@@ -370,191 +370,352 @@ impl ViewerState {
             let mut aoi_changed = false;
             let mut dev_changed = false;
 
+            let has_selected = ground_stations.iter().any(|gs| gs.selected)
+                || areas_of_interest.iter().any(|a| a.selected);
+
+            let current_time = self.tabs[tab_idx].settings.time;
+            let body = planet.celestial_body;
+            let constellations_clone: Vec<_> = planet.constellations.iter()
+                .filter(|c| !c.hidden)
+                .cloned()
+                .collect();
+            let start_ts = self.start_timestamp;
+            let mut pass_cache = planet.pass_cache.clone();
+
+            let any_constellations = !constellations_clone.is_empty();
+            let cache_stale = has_selected
+                && any_constellations
+                && (current_time - pass_cache.last_compute_time).abs() > 5.0;
+
+            if cache_stale {
+                pass_cache.passes.clear();
+                let window_sec = pass_cache.prediction_window_min * 60.0;
+
+                for (idx, gs) in ground_stations.iter().enumerate() {
+                    if !gs.selected { continue; }
+                    let p = crate::pass::compute_passes(
+                        gs.lat, gs.lon, gs.radius_km,
+                        &constellations_clone, current_time,
+                        window_sec, body, start_ts,
+                    );
+                    pass_cache.passes.insert(idx, p);
+                }
+                let gs_count = ground_stations.len();
+                for (idx, aoi) in areas_of_interest.iter().enumerate() {
+                    if !aoi.selected { continue; }
+                    let p = crate::pass::compute_passes(
+                        aoi.lat, aoi.lon, aoi.radius_km,
+                        &constellations_clone, current_time,
+                        window_sec, body, start_ts,
+                    );
+                    pass_cache.passes.insert(gs_count + idx, p);
+                }
+                pass_cache.last_compute_time = current_time;
+            }
+
+            let pass_cache_for_ui = pass_cache.clone();
+            let selected_sats: Vec<(usize, usize, usize)> = planet.satellite_cameras.iter()
+                .map(|c| (c.constellation_idx, c.plane, c.sat_index))
+                .collect();
+
             egui::Window::new(format!("Ground - {}", planet_name))
                 .open(&mut self.tabs[tab_idx].planets[planet_idx].show_gs_aoi_window)
+                .auto_sized()
                 .show(ui.ctx(), |ui| {
-                    ui.heading("Ground Stations");
-                    let mut gs_to_remove = None;
-                    for (idx, gs) in ground_stations.iter_mut().enumerate() {
-                        ui.horizontal(|ui| {
-                            if ui.add_sized([80.0, 18.0], egui::TextEdit::singleline(&mut gs.name)).changed() {
-                                gs_changed = true;
-                            }
-                            ui.label("Lat:");
-                            if ui.add(egui::DragValue::new(&mut gs.lat).range(-90.0..=90.0).speed(0.5).suffix("°")).changed() {
-                                gs_changed = true;
-                            }
-                            ui.label("Lon:");
-                            if ui.add(egui::DragValue::new(&mut gs.lon).range(-180.0..=180.0).speed(0.5).suffix("°")).changed() {
-                                gs_changed = true;
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Radius:");
-                            if ui.add(egui::DragValue::new(&mut gs.radius_km).range(1.0..=5000.0).speed(10.0).suffix(" km")).changed() {
-                                gs_changed = true;
-                            }
-                            if ui.color_edit_button_srgba(&mut gs.color).changed() {
-                                gs_changed = true;
-                            }
-                            if ui.small_button("×").clicked() {
-                                gs_to_remove = Some(idx);
-                            }
-                        });
-                    }
-                    if let Some(idx) = gs_to_remove {
-                        ground_stations.remove(idx);
-                        gs_changed = true;
-                    }
-                    if ui.button("+ Add ground station").clicked() {
-                        ground_stations.push(GroundStation {
-                            name: format!("GS{}", ground_stations.len() + 1),
-                            lat: 0.0,
-                            lon: 0.0,
-                            radius_km: 500.0,
-                            color: egui::Color32::from_rgb(255, 100, 100),
-                        });
-                        gs_changed = true;
-                    }
+                    ui.columns(if has_selected { 2 } else { 1 }, |cols| {
+                        let left = &mut cols[0];
 
-                    ui.separator();
-                    ui.heading("Areas of Interest");
-                    let mut aoi_to_remove = None;
-                    for (idx, aoi) in areas_of_interest.iter_mut().enumerate() {
-                        ui.horizontal(|ui| {
-                            if ui.add_sized([80.0, 18.0], egui::TextEdit::singleline(&mut aoi.name)).changed() {
-                                aoi_changed = true;
-                            }
-                            ui.label("Lat:");
-                            if ui.add(egui::DragValue::new(&mut aoi.lat).range(-90.0..=90.0).speed(0.5).suffix("°")).changed() {
-                                aoi_changed = true;
-                            }
-                            ui.label("Lon:");
-                            if ui.add(egui::DragValue::new(&mut aoi.lon).range(-180.0..=180.0).speed(0.5).suffix("°")).changed() {
-                                aoi_changed = true;
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Radius:");
-                            if ui.add(egui::DragValue::new(&mut aoi.radius_km).range(1.0..=5000.0).speed(10.0).suffix(" km")).changed() {
-                                aoi_changed = true;
-                            }
-                            if ui.color_edit_button_srgba(&mut aoi.color).changed() {
-                                aoi_changed = true;
-                            }
-                            if ui.small_button("×").clicked() {
-                                aoi_to_remove = Some(idx);
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("GS:");
-                            let gs_label = aoi.ground_station_idx
-                                .and_then(|i| ground_stations.get(i))
-                                .map(|gs| gs.name.as_str())
-                                .unwrap_or("None");
-                            egui::ComboBox::from_id_salt(format!("aoi_gs_{}", idx))
-                                .selected_text(gs_label)
-                                .show_ui(ui, |ui| {
-                                    if ui.selectable_label(aoi.ground_station_idx.is_none(), "None").clicked() {
-                                        aoi.ground_station_idx = None;
-                                        aoi_changed = true;
+                        left.heading("Ground Stations");
+                        let mut gs_to_remove = None;
+                        let mut gs_pass_clicked: Option<usize> = None;
+                        for (idx, gs) in ground_stations.iter_mut().enumerate() {
+                            left.horizontal(|ui| {
+                                if ui.add_sized([70.0, 18.0], egui::TextEdit::singleline(&mut gs.name)).changed() {
+                                    gs_changed = true;
+                                }
+                                ui.label("Lat:");
+                                if ui.add(egui::DragValue::new(&mut gs.lat).range(-90.0..=90.0).speed(0.5).suffix("°")).changed() {
+                                    gs_changed = true;
+                                }
+                                ui.label("Lon:");
+                                if ui.add(egui::DragValue::new(&mut gs.lon).range(-180.0..=180.0).speed(0.5).suffix("°")).changed() {
+                                    gs_changed = true;
+                                }
+                                ui.label("R:");
+                                if ui.add(egui::DragValue::new(&mut gs.radius_km).range(1.0..=5000.0).speed(10.0).suffix(" km")).changed() {
+                                    gs_changed = true;
+                                }
+                                if ui.small_button("×").clicked() {
+                                    gs_to_remove = Some(idx);
+                                }
+                                if ui.checkbox(&mut gs.selected, "Pass").changed() {
+                                    gs_changed = true;
+                                    if gs.selected {
+                                        gs_pass_clicked = Some(idx);
                                     }
-                                    for (gs_idx, gs) in ground_stations.iter().enumerate() {
-                                        if ui.selectable_label(aoi.ground_station_idx == Some(gs_idx), &gs.name).clicked() {
-                                            aoi.ground_station_idx = Some(gs_idx);
-                                            aoi_changed = true;
-                                        }
-                                    }
-                                });
-                        });
-                    }
-                    if let Some(idx) = aoi_to_remove {
-                        areas_of_interest.remove(idx);
-                        aoi_changed = true;
-                    }
-                    if ui.button("+ Add area of interest").clicked() {
-                        areas_of_interest.push(AreaOfInterest {
-                            name: format!("AOI{}", areas_of_interest.len() + 1),
-                            lat: 0.0,
-                            lon: 0.0,
-                            radius_km: 500.0,
-                            color: egui::Color32::from_rgba_unmultiplied(100, 200, 100, 100),
-                            ground_station_idx: None,
-                        });
-                        aoi_changed = true;
-                    }
-
-                    ui.separator();
-                    ui.heading("Devices");
-                    let mut layer_to_remove = None;
-                    for (li, layer) in device_layers.iter_mut().enumerate() {
-                        ui.horizontal(|ui| {
-                            if ui.add_sized([80.0, 18.0], egui::TextEdit::singleline(&mut layer.name)).changed() {
-                                dev_changed = true;
-                            }
-                            if ui.color_edit_button_srgba(&mut layer.color).changed() {
-                                dev_changed = true;
-                            }
-                            ui.weak(format!("{} pts", layer.devices.len()));
-                            if ui.small_button("×").clicked() {
-                                layer_to_remove = Some(li);
-                            }
-                        });
-                        let mut dev_to_remove = None;
-                        egui::ScrollArea::vertical()
-                            .id_salt(format!("devlayer_{}", li))
-                            .max_height(120.0)
-                            .show(ui, |ui| {
-                                for (di, dev) in layer.devices.iter_mut().enumerate() {
-                                    ui.horizontal(|ui| {
-                                        ui.add_space(16.0);
-                                        ui.label("Lat:");
-                                        if ui.add(egui::DragValue::new(&mut dev.0).range(-90.0..=90.0).speed(0.5).suffix("°")).changed() {
-                                            dev_changed = true;
-                                        }
-                                        ui.label("Lon:");
-                                        if ui.add(egui::DragValue::new(&mut dev.1).range(-180.0..=180.0).speed(0.5).suffix("°")).changed() {
-                                            dev_changed = true;
-                                        }
-                                        if ui.small_button("x").clicked() {
-                                            dev_to_remove = Some(di);
-                                        }
-                                    });
                                 }
                             });
-                        if let Some(di) = dev_to_remove {
-                            layer.devices.remove(di);
+                        }
+                        if let Some(clicked) = gs_pass_clicked {
+                            for (i, gs) in ground_stations.iter_mut().enumerate() {
+                                if i != clicked { gs.selected = false; }
+                            }
+                            for aoi in areas_of_interest.iter_mut() {
+                                aoi.selected = false;
+                            }
+                            aoi_changed = true;
+                        }
+                        if let Some(idx) = gs_to_remove {
+                            ground_stations.remove(idx);
+                            gs_changed = true;
+                        }
+                        if left.button("+ Add ground station").clicked() {
+                            ground_stations.push(GroundStation {
+                                name: format!("GS{}", ground_stations.len() + 1),
+                                lat: 0.0,
+                                lon: 0.0,
+                                radius_km: 500.0,
+                                color: egui::Color32::from_rgb(255, 100, 100),
+                                selected: false,
+                            });
+                            gs_changed = true;
+                        }
+
+                        left.separator();
+                        left.heading("Areas of Interest");
+                        let mut aoi_to_remove = None;
+                        let mut aoi_pass_clicked: Option<usize> = None;
+                        for (idx, aoi) in areas_of_interest.iter_mut().enumerate() {
+                            left.horizontal(|ui| {
+                                if ui.add_sized([70.0, 18.0], egui::TextEdit::singleline(&mut aoi.name)).changed() {
+                                    aoi_changed = true;
+                                }
+                                ui.label("Lat:");
+                                if ui.add(egui::DragValue::new(&mut aoi.lat).range(-90.0..=90.0).speed(0.5).suffix("°")).changed() {
+                                    aoi_changed = true;
+                                }
+                                ui.label("Lon:");
+                                if ui.add(egui::DragValue::new(&mut aoi.lon).range(-180.0..=180.0).speed(0.5).suffix("°")).changed() {
+                                    aoi_changed = true;
+                                }
+                                ui.label("R:");
+                                if ui.add(egui::DragValue::new(&mut aoi.radius_km).range(1.0..=5000.0).speed(10.0).suffix(" km")).changed() {
+                                    aoi_changed = true;
+                                }
+                                if ui.small_button("×").clicked() {
+                                    aoi_to_remove = Some(idx);
+                                }
+                                if ui.checkbox(&mut aoi.selected, "Pass").changed() {
+                                    aoi_changed = true;
+                                    if aoi.selected {
+                                        aoi_pass_clicked = Some(idx);
+                                    }
+                                }
+                            });
+                            left.horizontal(|ui| {
+                                ui.add_space(22.0);
+                                ui.label("GS:");
+                                let gs_label = aoi.ground_station_idx
+                                    .and_then(|i| ground_stations.get(i))
+                                    .map(|gs| gs.name.as_str())
+                                    .unwrap_or("None");
+                                egui::ComboBox::from_id_salt(format!("aoi_gs_{}", idx))
+                                    .selected_text(gs_label)
+                                    .show_ui(ui, |ui| {
+                                        if ui.selectable_label(aoi.ground_station_idx.is_none(), "None").clicked() {
+                                            aoi.ground_station_idx = None;
+                                            aoi_changed = true;
+                                        }
+                                        for (gs_idx, gs) in ground_stations.iter().enumerate() {
+                                            if ui.selectable_label(aoi.ground_station_idx == Some(gs_idx), &gs.name).clicked() {
+                                                aoi.ground_station_idx = Some(gs_idx);
+                                                aoi_changed = true;
+                                            }
+                                        }
+                                    });
+                            });
+                        }
+                        if let Some(clicked) = aoi_pass_clicked {
+                            for (i, aoi) in areas_of_interest.iter_mut().enumerate() {
+                                if i != clicked { aoi.selected = false; }
+                            }
+                            for gs in ground_stations.iter_mut() {
+                                gs.selected = false;
+                            }
+                            gs_changed = true;
+                        }
+                        if let Some(idx) = aoi_to_remove {
+                            areas_of_interest.remove(idx);
+                            aoi_changed = true;
+                        }
+                        if left.button("+ Add area of interest").clicked() {
+                            areas_of_interest.push(AreaOfInterest {
+                                name: format!("AOI{}", areas_of_interest.len() + 1),
+                                lat: 0.0,
+                                lon: 0.0,
+                                radius_km: 500.0,
+                                color: egui::Color32::from_rgba_unmultiplied(100, 200, 100, 100),
+                                ground_station_idx: None,
+                                selected: false,
+                            });
+                            aoi_changed = true;
+                        }
+
+                        left.separator();
+                        left.heading("Devices");
+                        let mut layer_to_remove = None;
+                        for (li, layer) in device_layers.iter_mut().enumerate() {
+                            left.horizontal(|ui| {
+                                if ui.add_sized([80.0, 18.0], egui::TextEdit::singleline(&mut layer.name)).changed() {
+                                    dev_changed = true;
+                                }
+                                ui.weak(format!("{} pts", layer.devices.len()));
+                                if ui.small_button("×").clicked() {
+                                    layer_to_remove = Some(li);
+                                }
+                            });
+                            let mut dev_to_remove = None;
+                            egui::ScrollArea::vertical()
+                                .id_salt(format!("devlayer_{}", li))
+                                .max_height(120.0)
+                                .show(left, |ui| {
+                                    for (di, dev) in layer.devices.iter_mut().enumerate() {
+                                        ui.horizontal(|ui| {
+                                            ui.add_space(16.0);
+                                            ui.label("Lat:");
+                                            if ui.add(egui::DragValue::new(&mut dev.0).range(-90.0..=90.0).speed(0.5).suffix("°")).changed() {
+                                                dev_changed = true;
+                                            }
+                                            ui.label("Lon:");
+                                            if ui.add(egui::DragValue::new(&mut dev.1).range(-180.0..=180.0).speed(0.5).suffix("°")).changed() {
+                                                dev_changed = true;
+                                            }
+                                            if ui.small_button("x").clicked() {
+                                                dev_to_remove = Some(di);
+                                            }
+                                        });
+                                    }
+                                });
+                            if let Some(di) = dev_to_remove {
+                                layer.devices.remove(di);
+                                dev_changed = true;
+                            }
+                            if left.small_button("+ Add device").clicked() {
+                                layer.devices.push((0.0, 0.0));
+                                dev_changed = true;
+                            }
+                            left.separator();
+                        }
+                        if let Some(li) = layer_to_remove {
+                            device_layers.remove(li);
                             dev_changed = true;
                         }
-                        if ui.small_button("+ Add device").clicked() {
-                            layer.devices.push((0.0, 0.0));
+                        if left.button("+ Add device layer").clicked() {
+                            device_layers.push(DeviceLayer {
+                                name: format!("Layer {}", device_layers.len() + 1),
+                                color: egui::Color32::from_rgb(80, 140, 255),
+                                devices: Vec::new(),
+                            });
                             dev_changed = true;
                         }
-                        ui.separator();
-                    }
-                    if let Some(li) = layer_to_remove {
-                        device_layers.remove(li);
-                        dev_changed = true;
-                    }
-                    if ui.button("+ Add device layer").clicked() {
-                        device_layers.push(DeviceLayer {
-                            name: format!("Layer {}", device_layers.len() + 1),
-                            color: egui::Color32::from_rgb(80, 140, 255),
-                            devices: Vec::new(),
-                        });
-                        dev_changed = true;
-                    }
+
+                        if has_selected && cols.len() > 1 {
+                            let right = &mut cols[1];
+                            right.heading("Pass Predictions");
+
+                            if !any_constellations {
+                                right.weak("No constellations configured");
+                            } else {
+                                let gs_count = ground_stations.len();
+                                let selected_items: Vec<(usize, String)> = ground_stations.iter()
+                                    .enumerate()
+                                    .filter(|(_, gs)| gs.selected)
+                                    .map(|(i, gs)| (i, gs.name.clone()))
+                                    .chain(
+                                        areas_of_interest.iter()
+                                            .enumerate()
+                                            .filter(|(_, a)| a.selected)
+                                            .map(|(i, a)| (gs_count + i, a.name.clone()))
+                                    )
+                                    .collect();
+
+                                egui::ScrollArea::vertical()
+                                    .id_salt("pass_scroll")
+                                    .max_height(400.0)
+                                    .show(right, |ui| {
+                                        for (key, name) in &selected_items {
+                                            ui.strong(name);
+                                            if let Some(passes) = pass_cache_for_ui.passes.get(key) {
+                                                if passes.is_empty() {
+                                                    ui.weak("No passes in window");
+                                                } else {
+                                                    egui::Grid::new(format!("pass_grid_{}", key))
+                                                        .striped(true)
+                                                        .show(ui, |ui| {
+                                                            ui.strong("Satellite");
+                                                            ui.strong("Arrives");
+                                                            ui.strong("In Zone");
+                                                            ui.strong("Max El");
+                                                            ui.strong("Dir");
+                                                            ui.end_row();
+                                                            let elapsed = current_time - pass_cache_for_ui.last_compute_time;
+                                                            let highlight = egui::Color32::from_rgb(100, 200, 255);
+                                                            let dim = egui::Color32::from_rgb(120, 120, 120);
+                                                            let bright = egui::Color32::from_rgb(230, 230, 230);
+                                                            for pass in passes.iter().take(20) {
+                                                                let adjusted_aos = (pass.time_to_aos - elapsed).max(0.0);
+                                                                let in_zone = adjusted_aos < 0.1;
+                                                                let is_selected = selected_sats.iter().any(|(ci, p, s)|
+                                                                    *ci == pass.constellation_idx && *p == pass.sat_plane && *s == pass.sat_index
+                                                                );
+                                                                let color = if is_selected { highlight } else if in_zone { bright } else { dim };
+                                                                let rt = |s: String| {
+                                                                    let t = egui::RichText::new(s).color(color);
+                                                                    if is_selected { t.strong() } else { t }
+                                                                };
+                                                                ui.label(rt(pass.sat_name.clone()));
+                                                                if in_zone {
+                                                                    let c = if is_selected { highlight } else { egui::Color32::GREEN };
+                                                                    let t = egui::RichText::new("NOW").color(c);
+                                                                    ui.label(if is_selected { t.strong() } else { t });
+                                                                } else {
+                                                                    let text = if adjusted_aos < 60.0 {
+                                                                        format!("{:.0}s", adjusted_aos)
+                                                                    } else {
+                                                                        format!("{:.1}m", adjusted_aos / 60.0)
+                                                                    };
+                                                                    ui.label(rt(text));
+                                                                }
+                                                                ui.label(rt(format!("{:.1}s", pass.duration)));
+                                                                ui.label(rt(format!("{:.1}°", pass.max_elevation)));
+                                                                ui.label(rt(if pass.ascending { "Asc".into() } else { "Desc".into() }));
+                                                                ui.end_row();
+                                                            }
+                                                        });
+                                                }
+                                            } else {
+                                                ui.weak("Computing...");
+                                            }
+                                            ui.add_space(8.0);
+                                        }
+                                    });
+                            }
+                        }
+                    });
                 });
 
             if gs_changed {
                 self.tabs[tab_idx].planets[planet_idx].ground_stations = ground_stations;
+                pass_cache.last_compute_time = f64::NEG_INFINITY;
             }
             if aoi_changed {
                 self.tabs[tab_idx].planets[planet_idx].areas_of_interest = areas_of_interest;
+                pass_cache.last_compute_time = f64::NEG_INFINITY;
             }
             if dev_changed {
                 self.tabs[tab_idx].planets[planet_idx].device_layers = device_layers;
             }
+            self.tabs[tab_idx].planets[planet_idx].pass_cache = pass_cache;
         }
 
         let show_stats = self.tabs[tab_idx].show_stats;
