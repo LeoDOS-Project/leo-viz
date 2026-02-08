@@ -69,7 +69,8 @@ impl App {
             renderer.upload_texture(gl, builtin_key, &builtin_texture);
         }
 
-        Self {
+        #[allow(unused_mut)]
+        let mut app = Self {
             dock_state: DockState::new(vec![0]),
             viewer: ViewerState {
                 tabs: vec![TabConfig::new("View 1".to_string())],
@@ -268,7 +269,26 @@ impl App {
                 hohmann: crate::solar_system::HohmannState::default(),
             },
             first_frame: true,
+        };
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let loc = web_sys::window().and_then(|w| Some(w.location()));
+            let path = loc.as_ref().and_then(|l| l.pathname().ok()).unwrap_or_default();
+            let hash = loc.as_ref().and_then(|l| l.hash().ok()).unwrap_or_default();
+
+            if path.ends_with("/demo") || path.ends_with("/demo/") {
+                app.setup_demo();
+            } else if hash.starts_with("#c=") {
+                use crate::config::ShareableConfig;
+                if let Some(cfg) = ShareableConfig::from_url_hash(&hash) {
+                    cfg.apply_to_planet(&mut app.viewer.tabs[0].planets[0]);
+                }
+            }
+            app.viewer.last_url_hash = String::new();
         }
+
+        app
     }
 }
 impl eframe::App for App {
@@ -1553,6 +1573,31 @@ impl eframe::App for App {
                 }
             }
         }
+        #[cfg(target_arch = "wasm32")]
+        {
+            use crate::config::ShareableConfig;
+            let active = self.viewer.active_tab_idx;
+            if let Some(planet) = self.viewer.tabs.get(active).and_then(|t| t.planets.first()) {
+                let hash = if planet.constellations.is_empty() {
+                    String::new()
+                } else {
+                    ShareableConfig::from_planet(planet).to_url_hash()
+                };
+                if hash != self.viewer.last_url_hash {
+                    self.viewer.last_url_hash = hash.clone();
+                    if let Some(window) = web_sys::window() {
+                        if let Ok(history) = window.history() {
+                            let _ = history.replace_state_with_url(
+                                &wasm_bindgen::JsValue::NULL,
+                                "",
+                                Some(if hash.is_empty() { "." } else { &hash }),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         self.first_frame = false;
     }
 

@@ -5,7 +5,7 @@
 
 use std::f64::consts::PI;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum WalkerType {
     Delta,
     Star,

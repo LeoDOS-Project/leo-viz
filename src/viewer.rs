@@ -116,6 +116,8 @@ pub(crate) struct ViewerState {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) asteroid_rx: Option<mpsc::Receiver<Result<Vec<crate::solar_system::Asteroid>, String>>>,
     pub(crate) hohmann: crate::solar_system::HohmannState,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) last_url_hash: String,
 }
 
 
