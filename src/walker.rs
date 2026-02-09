@@ -67,7 +67,7 @@ impl WalkerConstellation {
         }
     }
 
-    pub fn single_satellite_lat_lon(&self, plane: usize, sat: usize, time: f64) -> (f64, f64) {
+    pub fn single_satellite_lat_lon(&self, plane: usize, sat: usize, time: f64) -> (f64, f64, [f64; 3]) {
         let sats_per_plane = self.sats_per_plane();
         let perigee_radius = self.planet_radius + self.altitude_km;
         let ecc = self.eccentricity;
@@ -119,7 +119,7 @@ impl WalkerConstellation {
 
         let lat = (y / r).asin().to_degrees();
         let lon = -z.atan2(x).to_degrees();
-        (lat, lon)
+        (lat, lon, [x, y, z])
     }
 
     pub fn satellite_positions(&self, time: f64) -> Vec<SatelliteState> {
