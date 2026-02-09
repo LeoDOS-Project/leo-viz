@@ -383,6 +383,10 @@ impl ViewerState {
             let mut pass_cache = planet.pass_cache.clone();
 
             let any_constellations = !constellations_clone.is_empty();
+            let selected_sats: Vec<(usize, usize, usize)> = planet.satellite_cameras.iter()
+                .map(|c| (c.constellation_idx, c.plane, c.sat_index))
+                .collect();
+
             let cache_stale = has_selected
                 && any_constellations
                 && (current_time - pass_cache.last_compute_time).abs() > 5.0;
@@ -395,8 +399,8 @@ impl ViewerState {
                     if !gs.selected { continue; }
                     let p = crate::pass::compute_passes(
                         gs.lat, gs.lon, gs.radius_km,
-                        &constellations_clone, current_time,
-                        window_sec, body, start_ts,
+                        &constellations_clone, &selected_sats,
+                        current_time, window_sec, body, start_ts,
                     );
                     pass_cache.passes.insert(idx, p);
                 }
@@ -405,8 +409,8 @@ impl ViewerState {
                     if !aoi.selected { continue; }
                     let p = crate::pass::compute_passes(
                         aoi.lat, aoi.lon, aoi.radius_km,
-                        &constellations_clone, current_time,
-                        window_sec, body, start_ts,
+                        &constellations_clone, &selected_sats,
+                        current_time, window_sec, body, start_ts,
                     );
                     pass_cache.passes.insert(gs_count + idx, p);
                 }
@@ -414,13 +418,11 @@ impl ViewerState {
             }
 
             let pass_cache_for_ui = pass_cache.clone();
-            let selected_sats: Vec<(usize, usize, usize)> = planet.satellite_cameras.iter()
-                .map(|c| (c.constellation_idx, c.plane, c.sat_index))
-                .collect();
+            let mut fast_forward_to: Option<(f64, f64, f64)> = None;
 
             egui::Window::new(format!("Ground - {}", planet_name))
                 .open(&mut self.tabs[tab_idx].planets[planet_idx].show_gs_aoi_window)
-                .auto_sized()
+                .default_width(if has_selected { 700.0 } else { 350.0 })
                 .show(ui.ctx(), |ui| {
                     ui.columns(if has_selected { 2 } else { 1 }, |cols| {
                         let left = &mut cols[0];
@@ -448,7 +450,7 @@ impl ViewerState {
                                 if ui.small_button("×").clicked() {
                                     gs_to_remove = Some(idx);
                                 }
-                                if ui.checkbox(&mut gs.selected, "Pass").changed() {
+                                if ui.checkbox(&mut gs.selected, "Track").changed() {
                                     gs_changed = true;
                                     if gs.selected {
                                         gs_pass_clicked = Some(idx);
@@ -505,7 +507,7 @@ impl ViewerState {
                                 if ui.small_button("×").clicked() {
                                     aoi_to_remove = Some(idx);
                                 }
-                                if ui.checkbox(&mut aoi.selected, "Pass").changed() {
+                                if ui.checkbox(&mut aoi.selected, "Track").changed() {
                                     aoi_changed = true;
                                     if aoi.selected {
                                         aoi_pass_clicked = Some(idx);
@@ -627,15 +629,15 @@ impl ViewerState {
                                 right.weak("No constellations configured");
                             } else {
                                 let gs_count = ground_stations.len();
-                                let selected_items: Vec<(usize, String)> = ground_stations.iter()
+                                let selected_items: Vec<(usize, String, f64, f64)> = ground_stations.iter()
                                     .enumerate()
                                     .filter(|(_, gs)| gs.selected)
-                                    .map(|(i, gs)| (i, gs.name.clone()))
+                                    .map(|(i, gs)| (i, gs.name.clone(), gs.lat, gs.lon))
                                     .chain(
                                         areas_of_interest.iter()
                                             .enumerate()
                                             .filter(|(_, a)| a.selected)
-                                            .map(|(i, a)| (gs_count + i, a.name.clone()))
+                                            .map(|(i, a)| (gs_count + i, a.name.clone(), a.lat, a.lon))
                                     )
                                     .collect();
 
@@ -643,52 +645,94 @@ impl ViewerState {
                                     .id_salt("pass_scroll")
                                     .max_height(400.0)
                                     .show(right, |ui| {
-                                        for (key, name) in &selected_items {
+                                        for (key, name, gs_lat, gs_lon) in &selected_items {
                                             ui.strong(name);
                                             if let Some(passes) = pass_cache_for_ui.passes.get(key) {
-                                                if passes.is_empty() {
-                                                    ui.weak("No passes in window");
+                                                if selected_sats.is_empty() {
+                                                    ui.weak("Click satellites on globe to track");
                                                 } else {
+                                                    let window_min = pass_cache_for_ui.prediction_window_min;
+                                                    let window_label = if window_min >= 1440.0 {
+                                                        format!("{:.0}d", window_min / 1440.0)
+                                                    } else {
+                                                        format!("{:.0}h", window_min / 60.0)
+                                                    };
                                                     egui::Grid::new(format!("pass_grid_{}", key))
                                                         .striped(true)
                                                         .show(ui, |ui| {
                                                             ui.strong("Satellite");
-                                                            ui.strong("Arrives");
+                                                            ui.strong("Arrival");
+                                                            ui.strong("Remaining");
                                                             ui.strong("In Zone");
                                                             ui.strong("Max El");
+                                                            ui.strong("Alt");
                                                             ui.strong("Dir");
+                                                            ui.strong("");
                                                             ui.end_row();
                                                             let elapsed = current_time - pass_cache_for_ui.last_compute_time;
-                                                            let highlight = egui::Color32::from_rgb(100, 200, 255);
                                                             let dim = egui::Color32::from_rgb(120, 120, 120);
                                                             let bright = egui::Color32::from_rgb(230, 230, 230);
-                                                            for pass in passes.iter().take(20) {
+                                                            let very_dim = egui::Color32::from_rgb(80, 80, 80);
+                                                            for pass in passes.iter() {
                                                                 let adjusted_aos = (pass.time_to_aos - elapsed).max(0.0);
                                                                 let in_zone = adjusted_aos < 0.1;
-                                                                let is_selected = selected_sats.iter().any(|(ci, p, s)|
-                                                                    *ci == pass.constellation_idx && *p == pass.sat_plane && *s == pass.sat_index
-                                                                );
-                                                                let color = if is_selected { highlight } else if in_zone { bright } else { dim };
+                                                                let color = if in_zone { bright } else { dim };
                                                                 let rt = |s: String| {
-                                                                    let t = egui::RichText::new(s).color(color);
-                                                                    if is_selected { t.strong() } else { t }
+                                                                    egui::RichText::new(s).color(color)
                                                                 };
                                                                 ui.label(rt(pass.sat_name.clone()));
+                                                                let aos_time = start_ts + chrono::Duration::milliseconds(((current_time + adjusted_aos) * 1000.0) as i64);
+                                                                let local_aos: chrono::DateTime<chrono::Local> = aos_time.into();
                                                                 if in_zone {
-                                                                    let c = if is_selected { highlight } else { egui::Color32::GREEN };
-                                                                    let t = egui::RichText::new("NOW").color(c);
-                                                                    ui.label(if is_selected { t.strong() } else { t });
+                                                                    ui.label(egui::RichText::new("NOW").color(egui::Color32::GREEN));
+                                                                    ui.label(egui::RichText::new("—").color(egui::Color32::GREEN));
                                                                 } else {
-                                                                    let text = if adjusted_aos < 60.0 {
-                                                                        format!("{:.0}s", adjusted_aos)
+                                                                    ui.label(rt(local_aos.format("%H:%M:%S %d/%m/%y").to_string()));
+                                                                    let h = (adjusted_aos / 3600.0) as u64;
+                                                                    let m = ((adjusted_aos % 3600.0) / 60.0) as u64;
+                                                                    let s = adjusted_aos % 60.0;
+                                                                    let text = if h > 0 {
+                                                                        format!("{h}h{m}m{s:.0}s")
+                                                                    } else if m > 0 {
+                                                                        format!("{m}m{s:.0}s")
                                                                     } else {
-                                                                        format!("{:.1}m", adjusted_aos / 60.0)
+                                                                        format!("{s:.1}s")
                                                                     };
                                                                     ui.label(rt(text));
                                                                 }
-                                                                ui.label(rt(format!("{:.1}s", pass.duration)));
+                                                                let zone_time = if in_zone {
+                                                                    (pass.time_to_aos + pass.duration - elapsed).max(0.0)
+                                                                } else {
+                                                                    pass.duration
+                                                                };
+                                                                ui.label(rt(format!("{:.1}s", zone_time)));
                                                                 ui.label(rt(format!("{:.1}°", pass.max_elevation)));
+                                                                ui.label(rt(format!("{:.0} km", pass.altitude_km)));
                                                                 ui.label(rt(if pass.ascending { "Asc".into() } else { "Desc".into() }));
+                                                                if !in_zone && ui.small_button("FF ⏩").clicked() {
+                                                                    fast_forward_to = Some((current_time + adjusted_aos, *gs_lat, *gs_lon));
+                                                                }
+                                                                ui.end_row();
+                                                            }
+                                                            let sats_with_pass: std::collections::HashSet<(usize, usize, usize)> = passes.iter()
+                                                                .map(|p| (p.constellation_idx, p.sat_plane, p.sat_index))
+                                                                .collect();
+                                                            for &(ci, plane, sat_idx) in &selected_sats {
+                                                                if sats_with_pass.contains(&(ci, plane, sat_idx)) { continue; }
+                                                                let name = if let Some(c) = constellations_clone.get(ci) {
+                                                                    format!("{} P{}:S{}", c.preset_name(), plane, sat_idx)
+                                                                } else {
+                                                                    format!("P{}:S{}", plane, sat_idx)
+                                                                };
+                                                                let rt = |s: String| egui::RichText::new(s).color(very_dim);
+                                                                ui.label(rt(name));
+                                                                ui.label(rt(format!(">{window_label}")));
+                                                                ui.label(rt("-".into()));
+                                                                ui.label(rt("-".into()));
+                                                                ui.label(rt("-".into()));
+                                                                ui.label(rt("-".into()));
+                                                                ui.label(rt("-".into()));
+                                                                ui.label(rt("".into()));
                                                                 ui.end_row();
                                                             }
                                                         });
@@ -716,6 +760,18 @@ impl ViewerState {
                 self.tabs[tab_idx].planets[planet_idx].device_layers = device_layers;
             }
             self.tabs[tab_idx].planets[planet_idx].pass_cache = pass_cache;
+            if let Some((t, lat, lon)) = fast_forward_to {
+                self.tabs[tab_idx].settings.time = t;
+                let sim_time = self.start_timestamp + chrono::Duration::milliseconds((t * 1000.0) as i64);
+                let gmst = crate::time::greenwich_mean_sidereal_time(sim_time);
+                let body_rot = crate::time::body_rotation_angle(body, t, gmst);
+                let target_lon = if self.tabs[tab_idx].settings.earth_fixed_camera {
+                    lon.to_radians()
+                } else {
+                    lon.to_radians() + body_rot
+                };
+                self.tabs[tab_idx].settings.rotation = crate::math::lat_lon_to_matrix(lat.to_radians(), target_lon);
+            }
         }
 
         let show_stats = self.tabs[tab_idx].show_stats;

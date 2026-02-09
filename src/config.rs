@@ -352,6 +352,7 @@ pub struct PassInfo {
     pub max_elevation: f64,
     pub duration: f64,
     pub ascending: bool,
+    pub altitude_km: f64,
 }
 
 #[derive(Clone)]
@@ -366,7 +367,7 @@ impl Default for PassPredictionCache {
         Self {
             passes: HashMap::new(),
             last_compute_time: f64::NEG_INFINITY,
-            prediction_window_min: 30.0,
+            prediction_window_min: 10080.0,
         }
     }
 }
