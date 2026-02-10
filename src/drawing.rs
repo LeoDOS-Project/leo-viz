@@ -6,7 +6,7 @@
 
 use crate::celestial::{CelestialBody, Skin, TextureResolution};
 use crate::config::{
-    AreaOfInterest, DeviceLayer, GroundStation, SatelliteCamera, View3DFlags,
+    AreaOfInterest, ConjunctionInfo, DeviceLayer, GroundStation, SatelliteCamera, View3DFlags,
 };
 use crate::geo::CityLabel;
 use crate::math::{rotate_point_matrix, rotation_from_drag};
@@ -18,6 +18,7 @@ use eframe::{egui, egui_glow, glow};
 use egui::mutex::Mutex;
 use egui_plot::{Line, Plot, PlotImage, PlotPoints, PlotPoint, Points, Polygon, Text};
 use nalgebra::{Matrix3, Vector3};
+use std::collections::HashSet;
 use std::f64::consts::PI;
 use std::sync::Arc;
 
@@ -351,6 +352,9 @@ pub fn draw_3d_view(
     detail_gl_info: Option<(glow::Texture, [f32; 4])>,
     geo_borders: &[Vec<(f64, f64)>],
     geo_cities: &[CityLabel],
+    conjunction_lines: &[(ConjunctionInfo, f64)],
+    conjunction_heatmap: &[(ConjunctionInfo, f64)],
+    correcting_sats: &HashSet<String>,
 ) -> (Matrix3<f64>, f64) {
     let View3DFlags {
         show_orbits, show_axes, show_coverage, show_links, show_intra_links,
@@ -1124,6 +1128,38 @@ pub fn draw_3d_view(
             }
         }
 
+        for (conj, threshold) in conjunction_lines {
+            let (rx1, ry1, rz1) = rotate_point_matrix(conj.pos_a[0], conj.pos_a[1], conj.pos_a[2], &satellite_rotation);
+            let (rx2, ry2, rz2) = rotate_point_matrix(conj.pos_b[0], conj.pos_b[1], conj.pos_b[2], &satellite_rotation);
+            let urgency = 1.0 - (conj.distance_km / threshold).clamp(0.0, 1.0);
+            let r = (255.0 * urgency) as u8;
+            let g = (255.0 * (1.0 - urgency)) as u8;
+            let color = egui::Color32::from_rgb(r, g, 0);
+            let width = (scaled_link_width * (1.0 + 2.0 * urgency as f32)).max(1.0);
+            let visible1 = rz1 >= 0.0 || (rx1 * rx1 + ry1 * ry1) >= earth_r_sq;
+            let visible2 = rz2 >= 0.0 || (rx2 * rx2 + ry2 * ry2) >= earth_r_sq;
+            if hide_behind_earth {
+                if let Some((p1, p2)) = clip_link_at_earth(rx1, ry1, rz1, visible1, rx2, ry2, rz2, visible2, earth_r_sq) {
+                    plot_ui.line(
+                        Line::new("", PlotPoints::new(vec![p1, p2]))
+                            .color(color)
+                            .width(width),
+                    );
+                }
+            } else {
+                let c = if visible1 && visible2 {
+                    color
+                } else {
+                    egui::Color32::from_rgba_unmultiplied(r, g, 0, 80)
+                };
+                plot_ui.line(
+                    Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
+                        .color(c)
+                        .width(width),
+                );
+            }
+        }
+
         if show_routing_paths && !satellite_cameras.is_empty() {
             let manhattan_color = egui::Color32::from_rgb(255, 100, 100);
             let shortest_color = egui::Color32::from_rgb(100, 255, 100);
@@ -1294,17 +1330,30 @@ pub fn draw_3d_view(
             }
         }
 
-        for (constellation, positions, color_offset, tle_kind, orig_idx, _) in constellations {
+        for (constellation, positions, color_offset, tle_kind, orig_idx, cons_label) in constellations {
             if *tle_kind != 0 {
-                let is_debris = *tle_kind == 2;
+                let is_tle_debris = *tle_kind == 2;
+                let is_kessler = *tle_kind == 3;
                 for sat in positions {
+                    let (rx, ry, rz) = rotate_point_matrix(sat.x, sat.y, sat.z, &satellite_rotation);
+                    let in_front = rz >= 0.0 || (rx * rx + ry * ry) >= earth_r_sq;
+
+                    if is_kessler {
+                        if hide_behind_earth && !in_front { continue; }
+                        let alpha = if in_front { 180u8 } else { 60 };
+                        let c = egui::Color32::from_rgba_unmultiplied(200, 200, 200, alpha);
+                        let r = scaled_sat_radius * 0.4;
+                        plot_ui.points(
+                            Points::new("", PlotPoints::new(vec![[rx, ry]]))
+                                .color(c).radius(r).filled(true),
+                        );
+                        continue;
+                    }
+
                     let color = plane_color(color_offset + sat.plane);
                     let dim_col = egui::Color32::from_rgba_unmultiplied(
                         color.r() / 2, color.g() / 2, color.b() / 2, 80,
                     );
-
-                    let (rx, ry, rz) = rotate_point_matrix(sat.x, sat.y, sat.z, &satellite_rotation);
-                    let in_front = rz >= 0.0 || (rx * rx + ry * ry) >= earth_r_sq;
 
                     let bg_color = if dark_mode {
                         egui::Color32::from_rgb(30, 30, 30)
@@ -1312,7 +1361,7 @@ pub fn draw_3d_view(
                         egui::Color32::from_rgb(240, 240, 240)
                     };
 
-                    if is_debris {
+                    if is_tle_debris {
                         let d = scaled_sat_radius as f64 * 1.5 * margin / (width as f64 * 0.5);
                         let c = if in_front { color } else if !hide_behind_earth { dim_col } else { continue };
                         let w = if in_front { 1.0 } else { 0.5 };
@@ -1421,6 +1470,21 @@ pub fn draw_3d_view(
                         }
                     }
 
+                    if in_front && !correcting_sats.is_empty() {
+                        let sat_name = sat.name.clone().unwrap_or_else(|| {
+                            format!("{} P{}:S{}", cons_label, sat.plane, sat.sat_index)
+                        });
+                        if correcting_sats.contains(&sat_name) {
+                            let green = egui::Color32::from_rgb(0, 255, 120);
+                            plot_ui.points(
+                                Points::new("", PlotPoints::new(vec![[rx, ry]]))
+                                    .color(green)
+                                    .radius(scaled_sat_radius * 2.0)
+                                    .filled(false),
+                            );
+                        }
+                    }
+
                     if constellation.altitude_km < 100.0 && (in_front || !hide_behind_earth) {
                         let d = scaled_sat_radius as f64 * 3.0 * margin / (width as f64 * 0.5);
                         let red = egui::Color32::from_rgb(255, 60, 60);
@@ -1452,6 +1516,35 @@ pub fn draw_3d_view(
         }
 
     });
+
+    if !conjunction_heatmap.is_empty() {
+        let earth_r_sq = (planet_radius * EARTH_VISUAL_SCALE).powi(2);
+        for (conj, _threshold) in conjunction_heatmap {
+            let (rx1, ry1, rz1) = rotate_point_matrix(conj.pos_a[0], conj.pos_a[1], conj.pos_a[2], &satellite_rotation);
+            let (rx2, ry2, rz2) = rotate_point_matrix(conj.pos_b[0], conj.pos_b[1], conj.pos_b[2], &satellite_rotation);
+            let visible1 = rz1 >= 0.0 || (rx1 * rx1 + ry1 * ry1) >= earth_r_sq;
+            let visible2 = rz2 >= 0.0 || (rx2 * rx2 + ry2 * ry2) >= earth_r_sq;
+            let color = egui::Color32::from_rgb(255, 0, 0);
+            let dim_color = egui::Color32::from_rgba_unmultiplied(255, 0, 0, 80);
+            let dot_radius = 5.0_f32;
+            if hide_behind_earth {
+                if let Some((p1, p2)) = clip_link_at_earth(rx1, ry1, rz1, visible1, rx2, ry2, rz2, visible2, earth_r_sq) {
+                    let sp1 = response.transform.position_from_point(&egui_plot::PlotPoint::new(p1[0], p1[1]));
+                    let sp2 = response.transform.position_from_point(&egui_plot::PlotPoint::new(p2[0], p2[1]));
+                    ui.painter().line_segment([sp1, sp2], egui::Stroke::new(1.5, color));
+                    if visible1 { ui.painter().circle_filled(sp1, dot_radius, color); }
+                    if visible2 { ui.painter().circle_filled(sp2, dot_radius, color); }
+                }
+            } else {
+                let c = if visible1 && visible2 { color } else { dim_color };
+                let sp1 = response.transform.position_from_point(&egui_plot::PlotPoint::new(rx1, ry1));
+                let sp2 = response.transform.position_from_point(&egui_plot::PlotPoint::new(rx2, ry2));
+                ui.painter().line_segment([sp1, sp2], egui::Stroke::new(1.5, c));
+                if visible1 { ui.painter().circle_filled(sp1, dot_radius, color); }
+                if visible2 { ui.painter().circle_filled(sp2, dot_radius, c); }
+            }
+        }
+    }
 
     let label_font_size = (14.0 * zoom as f32).clamp(10.0, 28.0);
     let mut label_rects: Vec<(egui::Rect, bool, usize)> = Vec::new();
@@ -1496,7 +1589,11 @@ pub fn draw_3d_view(
         let mut seen = std::collections::HashSet::new();
         for (_, _, color_offset, tle_kind, _, name) in constellations {
             if !seen.insert((name.as_str(), *color_offset)) { continue; }
-            let color = plane_color(*color_offset);
+            let color = if *tle_kind == 3 {
+                egui::Color32::from_rgb(200, 200, 200)
+            } else {
+                plane_color(*color_offset)
+            };
             let square_rect = egui::Rect::from_min_size(
                 egui::pos2(x, y + 1.0),
                 egui::vec2(square_size, square_size),
@@ -1529,6 +1626,9 @@ pub fn draw_3d_view(
                     [c + egui::vec2(-h, h), c + egui::vec2(h, -h)],
                     egui::Stroke::new(1.5, egui::Color32::BLACK),
                 );
+            } else if *tle_kind == 3 {
+                let c = square_rect.center();
+                ui.painter().circle_filled(c, 3.0, egui::Color32::BLACK);
             }
             ui.painter().galley(text_pos, galley, egui::Color32::WHITE);
             y += 16.0;
@@ -1597,7 +1697,7 @@ pub fn draw_3d_view(
         let plot_pos = response.transform.value_from_position(hover_pos);
         let hover_threshold = margin * 0.025;
 
-        'hover: for (_constellation, positions, color_offset, _, _, _) in constellations {
+        'hover: for (constellation, positions, color_offset, _, _, _label) in constellations {
             for sat in positions {
                 let (rx, ry, rz) = rotate_point_matrix(sat.x, sat.y, sat.z, &satellite_rotation);
                 let earth_r_sq = (planet_radius * EARTH_VISUAL_SCALE).powi(2);
@@ -1616,6 +1716,35 @@ pub fn draw_3d_view(
                         scaled_sat_radius * 2.0,
                         egui::Stroke::new(2.0, color),
                     );
+                    let id = match &sat.name {
+                        Some(name) => name.clone(),
+                        None => format!("P{}S{}", sat.plane, sat.sat_index),
+                    };
+                    let r = (sat.x * sat.x + sat.y * sat.y + sat.z * sat.z).sqrt();
+                    let alt_km = r - planet_radius;
+                    let vel_km_s = (constellation.planet_mu / r).sqrt();
+                    let inv_body = body_rotation.transpose();
+                    let body_pos = inv_body * Vector3::new(sat.x, sat.y, sat.z);
+                    let ground_lat = (body_pos.y / r).asin().to_degrees();
+                    let ground_lon = (-body_pos.z).atan2(body_pos.x).to_degrees();
+                    let tip = if let (Some(inc), Some(mm)) = (sat.tle_inclination_deg, sat.tle_mean_motion) {
+                        let period_min = 1440.0 / mm;
+                        format!(
+                            "{}  {:.1}° {:.1}°\n{:.0} km  {:.2} km/s\nInc {:.1}°  {:.2} rev/day\nPeriod {:.1} min",
+                            id, ground_lat, ground_lon, alt_km, vel_km_s, inc, mm, period_min,
+                        )
+                    } else {
+                        format!(
+                            "{}  {:.1}° {:.1}°\n{:.0} km  {:.2} km/s",
+                            id, ground_lat, ground_lon, alt_km, vel_km_s,
+                        )
+                    };
+                    let font = egui::FontId::proportional(12.0);
+                    let galley = ui.painter().layout_no_wrap(tip, font, egui::Color32::WHITE);
+                    let tip_pos = screen_pt - egui::Vec2::new(galley.size().x * 0.5, galley.size().y + scaled_sat_radius * 2.0 + 8.0);
+                    let rect = egui::Rect::from_min_size(tip_pos, galley.size()).expand(4.0);
+                    ui.painter().rect_filled(rect, 3.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200));
+                    ui.painter().galley(tip_pos, galley, egui::Color32::WHITE);
                     hovering_satellite = true;
                     break 'hover;
                 }

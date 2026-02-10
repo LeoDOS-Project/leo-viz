@@ -16,6 +16,8 @@ mod viewer;
 mod app;
 mod walker;
 mod pass;
+mod conjunction;
+mod kessler;
 mod solar_system;
 
 pub(crate) use viewer::ViewerState;
