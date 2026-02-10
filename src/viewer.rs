@@ -37,7 +37,7 @@ use egui::mutex::Mutex;
 use egui_dock::{TabViewer, NodeIndex, SurfaceIndex};
 use egui_dock::tab_viewer::OnCloseResponse;
 use nalgebra::{Matrix3, Vector3};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
 use std::sync::{Arc, mpsc};
 use chrono::{DateTime, Utc};
@@ -338,6 +338,10 @@ impl ViewerState {
             }
             if ui.add_enabled(show_config, egui::Button::new("Live").selected(show_tle)).clicked() {
                 self.tabs[tab_idx].planets[planet_idx].show_tle_window = !show_tle;
+            }
+            let show_conj = self.tabs[tab_idx].planets[planet_idx].show_conjunction_window;
+            if ui.selectable_label(show_conj, "Conj").clicked() {
+                self.tabs[tab_idx].planets[planet_idx].show_conjunction_window = !show_conj;
             }
         });
         } // ui_visible
@@ -775,6 +779,7 @@ impl ViewerState {
         }
 
         let show_stats = self.tabs[tab_idx].show_stats;
+        let mut open_sat_list = false;
         if show_stats {
             let planet = &self.tabs[tab_idx].planets[planet_idx];
             let planet_name = planet.name.clone();
@@ -858,7 +863,81 @@ impl ViewerState {
                         if total > 0 { ui.label(format!("  Satellites: {}", total)); }
                         if total_debris > 0 { ui.label(format!("  Debris: {}", total_debris)); }
                     }
+                    ui.separator();
+                    if ui.button("Satellite List").clicked() {
+                        open_sat_list = true;
+                    }
                 });
+        }
+        if open_sat_list {
+            self.tabs[tab_idx].show_sat_list = true;
+        }
+
+        if self.tabs[tab_idx].show_sat_list {
+            let planet = &self.tabs[tab_idx].planets[planet_idx];
+            let planet_name = planet.name.clone();
+            let planet_radius = planet.celestial_body.radius_km();
+            let mu = planet.celestial_body.mu();
+            let tle_selections = planet.tle_selections.clone();
+            let constellations = planet.constellations.clone();
+            let mut show = self.tabs[tab_idx].show_sat_list;
+            egui::Window::new(format!("Satellites - {}", planet_name))
+                .open(&mut show)
+                .default_width(600.0)
+                .default_height(400.0)
+                .show(ui.ctx(), |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("sat_list_scroll")
+                        .show(ui, |ui| {
+                            egui::Grid::new("sat_list_grid")
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    ui.strong("Name");
+                                    ui.strong("Source");
+                                    ui.strong("Alt (km)");
+                                    ui.strong("Inc (°)");
+                                    ui.strong("Period (min)");
+                                    ui.end_row();
+
+                                    for cons in &constellations {
+                                        if cons.hidden { continue; }
+                                        let label = cons.preset_name();
+                                        let spp = cons.sats_per_plane;
+                                        for p in 0..cons.num_planes {
+                                            for s in 0..spp {
+                                                ui.label(format!("{} P{}:S{}", label, p, s));
+                                                ui.label(label);
+                                                ui.label(format!("{:.0}", cons.altitude_km));
+                                                ui.label(format!("{:.1}", cons.inclination));
+                                                let r = planet_radius + cons.altitude_km;
+                                                let period = 2.0 * std::f64::consts::PI * (r * r * r / mu).sqrt() / 60.0;
+                                                ui.label(format!("{:.1}", period));
+                                                ui.end_row();
+                                            }
+                                        }
+                                    }
+
+                                    for preset in TlePreset::ALL.iter() {
+                                        if let Some((selected, state, _)) = tle_selections.get(preset) {
+                                            if !*selected { continue; }
+                                            if let TleLoadState::Loaded { satellites } = state {
+                                                for sat in satellites {
+                                                    ui.label(&sat.name);
+                                                    ui.label(preset.label());
+                                                    let alt = mean_motion_to_altitude_km(sat.mean_motion);
+                                                    ui.label(format!("{:.0}", alt));
+                                                    ui.label(format!("{:.1}", sat.inclination_deg));
+                                                    let period = 1440.0 / sat.mean_motion;
+                                                    ui.label(format!("{:.1}", period));
+                                                    ui.end_row();
+                                                }
+                                            }
+                                        }
+                                    }
+                                });
+                        });
+                });
+            self.tabs[tab_idx].show_sat_list = show;
         }
 
         if show_config {
@@ -1445,6 +1524,399 @@ impl ViewerState {
             }
         }
 
+        {
+            let current_time = self.tabs[tab_idx].settings.time;
+            let planet = &self.tabs[tab_idx].planets[planet_idx];
+            if planet.kessler.course_correction_enabled && !planet.kessler.active_corrections.is_empty() {
+                let mut offset_map: HashMap<String, f64> = HashMap::new();
+                for corr in &planet.kessler.active_corrections {
+                    let off = corr.offset_at(current_time);
+                    if off.abs() > 1e-6 {
+                        offset_map.insert(corr.sat_name.clone(), off);
+                    }
+                }
+                if !offset_map.is_empty() {
+                    for (_, positions, _, tle_kind, _, label) in constellations_data.iter_mut() {
+                        if *tle_kind == 3 { continue; }
+                        for sat in positions.iter_mut() {
+                            let name = sat.name.clone().unwrap_or_else(|| {
+                                format!("{} P{}:S{}", label, sat.plane, sat.sat_index)
+                            });
+                            if let Some(&offset_km) = offset_map.get(&name) {
+                                let r = (sat.x * sat.x + sat.y * sat.y + sat.z * sat.z).sqrt();
+                                if r > 1.0 {
+                                    let scale = (r + offset_km) / r;
+                                    sat.x *= scale;
+                                    sat.y *= scale;
+                                    sat.z *= scale;
+                                    sat.lat = (sat.y / (r + offset_km)).asin().to_degrees();
+                                    sat.lon = -sat.z.atan2(sat.x).to_degrees();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        {
+            let planet = &self.tabs[tab_idx].planets[planet_idx];
+            if planet.kessler.enabled && !planet.kessler.debris.is_empty() {
+                let time = self.tabs[tab_idx].settings.time;
+                let mut debris_positions = Vec::with_capacity(planet.kessler.debris.len());
+                for (idx, frag) in planet.kessler.debris.iter().enumerate() {
+                    let [x, y, z] = crate::kessler::propagate_fragment(frag, time);
+                    let r = (x * x + y * y + z * z).sqrt();
+                    if r < 1.0 { continue; }
+                    debris_positions.push(SatelliteState {
+                        plane: 0,
+                        sat_index: idx,
+                        x, y, z,
+                        lat: (y / r).asin().to_degrees(),
+                        lon: -z.atan2(x).to_degrees(),
+                        ascending: false,
+                        neighbor_idx: None,
+                        name: Some(format!("Debris-{}", idx)),
+                        tle_inclination_deg: None,
+                        tle_mean_motion: None,
+                    });
+                }
+                if !debris_positions.is_empty() {
+                    let dummy_wc = WalkerConstellation {
+                        walker_type: WalkerType::Delta,
+                        total_sats: debris_positions.len(),
+                        num_planes: 1,
+                        altitude_km: 550.0,
+                        inclination_deg: 0.0,
+                        phasing: 0.0,
+                        raan_offset_deg: 0.0,
+                        raan_spacing_deg: None,
+                        eccentricity: 0.0,
+                        arg_periapsis_deg: 0.0,
+                        planet_radius,
+                        planet_mu,
+                        planet_j2,
+                        planet_equatorial_radius: planet_eq_radius,
+                    };
+                    constellations_data.push((dummy_wc, debris_positions, 0, 3, usize::MAX, "Kessler Debris".to_string()));
+                }
+            }
+        }
+
+        {
+            let sim_speed = self.tabs[tab_idx].settings.speed;
+            let current_time = self.tabs[tab_idx].settings.time;
+            let start_ts = self.start_timestamp.timestamp() as f64 / 60.0;
+            let planet = &mut self.tabs[tab_idx].planets[planet_idx];
+            let need_conj = planet.show_conjunction_window
+                || planet.show_conjunction_lines
+                || planet.conjunction_cache.show_heatmap
+                || planet.kessler.enabled;
+            if need_conj {
+                let sim_dt = ui.ctx().input(|i| i.stable_dt) as f64 * sim_speed;
+                let threshold = planet.conjunction_cache.threshold_km;
+                let kessler_threshold = planet.kessler.collision_threshold_km;
+                let detect_radius = if planet.conjunction_cache.show_heatmap {
+                    threshold * 5.0
+                } else if planet.kessler.enabled {
+                    threshold.max(kessler_threshold)
+                } else {
+                    threshold
+                };
+                crate::conjunction::compute_conjunctions(
+                    &mut planet.conjunction_cache.conjunctions,
+                    detect_radius,
+                    &constellations_data,
+                    &mut planet.conjunction_prev_positions,
+                    sim_dt,
+                );
+
+                if planet.kessler.enabled {
+                    let coll_thresh = planet.kessler.collision_threshold_km;
+                    let n_frags = planet.kessler.fragments_per_collision;
+                    let max_debris = planet.kessler.max_debris;
+                    let candidates: Vec<_> = planet.conjunction_cache.conjunctions.iter()
+                        .filter(|c| c.distance_km < coll_thresh)
+                        .map(|c| (c.pos_a, c.pos_b, c.name_a.clone(), c.name_b.clone()))
+                        .collect();
+                    for (pos_a, pos_b, name_a, name_b) in candidates {
+                        let key = if name_a < name_b {
+                            (name_a, name_b)
+                        } else {
+                            (name_b, name_a)
+                        };
+                        if planet.kessler.collided_pairs.contains(&key) {
+                            continue;
+                        }
+                        planet.kessler.collided_pairs.insert(key);
+                        planet.kessler.collision_count += 1;
+                        planet.kessler.collision_id_counter += 1;
+                        if planet.kessler.debris.len() < max_debris {
+                            let new_debris = crate::kessler::generate_collision_debris(
+                                pos_a, pos_b,
+                                planet_mu, planet_radius,
+                                current_time,
+                                n_frags,
+                                planet.kessler.collision_id_counter,
+                            );
+                            let remaining = max_debris - planet.kessler.debris.len();
+                            planet.kessler.debris.extend(new_debris.into_iter().take(remaining));
+                        }
+                    }
+                }
+
+                let recompute_interval = 2.0 * sim_speed.abs().max(1.0);
+                if planet.show_conjunction_window
+                    && (current_time - planet.conjunction_cache.last_prediction_time).abs() > recompute_interval
+                {
+                    let walker_data: Vec<_> = planet.constellations.iter()
+                        .filter(|c| !c.hidden)
+                        .map(|c| {
+                            let wc = c.constellation(planet_radius, planet_mu, planet_j2, planet_eq_radius);
+                            (wc, c.preset_name().to_string())
+                        })
+                        .collect();
+
+                    let propagation_minutes = start_ts + current_time / 60.0;
+                    let tle_groups: Vec<crate::conjunction::TleGroup> = crate::tle::TlePreset::ALL.iter()
+                        .filter_map(|preset| {
+                            let (selected, state, _) = planet.tle_selections.get(preset)?;
+                            if !*selected { return None; }
+                            if let crate::tle::TleLoadState::Loaded { satellites } = state {
+                                Some(crate::conjunction::TleGroup {
+                                    label: preset.label().to_string(),
+                                    satellites: satellites.as_slice(),
+                                    propagation_minutes,
+                                })
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    let window_sec = planet.conjunction_cache.prediction_window_min * 60.0;
+                    planet.conjunction_cache.predictions = crate::conjunction::predict_conjunctions(
+                        &walker_data,
+                        &tle_groups,
+                        current_time,
+                        threshold,
+                        window_sec,
+                    );
+                    planet.conjunction_cache.last_prediction_time = current_time;
+
+                    if planet.kessler.course_correction_enabled {
+                        let corr_alt = planet.kessler.correction_altitude_km;
+                        let existing: HashSet<String> = planet.kessler.active_corrections.iter()
+                            .map(|c| c.sat_name.clone())
+                            .collect();
+                        for pred in &planet.conjunction_cache.predictions {
+                            let is_a_debris = pred.name_a.starts_with("Debris-")
+                                || pred.source_a == "Kessler Debris";
+                            let is_b_debris = pred.name_b.starts_with("Debris-")
+                                || pred.source_b == "Kessler Debris";
+                            let target = if is_a_debris && !is_b_debris {
+                                Some(&pred.name_b)
+                            } else if !is_a_debris && is_b_debris {
+                                Some(&pred.name_a)
+                            } else if !is_a_debris && !is_b_debris {
+                                Some(&pred.name_a)
+                            } else {
+                                None
+                            };
+                            if let Some(name) = target {
+                                if !existing.contains(name) {
+                                    let tca_time = current_time + pred.time_until;
+                                    let lead = pred.time_until.max(30.0);
+                                    planet.kessler.active_corrections.push(
+                                        crate::config::CourseCorrection {
+                                            sat_name: name.clone(),
+                                            start_time: tca_time - lead,
+                                            end_time: tca_time + lead,
+                                            altitude_offset_km: corr_alt,
+                                        },
+                                    );
+                                    planet.kessler.corrections_made += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                planet.kessler.active_corrections.retain(|c| c.end_time > current_time);
+            }
+        }
+
+        {
+            let planet = &mut self.tabs[tab_idx].planets[planet_idx];
+            let mut show_conj_window = planet.show_conjunction_window;
+            let conj_cache = &mut planet.conjunction_cache;
+            let kessler = &mut planet.kessler;
+            let mut show_lines = planet.show_conjunction_lines;
+            egui::Window::new(format!("Conjunctions - {}", planet_name))
+                .open(&mut show_conj_window)
+                .default_width(500.0)
+                .show(ui.ctx(), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Threshold:");
+                        ui.add(
+                            egui::DragValue::new(&mut conj_cache.threshold_km)
+                                .range(1.0..=500.0)
+                                .speed(1.0)
+                                .suffix(" km"),
+                        );
+                        ui.checkbox(&mut show_lines, "Lines");
+                        ui.checkbox(&mut conj_cache.show_heatmap, "Heatmap");
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .id_salt("conj_scroll")
+                        .max_height(400.0)
+                        .show(ui, |ui| {
+                            let threshold = conj_cache.threshold_km;
+                            let current: Vec<_> = conj_cache.conjunctions.iter()
+                                .filter(|c| c.distance_km <= threshold)
+                                .collect();
+                            if !current.is_empty() {
+                                ui.strong("Current");
+                                egui::Grid::new("conj_grid")
+                                    .striped(true)
+                                    .show(ui, |ui| {
+                                        ui.strong("Dist");
+                                        ui.strong("Object A");
+                                        ui.strong("");
+                                        ui.strong("Object B");
+                                        ui.strong("TCA");
+                                        ui.strong("Min Dist");
+                                        ui.end_row();
+                                        for conj in &current {
+                                            let urgency = 1.0 - (conj.distance_km / threshold).clamp(0.0, 1.0);
+                                            let r = (255.0 * urgency) as u8;
+                                            let g = (255.0 * (1.0 - urgency)) as u8;
+                                            let color = egui::Color32::from_rgb(r, g, 0);
+                                            ui.colored_label(color, format!("{:.1} km", conj.distance_km));
+                                            ui.label(format!("{} ({})", conj.name_a, conj.source_a));
+                                            ui.label("↔");
+                                            ui.label(format!("{} ({})", conj.name_b, conj.source_b));
+                                            if conj.tca_seconds.abs() < 1.0 {
+                                                ui.colored_label(egui::Color32::RED, "NOW");
+                                            } else if conj.tca_seconds > 0.0 {
+                                                ui.label(format!("{:.0}s", conj.tca_seconds));
+                                            } else {
+                                                ui.label(format!("{:.0}s ago", -conj.tca_seconds));
+                                            }
+                                            ui.label(format!("{:.1} km", conj.min_distance_km));
+                                            ui.end_row();
+                                        }
+                                    });
+                                ui.separator();
+                            }
+
+                            ui.horizontal(|ui| {
+                                ui.strong("Predicted");
+                                ui.add(
+                                    egui::DragValue::new(&mut conj_cache.prediction_window_min)
+                                        .range(1.0..=60.0)
+                                        .speed(1.0)
+                                        .suffix(" min"),
+                                );
+                            });
+                            if conj_cache.predictions.is_empty() {
+                                ui.weak("No upcoming conjunctions predicted");
+                            } else {
+                                egui::Grid::new("conj_pred_grid")
+                                    .striped(true)
+                                    .show(ui, |ui| {
+                                        ui.strong("In");
+                                        ui.strong("Object A");
+                                        ui.strong("");
+                                        ui.strong("Object B");
+                                        ui.strong("Min Dist");
+                                        ui.end_row();
+                                        for pred in &conj_cache.predictions {
+                                            let secs = pred.time_until;
+                                            if secs < 60.0 {
+                                                ui.colored_label(egui::Color32::RED, format!("{:.0}s", secs));
+                                            } else {
+                                                ui.label(format!("{:.0}m {:.0}s", (secs / 60.0).floor(), secs % 60.0));
+                                            }
+                                            ui.label(format!("{} ({})", pred.name_a, pred.source_a));
+                                            ui.label("↔");
+                                            ui.label(format!("{} ({})", pred.name_b, pred.source_b));
+                                            ui.label(format!("{:.1} km", pred.min_distance_km));
+                                            ui.end_row();
+                                        }
+                                    });
+                            }
+
+                            ui.separator();
+                            ui.strong("Kessler Simulation");
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut kessler.enabled, "Enable");
+                                if ui.button("Clear").clicked() {
+                                    kessler.debris.clear();
+                                    kessler.collision_count = 0;
+                                    kessler.collision_id_counter = 0;
+                                    kessler.collided_pairs.clear();
+                                }
+                            });
+                            if kessler.enabled {
+                                ui.horizontal(|ui| {
+                                    ui.label("Collision dist:");
+                                    ui.add(
+                                        egui::DragValue::new(&mut kessler.collision_threshold_km)
+                                            .range(0.1..=50.0)
+                                            .speed(0.1)
+                                            .suffix(" km"),
+                                    );
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Fragments/collision:");
+                                    ui.add(
+                                        egui::DragValue::new(&mut kessler.fragments_per_collision)
+                                            .range(2..=50)
+                                            .speed(1),
+                                    );
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Max debris:");
+                                    ui.add(
+                                        egui::DragValue::new(&mut kessler.max_debris)
+                                            .range(100..=50000)
+                                            .speed(100),
+                                    );
+                                });
+                                ui.label(format!(
+                                    "Collisions: {}  Debris: {}",
+                                    kessler.collision_count,
+                                    kessler.debris.len()
+                                ));
+
+                                ui.separator();
+                                ui.strong("Course Correction");
+                                ui.checkbox(&mut kessler.course_correction_enabled, "Enable");
+                                if kessler.course_correction_enabled {
+                                    ui.horizontal(|ui| {
+                                        ui.label("Maneuver altitude:");
+                                        ui.add(
+                                            egui::DragValue::new(&mut kessler.correction_altitude_km)
+                                                .range(0.5..=50.0)
+                                                .speed(0.1)
+                                                .suffix(" km"),
+                                        );
+                                    });
+                                    ui.label(format!(
+                                        "Corrections: {}  Active: {}",
+                                        kessler.corrections_made,
+                                        kessler.active_corrections.len()
+                                    ));
+                                }
+                            }
+                        });
+                });
+            planet.show_conjunction_window = show_conj_window;
+            planet.show_conjunction_lines = show_lines;
+        }
+
         let available = ui.available_size();
         let settings = &self.tabs[tab_idx].settings;
         let render_planet = settings.render_planet;
@@ -1547,6 +2019,31 @@ impl ViewerState {
                             [sun_shader.x as f32, sun_shader.y as f32, sun_shader.z as f32]
                         };
                         let device_layers_ref: &[DeviceLayer] = if show_devices { &planet.device_layers } else { &[] };
+                        let conj_lines: Vec<_> = if planet.show_conjunction_lines && !planet.conjunction_cache.show_heatmap {
+                            let t = planet.conjunction_cache.threshold_km;
+                            planet.conjunction_cache.conjunctions.iter()
+                                .filter(|c| c.distance_km <= t)
+                                .map(|c| (c.clone(), t)).collect()
+                        } else {
+                            Vec::new()
+                        };
+                        let conj_heatmap: Vec<_> = if planet.conjunction_cache.show_heatmap {
+                            let t = planet.conjunction_cache.threshold_km;
+                            planet.conjunction_cache.conjunctions.iter()
+                                .filter(|c| c.tca_seconds > 0.0 && c.min_distance_km < t)
+                                .map(|c| (c.clone(), t))
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        let correcting_sats: HashSet<String> = if planet.kessler.course_correction_enabled {
+                            planet.kessler.active_corrections.iter()
+                                .filter(|c| c.offset_at(time).abs() > 1e-6)
+                                .map(|c| c.sat_name.clone())
+                                .collect()
+                        } else {
+                            HashSet::new()
+                        };
                         let (rot, new_zoom) = draw_3d_view(
                             ui,
                             &view_name,
@@ -1587,6 +2084,9 @@ impl ViewerState {
                             { match &self.geo_data { GeoLoadState::Loaded(d) => if show_cities { d.cities.as_slice() } else { &[] }, _ => &[] } },
                             #[cfg(target_arch = "wasm32")]
                             &[],
+                            &conj_lines,
+                            &conj_heatmap,
+                            &correcting_sats,
                         );
                         self.tabs[tab_idx].settings.rotation = rot;
                         self.tabs[tab_idx].settings.zoom = new_zoom;

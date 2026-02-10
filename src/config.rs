@@ -4,12 +4,13 @@
 //! stations, areas of interest, device layers, and per-tab view settings.
 
 use crate::celestial::{CelestialBody, Skin};
+use crate::kessler::DebrisFragment;
 use crate::math::lat_lon_to_matrix;
 use crate::tle::{TlePreset, TleLoadState, TleShell};
 use crate::walker::{WalkerType, WalkerConstellation};
 use eframe::egui;
 use nalgebra::Matrix3;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Preset {
@@ -144,6 +145,11 @@ pub struct PlanetConfig {
     pub areas_of_interest: Vec<AreaOfInterest>,
     pub device_layers: Vec<DeviceLayer>,
     pub pass_cache: PassPredictionCache,
+    pub conjunction_cache: ConjunctionCache,
+    pub conjunction_prev_positions: HashMap<(usize, usize), [f64; 3]>,
+    pub show_conjunction_window: bool,
+    pub show_conjunction_lines: bool,
+    pub kessler: KesslerSimulation,
 }
 
 impl PlanetConfig {
@@ -173,6 +179,11 @@ impl PlanetConfig {
                 devices: vec![(59.40481807006525, 17.949657783197082), (59.41, 17.96)],
             }],
             pass_cache: PassPredictionCache::default(),
+            conjunction_cache: ConjunctionCache::default(),
+            conjunction_prev_positions: HashMap::new(),
+            show_conjunction_window: false,
+            show_conjunction_lines: true,
+            kessler: KesslerSimulation::default(),
         }
     }
 
@@ -305,6 +316,7 @@ pub struct TabConfig {
     pub planets: Vec<PlanetConfig>,
     pub planet_counter: usize,
     pub show_stats: bool,
+    pub show_sat_list: bool,
     pub settings: TabSettings,
 }
 
@@ -321,6 +333,7 @@ impl TabConfig {
             planets: Vec::new(),
             planet_counter: 0,
             show_stats: false,
+            show_sat_list: false,
             settings: TabSettings::default(),
         }
     }
@@ -368,6 +381,105 @@ impl Default for PassPredictionCache {
             passes: HashMap::new(),
             last_compute_time: f64::NEG_INFINITY,
             prediction_window_min: 10080.0,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ConjunctionInfo {
+    pub name_a: String,
+    pub name_b: String,
+    pub source_a: String,
+    pub source_b: String,
+    pub distance_km: f64,
+    pub pos_a: [f64; 3],
+    pub pos_b: [f64; 3],
+    pub tca_seconds: f64,
+    pub min_distance_km: f64,
+}
+
+#[derive(Clone)]
+pub struct PredictedConjunction {
+    pub name_a: String,
+    pub name_b: String,
+    pub source_a: String,
+    pub source_b: String,
+    pub time_until: f64,
+    pub min_distance_km: f64,
+}
+
+#[derive(Clone)]
+pub struct ConjunctionCache {
+    pub conjunctions: Vec<ConjunctionInfo>,
+    pub threshold_km: f64,
+    pub show_heatmap: bool,
+    pub predictions: Vec<PredictedConjunction>,
+    pub prediction_window_min: f64,
+    pub last_prediction_time: f64,
+}
+
+impl Default for ConjunctionCache {
+    fn default() -> Self {
+        Self {
+            conjunctions: Vec::new(),
+            threshold_km: 50.0,
+            show_heatmap: false,
+            predictions: Vec::new(),
+            prediction_window_min: 10.0,
+            last_prediction_time: f64::NEG_INFINITY,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct CourseCorrection {
+    pub sat_name: String,
+    pub start_time: f64,
+    pub end_time: f64,
+    pub altitude_offset_km: f64,
+}
+
+impl CourseCorrection {
+    pub fn offset_at(&self, time: f64) -> f64 {
+        if time < self.start_time || time > self.end_time {
+            return 0.0;
+        }
+        let frac = (time - self.start_time) / (self.end_time - self.start_time);
+        self.altitude_offset_km * (frac * std::f64::consts::PI).sin()
+    }
+}
+
+#[derive(Clone)]
+pub struct KesslerSimulation {
+    pub enabled: bool,
+    pub debris: Vec<DebrisFragment>,
+    pub collision_threshold_km: f64,
+    pub fragments_per_collision: usize,
+    pub max_debris: usize,
+    pub collision_count: usize,
+    pub collision_id_counter: u64,
+    pub collided_pairs: HashSet<(String, String)>,
+    pub course_correction_enabled: bool,
+    pub active_corrections: Vec<CourseCorrection>,
+    pub correction_altitude_km: f64,
+    pub corrections_made: usize,
+}
+
+impl Default for KesslerSimulation {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            debris: Vec::new(),
+            collision_threshold_km: 1.0,
+            fragments_per_collision: 5,
+            max_debris: 10000,
+            collision_count: 0,
+            collision_id_counter: 0,
+            collided_pairs: HashSet::new(),
+            course_correction_enabled: false,
+            active_corrections: Vec::new(),
+            correction_altitude_km: 2.0,
+            corrections_made: 0,
         }
     }
 }
