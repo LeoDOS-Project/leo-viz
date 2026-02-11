@@ -1457,6 +1457,7 @@ impl eframe::App for App {
                         if ui.button("[Demo]").clicked() {
                             self.setup_demo();
                         }
+                        ui.weak(env!("GIT_HASH"));
                         if ui.small_button("−").clicked() {
                             self.viewer.show_side_panel = false;
                         }
