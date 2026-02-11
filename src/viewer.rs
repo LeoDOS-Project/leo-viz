@@ -343,6 +343,10 @@ impl ViewerState {
             if ui.selectable_label(show_conj, "Conj").clicked() {
                 self.tabs[tab_idx].planets[planet_idx].show_conjunction_window = !show_conj;
             }
+            let show_rad = self.tabs[tab_idx].planets[planet_idx].show_radiation_window;
+            if ui.selectable_label(show_rad, "Rad").clicked() {
+                self.tabs[tab_idx].planets[planet_idx].show_radiation_window = !show_rad;
+            }
         });
         } // ui_visible
 
@@ -1917,6 +1921,125 @@ impl ViewerState {
             planet.show_conjunction_lines = show_lines;
         }
 
+        {
+            let planet = &mut self.tabs[tab_idx].planets[planet_idx];
+            let mut show_rad_window = planet.show_radiation_window;
+            let rad = &mut planet.radiation;
+            egui::Window::new(format!("Radiation - {}", planet_name))
+                .open(&mut show_rad_window)
+                .default_width(400.0)
+                .show(ui.ctx(), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Kp index:");
+                        ui.add(
+                            egui::DragValue::new(&mut rad.kp_index)
+                                .range(0.0..=9.0)
+                                .speed(0.1)
+                                .max_decimals(1),
+                        );
+                        let kp_label = if rad.kp_index < 4.0 {
+                            "Quiet"
+                        } else if rad.kp_index < 6.0 {
+                            "Active"
+                        } else {
+                            "Storm"
+                        };
+                        let kp_color = if rad.kp_index < 4.0 {
+                            egui::Color32::GREEN
+                        } else if rad.kp_index < 6.0 {
+                            egui::Color32::YELLOW
+                        } else {
+                            egui::Color32::RED
+                        };
+                        ui.colored_label(kp_color, kp_label);
+                    });
+                    ui.checkbox(&mut rad.show_belts, "Show belt bands");
+                    ui.checkbox(&mut rad.show_magnetopause, "Show magnetopause");
+                    ui.checkbox(&mut rad.show_sat_exposure, "Satellite exposure coloring");
+
+                    ui.separator();
+                    ui.strong("Belt Rendering");
+                    ui.horizontal(|ui| {
+                        ui.label("Drift shells:");
+                        ui.add(egui::DragValue::new(&mut rad.num_shells).range(2..=60).speed(0.5));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Meridians:");
+                        ui.add(egui::DragValue::new(&mut rad.num_meridians).range(2..=64).speed(0.5));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Shell phasing:");
+                        ui.add(egui::DragValue::new(&mut rad.shell_phasing).range(0.0..=2.0).speed(0.05).max_decimals(2));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Links:");
+                        ui.add(egui::DragValue::new(&mut rad.num_links).range(0..=20).speed(0.5));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Dipole tilt (°):");
+                        ui.add(egui::DragValue::new(&mut rad.dipole_tilt).range(0.0..=90.0).speed(0.5).max_decimals(1));
+                    });
+
+                    ui.separator();
+                    ui.strong("Radiation Profile");
+
+                    let kp = rad.kp_index;
+                    let profile_line: Vec<[f64; 2]> = (0..200)
+                        .map(|i| {
+                            let alt = i as f64 * 300.0;
+                            let intensity = crate::radiation::belt_profile(alt, kp);
+                            [alt, intensity]
+                        })
+                        .collect();
+                    let inner_color = egui::Color32::from_rgb(255, 120, 50);
+                    let outer_color = egui::Color32::from_rgb(100, 130, 230);
+                    let inner_line: Vec<[f64; 2]> = profile_line.iter()
+                        .filter(|p| p[0] < 12000.0)
+                        .copied()
+                        .collect();
+                    let outer_line: Vec<[f64; 2]> = profile_line.iter()
+                        .filter(|p| p[0] >= 6000.0)
+                        .copied()
+                        .collect();
+                    egui_plot::Plot::new("rad_profile")
+                        .height(150.0)
+                        .allow_drag(false)
+                        .allow_zoom(false)
+                        .allow_scroll(false)
+                        .x_axis_label("Altitude (km)")
+                        .y_axis_label("Intensity")
+                        .show(ui, |plot_ui| {
+                            plot_ui.line(
+                                egui_plot::Line::new("Inner belt", egui_plot::PlotPoints::new(inner_line))
+                                    .color(inner_color)
+                                    .width(2.0),
+                            );
+                            plot_ui.line(
+                                egui_plot::Line::new("Outer belt", egui_plot::PlotPoints::new(outer_line))
+                                    .color(outer_color)
+                                    .width(2.0),
+                            );
+                        });
+
+                    ui.separator();
+                    let r0 = 11.0 - 0.8 * kp;
+                    ui.label(format!(
+                        "Magnetopause standoff: {:.1} Re ({:.0} km)",
+                        r0,
+                        r0 * 6371.0
+                    ));
+                    ui.label(format!(
+                        "Inner belt peak: ~3,200 km ({:.1} Re)",
+                        (6371.0 + 3200.0) / 6371.0
+                    ));
+                    ui.label(format!(
+                        "Outer belt peak: ~22,300 km ({:.1} Re)",
+                        (6371.0 + 22300.0) / 6371.0
+                    ));
+                });
+            planet.show_radiation_window = show_rad_window;
+        }
+
         let available = ui.available_size();
         let settings = &self.tabs[tab_idx].settings;
         let render_planet = settings.render_planet;
@@ -1971,6 +2094,7 @@ impl ViewerState {
         let show_devices = settings.show_devices;
         let show_borders = settings.show_borders;
         let show_cities = settings.show_cities;
+        let show_radiation_belts = settings.show_radiation_belts;
         let log_power = settings.solar_system_log_power;
         let detail_gl_info = self.tile_overlay_detail_gl_info(celestial_body);
 
@@ -2087,6 +2211,11 @@ impl ViewerState {
                             &conj_lines,
                             &conj_heatmap,
                             &correcting_sats,
+                            if show_radiation_belts || planet.show_radiation_window {
+                                Some(&planet.radiation)
+                            } else {
+                                None
+                            },
                         );
                         self.tabs[tab_idx].settings.rotation = rot;
                         self.tabs[tab_idx].settings.zoom = new_zoom;

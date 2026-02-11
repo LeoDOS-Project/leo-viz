@@ -287,6 +287,7 @@ impl ViewerState {
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_cities, "City labels"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_devices, "Show devices"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_stars, "Show stars and milky way"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_radiation_belts, "Radiation belts"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_torus, "Show torus"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_asc_desc_colors, "Asc/Desc colors"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.single_color, "Monochrome planes"));

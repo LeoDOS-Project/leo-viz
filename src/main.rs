@@ -18,6 +18,7 @@ mod walker;
 mod pass;
 mod conjunction;
 mod kessler;
+mod radiation;
 mod solar_system;
 
 pub(crate) use viewer::ViewerState;

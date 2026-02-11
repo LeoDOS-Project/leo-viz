@@ -6,7 +6,7 @@
 
 use crate::celestial::{CelestialBody, Skin, TextureResolution};
 use crate::config::{
-    AreaOfInterest, ConjunctionInfo, DeviceLayer, GroundStation, SatelliteCamera, View3DFlags,
+    AreaOfInterest, ConjunctionInfo, DeviceLayer, GroundStation, RadiationConfig, SatelliteCamera, View3DFlags,
 };
 use crate::geo::CityLabel;
 use crate::math::{rotate_point_matrix, rotation_from_drag};
@@ -355,6 +355,7 @@ pub fn draw_3d_view(
     conjunction_lines: &[(ConjunctionInfo, f64)],
     conjunction_heatmap: &[(ConjunctionInfo, f64)],
     correcting_sats: &HashSet<String>,
+    radiation: Option<&RadiationConfig>,
 ) -> (Matrix3<f64>, f64) {
     let View3DFlags {
         show_orbits, show_axes, show_coverage, show_links, show_intra_links,
@@ -591,6 +592,96 @@ pub fn draw_3d_view(
                     .color(egui::Color32::from_rgb(255, 180, 0))
                     .width(2.0));
             }
+        }
+
+        if let Some(rad_config) = radiation {
+            use crate::radiation::{belt_profile, belt_color};
+
+            let belt_rotation = if earth_fixed_camera {
+                rotation
+            } else {
+                rotation * *body_rotation
+            };
+
+            let dipole_tilt = rad_config.dipole_tilt.to_radians();
+            let mag_axis = Vector3::new(0.0, dipole_tilt.cos(), dipole_tilt.sin()).normalize();
+            let mag_u = if mag_axis.x.abs() < 0.9 {
+                Vector3::new(1.0, 0.0, 0.0).cross(&mag_axis).normalize()
+            } else {
+                Vector3::new(0.0, 0.0, 1.0).cross(&mag_axis).normalize()
+            };
+            let mag_v = mag_axis.cross(&mag_u);
+
+            if rad_config.show_belts {
+                let num_meridians = rad_config.num_meridians.max(2);
+                let num_l = rad_config.num_shells.max(2);
+                let l_min = 1.2_f64;
+                let l_max = 7.0_f64;
+                let num_pts = 50;
+
+                for li in 0..num_l {
+                    let l = l_min + (l_max - l_min) * li as f64 / (num_l - 1) as f64;
+                    let mirror_lat = (1.0_f64 / l.sqrt()).acos();
+                    let alt_eq = (l - 1.0) * planet_radius;
+                    let intensity = belt_profile(alt_eq, rad_config.kp_index);
+                    let (cr, cg, cb) = belt_color(alt_eq);
+                    let alpha = (intensity * 160.0 + 15.0).min(180.0) as u8;
+                    let width = (intensity * 2.0).max(0.4).min(2.0) as f32;
+
+                    let phi_offset = rad_config.shell_phasing * PI * li as f64 / num_l as f64;
+                    let num_links = rad_config.num_links;
+
+                    let shell_pt = |phi: f64, lam: f64| -> [f64; 2] {
+                        let dir = mag_u * phi.cos() + mag_v * phi.sin();
+                        let r = l * lam.cos().powi(2) * planet_radius;
+                        let px = mag_axis.x * r * lam.sin() + dir.x * r * lam.cos();
+                        let py = mag_axis.y * r * lam.sin() + dir.y * r * lam.cos();
+                        let pz = mag_axis.z * r * lam.sin() + dir.z * r * lam.cos();
+                        let (sx, sy, _) = rotate_point_matrix(px, py, pz, &belt_rotation);
+                        [sx, sy]
+                    };
+
+                    for mi in 0..num_meridians {
+                        let phi = phi_offset + 2.0 * PI * mi as f64 / num_meridians as f64;
+                        let phi_next = phi_offset + 2.0 * PI * (mi + 1) as f64 / num_meridians as f64;
+
+                        let pts: Vec<[f64; 2]> = (0..=num_pts)
+                            .map(|j| {
+                                let lam = -mirror_lat + 2.0 * mirror_lat * j as f64 / num_pts as f64;
+                                shell_pt(phi, lam)
+                            })
+                            .collect();
+                        plot_ui.line(
+                            Line::new("", PlotPoints::new(pts))
+                                .color(egui::Color32::from_rgba_unmultiplied(cr, cg, cb, alpha))
+                                .width(width),
+                        );
+
+                        if num_links > 0 {
+                            let dir = mag_u * phi.cos() + mag_v * phi.sin();
+                            let dir_next = mag_u * phi_next.cos() + mag_v * phi_next.sin();
+                            for li2 in 1..num_links {
+                                let lam = -mirror_lat + 2.0 * mirror_lat * li2 as f64 / num_links as f64;
+                                let r = l * lam.cos().powi(2) * planet_radius;
+                                let p1x = mag_axis.x * r * lam.sin() + dir.x * r * lam.cos();
+                                let p1y = mag_axis.y * r * lam.sin() + dir.y * r * lam.cos();
+                                let p1z = mag_axis.z * r * lam.sin() + dir.z * r * lam.cos();
+                                let p2x = mag_axis.x * r * lam.sin() + dir_next.x * r * lam.cos();
+                                let p2y = mag_axis.y * r * lam.sin() + dir_next.y * r * lam.cos();
+                                let p2z = mag_axis.z * r * lam.sin() + dir_next.z * r * lam.cos();
+                                let (s1x, s1y, _) = rotate_point_matrix(p1x, p1y, p1z, &belt_rotation);
+                                let (s2x, s2y, _) = rotate_point_matrix(p2x, p2y, p2z, &belt_rotation);
+                                plot_ui.line(
+                                    Line::new("", PlotPoints::new(vec![[s1x, s1y], [s2x, s2y]]))
+                                        .color(egui::Color32::from_rgba_unmultiplied(cr, cg, cb, alpha))
+                                        .width(width),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
         }
 
         if show_coverage {
@@ -1350,7 +1441,21 @@ pub fn draw_3d_view(
                         continue;
                     }
 
-                    let color = plane_color(color_offset + sat.plane);
+                    let mut color = plane_color(color_offset + sat.plane);
+                    if let Some(rc) = radiation {
+                        if rc.show_sat_exposure {
+                            let r_pos = (sat.x * sat.x + sat.y * sat.y + sat.z * sat.z).sqrt();
+                            let alt = r_pos - planet_radius;
+                            let exp = crate::radiation::radiation_level(alt, sat.lat, rc.kp_index, planet_radius);
+                            if exp > 0.005 {
+                                let boost = (exp * 2.0).min(1.0);
+                                let er = (color.r() as f64 + (255.0 - color.r() as f64) * boost) as u8;
+                                let eg = (color.g() as f64 * (1.0 - boost * 0.8)) as u8;
+                                let eb = (color.b() as f64 * (1.0 - boost * 0.8)) as u8;
+                                color = egui::Color32::from_rgb(er, eg, eb);
+                            }
+                        }
+                    }
                     let dim_col = egui::Color32::from_rgba_unmultiplied(
                         color.r() / 2, color.g() / 2, color.b() / 2, 80,
                     );
@@ -1423,6 +1528,26 @@ pub fn draw_3d_view(
                         }
                     } else {
                         base_color
+                    };
+                    let color = if let Some(rc) = radiation {
+                        if rc.show_sat_exposure {
+                            let r_pos = (sat.x * sat.x + sat.y * sat.y + sat.z * sat.z).sqrt();
+                            let alt = r_pos - planet_radius;
+                            let exp = crate::radiation::radiation_level(alt, sat.lat, rc.kp_index, planet_radius);
+                            if exp > 0.005 {
+                                let boost = (exp * 2.0).min(1.0);
+                                let er = (color.r() as f64 + (255.0 - color.r() as f64) * boost) as u8;
+                                let eg = (color.g() as f64 * (1.0 - boost * 0.8)) as u8;
+                                let eb = (color.b() as f64 * (1.0 - boost * 0.8)) as u8;
+                                egui::Color32::from_rgb(er, eg, eb)
+                            } else {
+                                color
+                            }
+                        } else {
+                            color
+                        }
+                    } else {
+                        color
                     };
                     let dim_col = egui::Color32::from_rgba_unmultiplied(
                         color.r() / 2, color.g() / 2, color.b() / 2, 80,
