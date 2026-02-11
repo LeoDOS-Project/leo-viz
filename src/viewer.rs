@@ -241,6 +241,7 @@ impl ViewerState {
     }
 
     fn render_planet_ui(&mut self, ui: &mut egui::Ui, tab_idx: usize, planet_idx: usize, num_planets: usize) -> (bool, bool) {
+        #[cfg(not(target_arch = "wasm32"))]
         let constrained_width = ui.available_width();
         let mut add_planet = false;
         let mut remove_planet = false;
@@ -2048,11 +2049,14 @@ impl ViewerState {
         }
 
         let mut available = ui.available_size();
-        available.x = constrained_width.min(available.x);
-        let clip = ui.clip_rect();
-        let cursor = ui.cursor().min;
-        available.x = available.x.min((clip.max.x - cursor.x).max(0.0));
-        available.y = available.y.min((clip.max.y - cursor.y).max(0.0));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            available.x = constrained_width.min(available.x);
+            let clip = ui.clip_rect();
+            let cursor = ui.cursor().min;
+            available.x = available.x.min((clip.max.x - cursor.x).max(0.0));
+            available.y = available.y.min((clip.max.y - cursor.y).max(0.0));
+        }
         let settings = &self.tabs[tab_idx].settings;
         let render_planet = settings.render_planet;
         let show_torus = settings.show_torus;
