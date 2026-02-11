@@ -2048,9 +2048,10 @@ impl ViewerState {
         }
 
         let mut available = ui.available_size();
-        available.x = constrained_width;
+        available.x = constrained_width.min(available.x);
         let clip = ui.clip_rect();
         let cursor = ui.cursor().min;
+        available.x = available.x.min((clip.max.x - cursor.x).max(0.0));
         available.y = available.y.min((clip.max.y - cursor.y).max(0.0));
         let settings = &self.tabs[tab_idx].settings;
         let render_planet = settings.render_planet;
