@@ -16,22 +16,15 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.91.0
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Install Trunk
-        uses: jetli/trunk-action@v0.5.0
-        with:
-          version: 'latest'
-
-      - name: Build
-        run: trunk build --release --public-url /leo-viz/
+      - name: Assemble dist
+        run: |
+          mkdir -p dist
+          cp dist-wasm/* dist/
+          cp -r textures dist/
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
