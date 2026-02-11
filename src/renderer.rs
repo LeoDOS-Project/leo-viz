@@ -77,14 +77,16 @@ impl SphereRenderer {
                 uniform float u_adams_arc;
                 uniform float u_epsilon_wobble;
                 uniform float u_transparent_bg;
+                uniform vec2 u_uv_scale;
 
                 const float PI = 3.14159265359;
                 const vec3 ATMO_COLOR = vec3(0.4, 0.7, 1.0);
                 const float ATMO_THICKNESS = 0.06;
 
                 void main() {
-                    vec2 centered = (v_uv - 0.5) * 2.0;
-                    centered.x *= u_aspect;
+                    vec2 centered = (v_uv * u_uv_scale - 0.5) * 2.0;
+                    centered.x *= max(u_aspect, 1.0);
+                    centered.y *= max(1.0 / u_aspect, 1.0);
                     centered /= u_scale;
 
                     float b = 1.0 - u_flattening;
@@ -169,8 +171,9 @@ impl SphereRenderer {
                         float bg_alpha = 0.0;
 
                         if (u_show_stars > 0.5) {
+                            float vp_aspect = u_aspect * u_uv_scale.x / u_uv_scale.y;
                             vec2 sp = (v_uv - 0.5) * 2.0;
-                            sp.x *= u_aspect;
+                            sp.x *= vp_aspect;
                             vec3 dir = u_inv_rotation * normalize(vec3(sp, -2.0));
                             float slat = asin(clamp(dir.y, -1.0, 1.0));
                             float slon = atan(-dir.z, dir.x);
@@ -203,8 +206,9 @@ impl SphereRenderer {
                         vec3 bg = vec3(0.0);
                         float bg_alpha = 0.0;
                         if (u_show_stars > 0.5) {
+                            float vp_aspect = u_aspect * u_uv_scale.x / u_uv_scale.y;
                             vec2 sp = (v_uv - 0.5) * 2.0;
-                            sp.x *= u_aspect;
+                            sp.x *= vp_aspect;
                             vec3 dir = u_inv_rotation * normalize(vec3(sp, -2.0));
                             float slat = asin(clamp(dir.y, -1.0, 1.0));
                             float slon = atan(-dir.z, dir.x);
@@ -536,6 +540,7 @@ impl SphereRenderer {
         show_stars: bool,
         show_milky_way: bool,
         bg_color: [f32; 3],
+        uv_scale: [f32; 2],
     ) {
         let Some(texture) = self.textures.get(&key) else { return };
 
@@ -630,6 +635,7 @@ impl SphereRenderer {
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_flattening").as_ref(), flattening as f32);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_aspect").as_ref(), aspect);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_scale").as_ref(), scale);
+            gl.uniform_2_f32(gl.get_uniform_location(self.program, "u_uv_scale").as_ref(), uv_scale[0], uv_scale[1]);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_atmosphere").as_ref(), atmosphere);
             let clouds_enabled = show_clouds && cloud_tex.is_some() && key.0 == CelestialBody::Earth;
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_show_clouds").as_ref(), if clouds_enabled { 1.0 } else { 0.0 });
@@ -749,6 +755,7 @@ impl SphereRenderer {
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_flattening").as_ref(), flattening as f32);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_aspect").as_ref(), 1.0);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_scale").as_ref(), scale);
+            gl.uniform_2_f32(gl.get_uniform_location(self.program, "u_uv_scale").as_ref(), 1.0, 1.0);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_atmosphere").as_ref(), 0.0);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_show_clouds").as_ref(), 0.0);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_show_day_night").as_ref(), 0.0);

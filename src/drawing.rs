@@ -389,7 +389,6 @@ pub fn draw_3d_view(
         };
         let inv_rotation = combined_rotation.transpose();
         let flat = flattening as f32;
-        let aspect = width / height;
         let key = body_key;
         let scale = (planet_radius / margin) as f32;
         let atmosphere = match body_key.0 {
@@ -400,10 +399,17 @@ pub fn draw_3d_view(
         let bg = ui.visuals().extreme_bg_color;
         let bg_color = [bg.r() as f32 / 255.0, bg.g() as f32 / 255.0, bg.b() as f32 / 255.0];
         let detail_info = detail_gl_info;
+        let logical_aspect = width / height.max(1.0);
         let callback = egui::PaintCallback {
             rect,
-            callback: Arc::new(egui_glow::CallbackFn::new(move |_info, painter| {
+            callback: Arc::new(egui_glow::CallbackFn::new(move |info, painter| {
                 let gl = painter.gl();
+                let vp = info.viewport_in_pixels();
+                let ppp = info.pixels_per_point;
+                let uv_scale = [
+                    vp.width_px as f32 / (width * ppp).max(1.0),
+                    vp.height_px as f32 / (height * ppp).max(1.0),
+                ];
                 let r = renderer.lock();
                 if let Some((detail_tex, detail_bounds)) = detail_info {
                     let dt = DetailTexture {
@@ -417,9 +423,9 @@ pub fn draw_3d_view(
                         },
                         gl_texture: Some(detail_tex),
                     };
-                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, Some(&dt), show_stars, show_stars, bg_color);
+                    r.paint(gl, key, &inv_rotation, flat as f64, logical_aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, Some(&dt), show_stars, show_stars, bg_color, uv_scale);
                 } else {
-                    r.paint(gl, key, &inv_rotation, flat as f64, aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, None, show_stars, show_stars, bg_color);
+                    r.paint(gl, key, &inv_rotation, flat as f64, logical_aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, None, show_stars, show_stars, bg_color, uv_scale);
                 }
             })),
         };
