@@ -258,24 +258,10 @@ impl ViewerState {
         let show_config = self.tabs[tab_idx].planets[planet_idx].show_config_window;
 
         if self.ui_visible {
-        ui.horizontal(|ui| {
-            let available_w = ui.available_width();
-            let scale = if available_w < 550.0 {
-                (available_w / 550.0).max(0.5)
-            } else {
-                1.0
-            };
-            if scale < 1.0 {
-                let style = ui.style_mut();
-                for (_text_style, font_id) in style.text_styles.iter_mut() {
-                    font_id.size *= scale;
-                }
-                style.spacing.item_spacing.x *= scale;
-                style.spacing.button_padding *= scale;
-                style.spacing.combo_width *= scale;
-                style.spacing.combo_height *= scale;
-                style.spacing.interact_size *= scale;
-            }
+        egui::ScrollArea::horizontal()
+            .id_salt(("planet_hscroll", tab_idx, planet_idx))
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+            .show(ui, |ui| { ui.horizontal(|ui| {
             ui.strong(&planet_name);
             if ui.small_button("+").clicked() {
                 add_planet = true;
@@ -365,7 +351,7 @@ impl ViewerState {
             if ui.selectable_label(show_rad, "Rad").clicked() {
                 self.tabs[tab_idx].planets[planet_idx].show_radiation_window = !show_rad;
             }
-        });
+        }); });
         } // ui_visible
 
         if remove_planet {
@@ -977,7 +963,10 @@ impl ViewerState {
         let controls_height = 180.0;
         {
         let planet = &mut self.tabs[tab_idx].planets[planet_idx];
-        ui.horizontal(|ui| {
+        egui::ScrollArea::horizontal()
+            .id_salt(("planet_config_hscroll", tab_idx, planet_idx))
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+            .show(ui, |ui| { ui.horizontal(|ui| {
             if show_tle {
                 let selected_loaded: Vec<TlePreset> = planet.tle_selections.iter()
                     .filter(|(_, (sel, state, _))| *sel && matches!(state, TleLoadState::Loaded { .. }))
@@ -1398,7 +1387,7 @@ impl ViewerState {
             if ui.button(add_btn_text).clicked() {
                 const_to_remove = Some(usize::MAX);
             }
-        });
+        }); });
 
         if let Some(cidx) = const_to_remove {
             if cidx == usize::MAX {
