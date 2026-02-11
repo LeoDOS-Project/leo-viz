@@ -20,11 +20,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Assemble dist
-        run: |
-          mkdir -p dist
-          cp dist-wasm/* dist/
-          cp -r textures dist/
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install trunk
+        uses: jetli/trunk-action@v0.5.0
+
+      - name: Build
+        run: trunk build --release --public-url /leo-viz/
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
