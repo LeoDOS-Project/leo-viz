@@ -241,6 +241,7 @@ impl ViewerState {
     }
 
     fn render_planet_ui(&mut self, ui: &mut egui::Ui, tab_idx: usize, planet_idx: usize, num_planets: usize) -> (bool, bool) {
+        let constrained_width = ui.available_width();
         let mut add_planet = false;
         let mut remove_planet = false;
 
@@ -258,6 +259,23 @@ impl ViewerState {
 
         if self.ui_visible {
         ui.horizontal(|ui| {
+            let available_w = ui.available_width();
+            let scale = if available_w < 550.0 {
+                (available_w / 550.0).max(0.5)
+            } else {
+                1.0
+            };
+            if scale < 1.0 {
+                let style = ui.style_mut();
+                for (_text_style, font_id) in style.text_styles.iter_mut() {
+                    font_id.size *= scale;
+                }
+                style.spacing.item_spacing.x *= scale;
+                style.spacing.button_padding *= scale;
+                style.spacing.combo_width *= scale;
+                style.spacing.combo_height *= scale;
+                style.spacing.interact_size *= scale;
+            }
             ui.strong(&planet_name);
             if ui.small_button("+").clicked() {
                 add_planet = true;
@@ -2040,7 +2058,11 @@ impl ViewerState {
             planet.show_radiation_window = show_rad_window;
         }
 
-        let available = ui.available_size();
+        let mut available = ui.available_size();
+        available.x = constrained_width;
+        let clip = ui.clip_rect();
+        let cursor = ui.cursor().min;
+        available.y = available.y.min((clip.max.y - cursor.y).max(0.0));
         let settings = &self.tabs[tab_idx].settings;
         let render_planet = settings.render_planet;
         let show_torus = settings.show_torus;
@@ -2105,17 +2127,15 @@ impl ViewerState {
             .iter().filter(|v| **v).count();
 
         if num_views > 0 {
-            let separator_w = if num_views > 1 { 1.0 } else { 0.0 };
-            let total_sep = separator_w * (num_views as f32 - 1.0);
-            let view_width = (available.x - total_sep) / num_views as f32;
             let view_height = available.y - 20.0;
+
+            let view_width = available.x / num_views as f32;
             self.view_width = view_width;
             self.view_height = view_height;
 
             ui.horizontal(|ui| {
-                let mut needs_sep = false;
+                ui.spacing_mut().item_spacing.x = 0.0;
                 if render_planet {
-                    needs_sep = true;
                     ui.vertical(|ui| {
                         let planet = &mut self.tabs[tab_idx].planets[planet_idx];
                         let view_flags = View3DFlags {
@@ -2223,8 +2243,6 @@ impl ViewerState {
                 }
 
                 if show_torus {
-                    if needs_sep { ui.separator(); }
-                    needs_sep = true;
                     ui.vertical(|ui| {
                         let planet = &mut self.tabs[tab_idx].planets[planet_idx];
                         let (trot, tzoom) = draw_torus(
@@ -2257,8 +2275,6 @@ impl ViewerState {
                 }
 
                 if show_solar_system {
-                    if needs_sep { ui.separator(); }
-                    needs_sep = true;
                     ui.vertical(|ui| {
                         let ss_timestamp = self.start_timestamp + chrono::Duration::seconds(time as i64);
                         let lp = log_power;
@@ -2398,8 +2414,6 @@ impl ViewerState {
                 }
 
                 if show_ground_track {
-                    if needs_sep { ui.separator(); }
-                    needs_sep = true;
                     ui.vertical(|ui| {
                         draw_ground_track(
                             ui,
@@ -2414,7 +2428,6 @@ impl ViewerState {
                 }
 
                 if show_planet_sizes {
-                    if needs_sep { ui.separator(); }
                     ui.vertical(|ui| {
                         ui.set_width(view_width);
                         ui.set_height(view_height);
