@@ -150,6 +150,8 @@ pub struct PlanetConfig {
     pub show_conjunction_window: bool,
     pub show_conjunction_lines: bool,
     pub kessler: KesslerSimulation,
+    pub radiation: RadiationConfig,
+    pub show_radiation_window: bool,
 }
 
 impl PlanetConfig {
@@ -184,6 +186,8 @@ impl PlanetConfig {
             show_conjunction_window: false,
             show_conjunction_lines: true,
             kessler: KesslerSimulation::default(),
+            radiation: RadiationConfig::default(),
+            show_radiation_window: false,
         }
     }
 
@@ -257,6 +261,7 @@ pub struct TabSettings {
     pub show_terminator: bool,
     pub show_clouds: bool,
     pub show_stars: bool,
+    pub show_radiation_belts: bool,
     pub show_solar_system: bool,
     pub show_hohmann: bool,
     pub solar_system_log_power: f64,
@@ -301,6 +306,7 @@ impl Default for TabSettings {
             show_terminator: false,
             show_clouds: false,
             show_stars: false,
+            show_radiation_belts: false,
             show_solar_system: false,
             show_hohmann: false,
             solar_system_log_power: 0.4,
@@ -463,6 +469,35 @@ pub struct KesslerSimulation {
     pub active_corrections: Vec<CourseCorrection>,
     pub correction_altitude_km: f64,
     pub corrections_made: usize,
+}
+
+#[derive(Clone)]
+pub struct RadiationConfig {
+    pub kp_index: f64,
+    pub show_belts: bool,
+    pub show_magnetopause: bool,
+    pub show_sat_exposure: bool,
+    pub num_meridians: usize,
+    pub num_shells: usize,
+    pub shell_phasing: f64,
+    pub num_links: usize,
+    pub dipole_tilt: f64,
+}
+
+impl Default for RadiationConfig {
+    fn default() -> Self {
+        Self {
+            kp_index: 2.0,
+            show_belts: true,
+            show_magnetopause: true,
+            show_sat_exposure: true,
+            num_meridians: 64,
+            num_shells: 7,
+            shell_phasing: 0.0,
+            num_links: 0,
+            dipole_tilt: 11.0,
+        }
+    }
 }
 
 impl Default for KesslerSimulation {
