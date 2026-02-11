@@ -267,6 +267,8 @@ impl App {
                 #[cfg(not(target_arch = "wasm32"))]
                 asteroid_rx: None,
                 hohmann: crate::solar_system::HohmannState::default(),
+                #[cfg(target_arch = "wasm32")]
+                last_url_hash: String::new(),
             },
             first_frame: true,
         };
