@@ -2060,7 +2060,7 @@ pub fn draw_3d_view(
     }
 
     if response.response.hovered() {
-        let scroll = ui.input(|i| i.raw_scroll_delta.y);
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll != 0.0 {
             let old_zoom = zoom;
             let factor = 1.0 + scroll as f64 * 0.001;
@@ -2614,7 +2614,7 @@ pub fn draw_torus(
     }
 
     if response.response.hovered() {
-        let scroll = ui.input(|i| i.raw_scroll_delta.y);
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll != 0.0 {
             let factor = 1.0 + scroll as f64 * 0.001;
             zoom = (zoom * factor).clamp(0.01, 20000.0);

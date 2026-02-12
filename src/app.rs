@@ -294,6 +294,8 @@ impl App {
     }
 }
 impl eframe::App for App {
+    fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
+
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let v = &mut self.viewer;
 

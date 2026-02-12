@@ -928,7 +928,7 @@ pub fn draw_planet_sizes(
         let painter = painter.with_clip_rect(rect);
 
         if !auto_zoom.enabled && response.hovered() {
-            let scroll = ui.input(|i| i.raw_scroll_delta.y);
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll.abs() > 0.1 {
                 *zoom_t = (*zoom_t - scroll as f64 * 0.005)
                     .clamp(0.0, (n - 1) as f64);
