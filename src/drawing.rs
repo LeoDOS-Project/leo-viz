@@ -16,7 +16,7 @@ use crate::tile::{DetailBounds, DetailTexture};
 use crate::walker::{WalkerType, WalkerConstellation, SatelliteState};
 use eframe::{egui, egui_glow, glow};
 use egui::mutex::Mutex;
-use egui_plot::{Line, Plot, PlotImage, PlotPoints, PlotPoint, Points, Polygon, Text};
+use egui_plot::{Line, Plot, PlotImage, PlotPoint, PlotPoints, Points, Polygon, Text};
 use nalgebra::{Matrix3, Vector3};
 use std::collections::HashSet;
 use std::f64::consts::PI;
@@ -26,6 +26,8 @@ use crate::EARTH_VISUAL_SCALE;
 
 pub const COLOR_ASCENDING: egui::Color32 = egui::Color32::from_rgb(200, 120, 50);
 pub const COLOR_DESCENDING: egui::Color32 = egui::Color32::from_rgb(50, 100, 180);
+
+
 
 fn clip_link_at_earth(
     rx1: f64, ry1: f64, rz1: f64, visible1: bool,
@@ -447,8 +449,10 @@ pub fn draw_3d_view(
         .allow_boxed_zoom(false)
         .cursor_color(egui::Color32::TRANSPARENT);
 
+    let egui_ctx = ui.ctx().clone();
     let mut surface_labels: Vec<([f64; 2], String, egui::Color32, bool, usize)> = Vec::new();
     let mut device_cluster_labels: Vec<([f64; 2], usize, egui::Color32)> = Vec::new();
+
     let response = plot.show(ui, |plot_ui| {
         let ground_stations = &*ground_stations;
         let areas_of_interest = &*areas_of_interest;
@@ -601,7 +605,7 @@ pub fn draw_3d_view(
         }
 
         if let Some(rad_config) = radiation {
-            use crate::radiation::{belt_profile, belt_color};
+            use crate::radiation::belt_profile_r;
 
             let belt_rotation = if earth_fixed_camera {
                 rotation
@@ -610,7 +614,12 @@ pub fn draw_3d_view(
             };
 
             let dipole_tilt = rad_config.dipole_tilt.to_radians();
-            let mag_axis = Vector3::new(0.0, dipole_tilt.cos(), dipole_tilt.sin()).normalize();
+            let tilt_lon = (-287.3_f64).to_radians();
+            let mag_axis = Vector3::new(
+                dipole_tilt.sin() * tilt_lon.cos(),
+                dipole_tilt.cos(),
+                dipole_tilt.sin() * tilt_lon.sin(),
+            ).normalize();
             let mag_u = if mag_axis.x.abs() < 0.9 {
                 Vector3::new(1.0, 0.0, 0.0).cross(&mag_axis).normalize()
             } else {
@@ -618,69 +627,290 @@ pub fn draw_3d_view(
             };
             let mag_v = mag_axis.cross(&mag_u);
 
+            let offset_lat = 22.0_f64.to_radians();
+            let offset_lon = (-140.0_f64).to_radians();
+            let dipole_ox = rad_config.dipole_offset_km * offset_lat.cos() * offset_lon.cos();
+            let dipole_oy = rad_config.dipole_offset_km * offset_lat.sin();
+            let dipole_oz = rad_config.dipole_offset_km * offset_lat.cos() * offset_lon.sin();
+
+            if rad_config.show_heatmap_sphere {
+                let sphere_r = planet_radius + rad_config.heatmap_altitude_km;
+                let sphere_r_sq = sphere_r * sphere_r;
+                let ma = mag_axis;
+                let inv_rot = belt_rotation.transpose();
+                let tex_size: usize = rad_config.heatmap_resolution.max(12) as usize * 16;
+
+                let texel_size = 2.0 * sphere_r / tex_size as f64;
+                let aa_width = texel_size * 3.0;
+                let mut pixels = Vec::with_capacity(tex_size * tex_size);
+                for ty in 0..tex_size {
+                    let py = sphere_r * (1.0 - 2.0 * ty as f64 / (tex_size - 1) as f64);
+                    for tx in 0..tex_size {
+                        let px = sphere_r * (-1.0 + 2.0 * tx as f64 / (tex_size - 1) as f64);
+                        let d = (px * px + py * py).sqrt();
+                        let edge_alpha = ((sphere_r - d) / aa_width + 0.5).clamp(0.0, 1.0);
+                        if edge_alpha <= 0.0 {
+                            pixels.push(egui::Color32::TRANSPARENT);
+                            continue;
+                        }
+                        let pz = (sphere_r_sq - (d * d).min(sphere_r_sq)).sqrt();
+                        let gp = inv_rot * Vector3::new(px, py, pz);
+                        let dx = gp.x - dipole_ox;
+                        let dy = gp.y - dipole_oy;
+                        let dz = gp.z - dipole_oz;
+                        let r_d = (dx * dx + dy * dy + dz * dz).sqrt();
+                        let mag_dot = dx * ma.x + dy * ma.y + dz * ma.z;
+                        let sin_ml = mag_dot / r_d;
+                        let r_d_er = r_d / planet_radius;
+                        let intensity = match rad_config.heatmap_mode {
+                            crate::config::HeatmapMode::Radiation => {
+                                let r_c = (gp.x * gp.x + gp.y * gp.y + gp.z * gp.z).sqrt();
+                                let saa_factor = (r_d / r_c).powi(12);
+                                let cos_ml_sq = 1.0 - sin_ml * sin_ml;
+                                let l = if cos_ml_sq > 1e-6 { r_d_er / cos_ml_sq } else { r_d_er * 1e6 };
+                                (belt_profile_r(l, rad_config.kp_index) * saa_factor).clamp(0.0, 1.0)
+                            }
+                            crate::config::HeatmapMode::FieldStrength => {
+                                let b0 = 30115.0;
+                                let f = b0 / r_d_er.powi(3) * (1.0 + 3.0 * sin_ml * sin_ml).sqrt();
+                                ((f - 20000.0) / 46000.0).clamp(0.0, 1.0)
+                            }
+                        };
+                        let alpha = (180.0 * edge_alpha) as u8;
+                        let c = rad_config.heatmap_color_scheme.color(intensity);
+                        pixels.push(egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha));
+                    }
+                }
+                let image = egui::ColorImage::new([tex_size, tex_size], pixels);
+                let tex_handle = egui_ctx.load_texture("rad_heatmap", image, egui::TextureOptions::LINEAR);
+                plot_ui.image(PlotImage::new(
+                    "",
+                    tex_handle.id(),
+                    PlotPoint::new(0.0, 0.0),
+                    egui::Vec2::splat(2.0 * sphere_r as f32),
+                ));
+            }
+
             if rad_config.show_belts {
-                let num_meridians = rad_config.num_meridians.max(2);
+                let num_meridians = rad_config.num_meridians.max(1);
                 let num_l = rad_config.num_shells.max(2);
-                let l_min = 1.2_f64;
+                let l_min = 1.02_f64;
                 let l_max = 7.0_f64;
-                let num_pts = 50;
+                let num_lat = 24;
+                let num_dots = rad_config.dots_per_line.max(2);
+
+                let shell_pt3 = |l: f64, phi: f64, lam: f64| -> (f64, f64, f64) {
+                    let dir = mag_u * phi.cos() + mag_v * phi.sin();
+                    let r = l * lam.cos().powi(2) * planet_radius;
+                    let px = mag_axis.x * r * lam.sin() + dir.x * r * lam.cos();
+                    let py = mag_axis.y * r * lam.sin() + dir.y * r * lam.cos();
+                    let pz = mag_axis.z * r * lam.sin() + dir.z * r * lam.cos();
+                    rotate_point_matrix(px, py, pz, &belt_rotation)
+                };
+
+
+                let visible = |p: (f64, f64, f64)| -> bool {
+                    !hide_behind_earth || p.2 >= 0.0 || (p.0 * p.0 + p.1 * p.1) >= earth_r_sq
+                };
+
+                let draw_clipped_line = |plot_ui: &mut egui_plot::PlotUi, pts: &[(f64, f64, f64)], color: egui::Color32, width: f32| {
+                    if !hide_behind_earth {
+                        let xy: Vec<[f64; 2]> = pts.iter().map(|p| [p.0, p.1]).collect();
+                        if xy.len() >= 2 {
+                            plot_ui.line(Line::new("", PlotPoints::new(xy)).color(color).width(width));
+                        }
+                        return;
+                    }
+                    let mut seg: Vec<[f64; 2]> = Vec::new();
+                    for i in 0..pts.len() {
+                        let (rx2, ry2, rz2) = pts[i];
+                        let v2 = rz2 >= 0.0 || (rx2 * rx2 + ry2 * ry2) >= earth_r_sq;
+                        if i == 0 {
+                            if v2 { seg.push([rx2, ry2]); }
+                            continue;
+                        }
+                        let (rx1, ry1, rz1) = pts[i - 1];
+                        let v1 = rz1 >= 0.0 || (rx1 * rx1 + ry1 * ry1) >= earth_r_sq;
+                        if v1 && v2 {
+                            if seg.is_empty() { seg.push([rx1, ry1]); }
+                            seg.push([rx2, ry2]);
+                        } else if let Some((p1, p2)) = clip_link_at_earth(rx1, ry1, rz1, v1, rx2, ry2, rz2, v2, earth_r_sq) {
+                            if v1 {
+                                if seg.is_empty() { seg.push(p1); }
+                                seg.push(p2);
+                                if seg.len() >= 2 {
+                                    plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut seg))).color(color).width(width));
+                                }
+                                seg.clear();
+                            } else {
+                                if seg.len() >= 2 {
+                                    plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut seg))).color(color).width(width));
+                                }
+                                seg.clear();
+                                seg.push(p1);
+                                seg.push(p2);
+                            }
+                        } else {
+                            if seg.len() >= 2 {
+                                plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut seg))).color(color).width(width));
+                            }
+                            seg.clear();
+                        }
+                    }
+                    if seg.len() >= 2 {
+                        plot_ui.line(Line::new("", PlotPoints::new(seg)).color(color).width(width));
+                    }
+                };
+
+                let shell_color = |l: f64| -> egui::Color32 {
+                    let intensity = belt_profile_r(l, rad_config.kp_index);
+                    let t = (0.15 + intensity * 0.85).clamp(0.15, 1.0);
+                    egui::Color32::from_rgba_unmultiplied(
+                        (255.0 * t) as u8, (255.0 * (1.0 - t)) as u8, 0, 180,
+                    )
+                };
+
+                let mut prev_dot_grid: Option<Vec<Vec<(f64, f64, f64)>>> = None;
 
                 for li in 0..num_l {
                     let l = l_min + (l_max - l_min) * li as f64 / (num_l - 1) as f64;
                     let mirror_lat = (1.0_f64 / l.sqrt()).acos();
-                    let alt_eq = (l - 1.0) * planet_radius;
-                    let intensity = belt_profile(alt_eq, rad_config.kp_index);
-                    let (cr, cg, cb) = belt_color(alt_eq);
-                    let alpha = (intensity * 160.0 + 15.0).min(180.0) as u8;
-                    let width = (intensity * 2.0).max(0.4).min(2.0) as f32;
-
+                    let color = shell_color(l);
                     let phi_offset = rad_config.shell_phasing * PI * li as f64 / num_l as f64;
-                    let num_links = rad_config.num_links;
+                    let shell_num_lat = (num_lat as f64 * (l / l_min).sqrt()) as usize;
 
-                    let shell_pt = |phi: f64, lam: f64| -> [f64; 2] {
-                        let dir = mag_u * phi.cos() + mag_v * phi.sin();
-                        let r = l * lam.cos().powi(2) * planet_radius;
-                        let px = mag_axis.x * r * lam.sin() + dir.x * r * lam.cos();
-                        let py = mag_axis.y * r * lam.sin() + dir.y * r * lam.cos();
-                        let pz = mag_axis.z * r * lam.sin() + dir.z * r * lam.cos();
-                        let (sx, sy, _) = rotate_point_matrix(px, py, pz, &belt_rotation);
-                        [sx, sy]
-                    };
+                    let mut dot_grid: Vec<Vec<(f64, f64, f64)>> = Vec::new();
 
                     for mi in 0..num_meridians {
                         let phi = phi_offset + 2.0 * PI * mi as f64 / num_meridians as f64;
-                        let phi_next = phi_offset + 2.0 * PI * (mi + 1) as f64 / num_meridians as f64;
 
-                        let pts: Vec<[f64; 2]> = (0..=num_pts)
+                        if rad_config.show_lines {
+                            let pts3: Vec<(f64, f64, f64)> = (0..=shell_num_lat)
+                                .map(|j| {
+                                    let lam = -mirror_lat + 2.0 * mirror_lat * j as f64 / shell_num_lat as f64;
+                                    shell_pt3(l, phi, lam)
+                                })
+                                .collect();
+                            draw_clipped_line(plot_ui, &pts3, color, 1.0);
+                        }
+
+                        let dots: Vec<(f64, f64, f64)> = (0..num_dots)
                             .map(|j| {
-                                let lam = -mirror_lat + 2.0 * mirror_lat * j as f64 / num_pts as f64;
-                                shell_pt(phi, lam)
+                                let lam = -mirror_lat + 2.0 * mirror_lat * j as f64 / (num_dots - 1) as f64;
+                                shell_pt3(l, phi, lam)
                             })
                             .collect();
-                        plot_ui.line(
-                            Line::new("", PlotPoints::new(pts))
-                                .color(egui::Color32::from_rgba_unmultiplied(cr, cg, cb, alpha))
-                                .width(width),
-                        );
 
-                        if num_links > 0 {
-                            let dir = mag_u * phi.cos() + mag_v * phi.sin();
-                            let dir_next = mag_u * phi_next.cos() + mag_v * phi_next.sin();
-                            for li2 in 1..num_links {
-                                let lam = -mirror_lat + 2.0 * mirror_lat * li2 as f64 / num_links as f64;
-                                let r = l * lam.cos().powi(2) * planet_radius;
-                                let p1x = mag_axis.x * r * lam.sin() + dir.x * r * lam.cos();
-                                let p1y = mag_axis.y * r * lam.sin() + dir.y * r * lam.cos();
-                                let p1z = mag_axis.z * r * lam.sin() + dir.z * r * lam.cos();
-                                let p2x = mag_axis.x * r * lam.sin() + dir_next.x * r * lam.cos();
-                                let p2y = mag_axis.y * r * lam.sin() + dir_next.y * r * lam.cos();
-                                let p2z = mag_axis.z * r * lam.sin() + dir_next.z * r * lam.cos();
-                                let (s1x, s1y, _) = rotate_point_matrix(p1x, p1y, p1z, &belt_rotation);
-                                let (s2x, s2y, _) = rotate_point_matrix(p2x, p2y, p2z, &belt_rotation);
-                                plot_ui.line(
-                                    Line::new("", PlotPoints::new(vec![[s1x, s1y], [s2x, s2y]]))
-                                        .color(egui::Color32::from_rgba_unmultiplied(cr, cg, cb, alpha))
-                                        .width(width),
+                        if rad_config.show_dots {
+                            let vis_dots: Vec<[f64; 2]> = dots.iter()
+                                .filter(|&&p| visible(p))
+                                .map(|p| [p.0, p.1])
+                                .collect();
+                            if !vis_dots.is_empty() {
+                                plot_ui.points(
+                                    Points::new("", PlotPoints::new(vis_dots))
+                                        .color(color)
+                                        .radius(2.0),
+                                );
+                            }
+                        }
+
+                        dot_grid.push(dots);
+                    }
+
+                    if rad_config.connect_along_shell {
+                        for j in 0..num_dots {
+                            let ring: Vec<(f64, f64, f64)> = (0..=num_meridians)
+                                .map(|mi| dot_grid[mi % num_meridians][j])
+                                .collect();
+                            draw_clipped_line(plot_ui, &ring, color, 0.5);
+                        }
+                    }
+
+                    if rad_config.connect_across_shells {
+                        if let Some(prev) = &prev_dot_grid {
+                            let prev_color = shell_color(
+                                l_min + (l_max - l_min) * (li as f64 - 1.0) / (num_l - 1) as f64,
+                            );
+                            let steps = 8;
+                            let n = prev[0].len().min(dot_grid[0].len());
+                            for mi in 0..num_meridians.min(prev.len()).min(dot_grid.len()) {
+                                for j in 0..n {
+                                    let a = prev[mi][j];
+                                    let b = dot_grid[mi][j];
+                                    let seg_pts: Vec<(f64, f64, f64)> = (0..=steps)
+                                        .map(|s| {
+                                            let t = s as f64 / steps as f64;
+                                            (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t, a.2 + (b.2 - a.2) * t)
+                                        })
+                                        .collect();
+                                    for s in 0..steps {
+                                        let tm = (s as f64 + 0.5) / steps as f64;
+                                        let p0 = seg_pts[s];
+                                        let p1 = seg_pts[s + 1];
+                                        let v0 = !hide_behind_earth || p0.2 >= 0.0 || (p0.0 * p0.0 + p0.1 * p0.1) >= earth_r_sq;
+                                        let v1 = !hide_behind_earth || p1.2 >= 0.0 || (p1.0 * p1.0 + p1.1 * p1.1) >= earth_r_sq;
+                                        if !v0 && !v1 { continue; }
+                                        let seg_color = egui::Color32::from_rgba_unmultiplied(
+                                            (prev_color.r() as f64 + (color.r() as f64 - prev_color.r() as f64) * tm) as u8,
+                                            (prev_color.g() as f64 + (color.g() as f64 - prev_color.g() as f64) * tm) as u8,
+                                            (prev_color.b() as f64 + (color.b() as f64 - prev_color.b() as f64) * tm) as u8,
+                                            (prev_color.a() as f64 + (color.a() as f64 - prev_color.a() as f64) * tm) as u8,
+                                        );
+                                        if let Some((cp0, cp1)) = clip_link_at_earth(p0.0, p0.1, p0.2, v0, p1.0, p1.1, p1.2, v1, earth_r_sq) {
+                                            plot_ui.line(
+                                                Line::new("", PlotPoints::new(vec![cp0, cp1]))
+                                                    .color(seg_color)
+                                                    .width(0.5),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    prev_dot_grid = Some(dot_grid);
+                }
+
+                if rad_config.show_fill {
+                    for li in 0..num_l.saturating_sub(1) {
+                        let l0 = l_min + (l_max - l_min) * li as f64 / (num_l - 1) as f64;
+                        let l1 = l_min + (l_max - l_min) * (li + 1) as f64 / (num_l - 1) as f64;
+                        let mirror0 = (1.0_f64 / l0.sqrt()).acos();
+                        let mirror1 = (1.0_f64 / l1.sqrt()).acos();
+                        let c0 = shell_color(l0);
+                        let c1 = shell_color(l1);
+                        let fill_color = egui::Color32::from_rgba_unmultiplied(
+                            ((c0.r() as u16 + c1.r() as u16) / 2) as u8,
+                            ((c0.g() as u16 + c1.g() as u16) / 2) as u8,
+                            ((c0.b() as u16 + c1.b() as u16) / 2) as u8,
+                            90,
+                        );
+                        let phi_off0 = rad_config.shell_phasing * PI * li as f64 / num_l as f64;
+                        let phi_off1 = rad_config.shell_phasing * PI * (li + 1) as f64 / num_l as f64;
+                        let fill_lat_steps = (num_lat as f64 * (l1 / l_min).sqrt()) as usize;
+
+                        for mi in 0..num_meridians {
+                            let phi0 = phi_off0 + 2.0 * PI * mi as f64 / num_meridians as f64;
+                            let phi1 = phi_off1 + 2.0 * PI * mi as f64 / num_meridians as f64;
+
+                            for j in 0..fill_lat_steps {
+                                let frac_a = j as f64 / fill_lat_steps as f64;
+                                let frac_b = (j + 1) as f64 / fill_lat_steps as f64;
+                                let p0 = shell_pt3(l0, phi0, -mirror0 + 2.0 * mirror0 * frac_a);
+                                let p1 = shell_pt3(l0, phi0, -mirror0 + 2.0 * mirror0 * frac_b);
+                                let p2 = shell_pt3(l1, phi1, -mirror1 + 2.0 * mirror1 * frac_b);
+                                let p3 = shell_pt3(l1, phi1, -mirror1 + 2.0 * mirror1 * frac_a);
+                                if !visible(p0) && !visible(p1) && !visible(p2) && !visible(p3) { continue; }
+                                let quad = vec![
+                                    [p0.0, p0.1], [p1.0, p1.1],
+                                    [p2.0, p2.1], [p3.0, p3.1],
+                                ];
+                                plot_ui.polygon(
+                                    Polygon::new("", PlotPoints::new(quad))
+                                        .fill_color(fill_color)
+                                        .stroke(egui::Stroke::NONE),
                                 );
                             }
                         }
@@ -1450,16 +1680,28 @@ pub fn draw_3d_view(
                     let mut color = plane_color(color_offset + sat.plane);
                     if let Some(rc) = radiation {
                         if rc.show_sat_exposure {
-                            let r_pos = (sat.x * sat.x + sat.y * sat.y + sat.z * sat.z).sqrt();
-                            let alt = r_pos - planet_radius;
-                            let exp = crate::radiation::radiation_level(alt, sat.lat, rc.kp_index, planet_radius);
-                            if exp > 0.005 {
-                                let boost = (exp * 2.0).min(1.0);
-                                let er = (color.r() as f64 + (255.0 - color.r() as f64) * boost) as u8;
-                                let eg = (color.g() as f64 * (1.0 - boost * 0.8)) as u8;
-                                let eb = (color.b() as f64 * (1.0 - boost * 0.8)) as u8;
-                                color = egui::Color32::from_rgb(er, eg, eb);
-                            }
+                            let bp = body_rotation.transpose() * Vector3::new(sat.x, sat.y, sat.z);
+                            let tilt = rc.dipole_tilt.to_radians();
+                            let tl = (-287.3_f64).to_radians();
+                            let ma = Vector3::new(tilt.sin() * tl.cos(), tilt.cos(), tilt.sin() * tl.sin());
+                            let o_lat = 22.0_f64.to_radians();
+                            let o_lon = (-140.0_f64).to_radians();
+                            let ox = rc.dipole_offset_km * o_lat.cos() * o_lon.cos();
+                            let oy = rc.dipole_offset_km * o_lat.sin();
+                            let oz = rc.dipole_offset_km * o_lat.cos() * o_lon.sin();
+                            let dx = bp.x - ox;
+                            let dy = bp.y - oy;
+                            let dz = bp.z - oz;
+                            let r_d = (dx * dx + dy * dy + dz * dz).sqrt();
+                            let r_c = (bp.x * bp.x + bp.y * bp.y + bp.z * bp.z).sqrt();
+                            let saa_factor = (r_d / r_c).powi(12);
+                            let mag_dot = dx * ma.x + dy * ma.y + dz * ma.z;
+                            let sin_ml = mag_dot / r_d;
+                            let cos_ml_sq = 1.0 - sin_ml * sin_ml;
+                            let r_d_er = r_d / planet_radius;
+                            let l = if cos_ml_sq > 1e-6 { r_d_er / cos_ml_sq } else { r_d_er * 1e6 };
+                            let exp = (crate::radiation::belt_profile_r(l, rc.kp_index) * saa_factor).clamp(0.0, 1.0);
+                            color = rc.heatmap_color_scheme.color(exp);
                         }
                     }
                     let dim_col = egui::Color32::from_rgba_unmultiplied(
@@ -1537,18 +1779,28 @@ pub fn draw_3d_view(
                     };
                     let color = if let Some(rc) = radiation {
                         if rc.show_sat_exposure {
-                            let r_pos = (sat.x * sat.x + sat.y * sat.y + sat.z * sat.z).sqrt();
-                            let alt = r_pos - planet_radius;
-                            let exp = crate::radiation::radiation_level(alt, sat.lat, rc.kp_index, planet_radius);
-                            if exp > 0.005 {
-                                let boost = (exp * 2.0).min(1.0);
-                                let er = (color.r() as f64 + (255.0 - color.r() as f64) * boost) as u8;
-                                let eg = (color.g() as f64 * (1.0 - boost * 0.8)) as u8;
-                                let eb = (color.b() as f64 * (1.0 - boost * 0.8)) as u8;
-                                egui::Color32::from_rgb(er, eg, eb)
-                            } else {
-                                color
-                            }
+                            let bp = body_rotation.transpose() * Vector3::new(sat.x, sat.y, sat.z);
+                            let tilt = rc.dipole_tilt.to_radians();
+                            let tl = (-287.3_f64).to_radians();
+                            let ma = Vector3::new(tilt.sin() * tl.cos(), tilt.cos(), tilt.sin() * tl.sin());
+                            let o_lat = 22.0_f64.to_radians();
+                            let o_lon = (-140.0_f64).to_radians();
+                            let ox = rc.dipole_offset_km * o_lat.cos() * o_lon.cos();
+                            let oy = rc.dipole_offset_km * o_lat.sin();
+                            let oz = rc.dipole_offset_km * o_lat.cos() * o_lon.sin();
+                            let dx = bp.x - ox;
+                            let dy = bp.y - oy;
+                            let dz = bp.z - oz;
+                            let r_d = (dx * dx + dy * dy + dz * dz).sqrt();
+                            let r_c = (bp.x * bp.x + bp.y * bp.y + bp.z * bp.z).sqrt();
+                            let saa_factor = (r_d / r_c).powi(12);
+                            let mag_dot = dx * ma.x + dy * ma.y + dz * ma.z;
+                            let sin_ml = mag_dot / r_d;
+                            let cos_ml_sq = 1.0 - sin_ml * sin_ml;
+                            let r_d_er = r_d / planet_radius;
+                            let l = if cos_ml_sq > 1e-6 { r_d_er / cos_ml_sq } else { r_d_er * 1e6 };
+                            let exp = (crate::radiation::belt_profile_r(l, rc.kp_index) * saa_factor).clamp(0.0, 1.0);
+                            rc.heatmap_color_scheme.color(exp)
                         } else {
                             color
                         }
@@ -1906,6 +2158,21 @@ pub fn draw_3d_view(
             ).expand(3.0);
             ui.painter().rect_filled(rect, 3.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180));
             ui.painter().galley(text_pos - egui::Vec2::new(0.0, galley.size().y), galley, egui::Color32::WHITE);
+        } else if !hovering_satellite {
+            let dist = (px * px + py * py).sqrt();
+            let alt_km = (dist - planet_radius) / planet_radius * 6371.0;
+            if alt_km > 0.0 {
+                let text = format!("{:.0} km", alt_km);
+                let font = egui::FontId::proportional(12.0);
+                let text_pos = hover_pos + egui::Vec2::new(15.0, -15.0);
+                let galley = ui.painter().layout_no_wrap(text, font, egui::Color32::WHITE);
+                let rect = egui::Rect::from_min_size(
+                    text_pos - egui::Vec2::new(0.0, galley.size().y),
+                    galley.size(),
+                ).expand(3.0);
+                ui.painter().rect_filled(rect, 3.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180));
+                ui.painter().galley(text_pos - egui::Vec2::new(0.0, galley.size().y), galley, egui::Color32::WHITE);
+            }
         }
     }
 

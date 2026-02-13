@@ -471,6 +471,53 @@ pub struct KesslerSimulation {
     pub corrections_made: usize,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum HeatmapMode {
+    Radiation,
+    FieldStrength,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum HeatmapColorScheme {
+    GreenRed,
+    BlueYellow,
+    Geomagnetic,
+}
+
+const GEOMAGNETIC_PALETTE: [[u8; 3]; 18] = [
+    [9,33,52], [12,40,79], [16,47,113], [51,52,144],
+    [77,60,148], [100,72,143], [120,82,139], [140,90,133],
+    [160,100,131], [180,108,125], [202,118,114], [222,128,102],
+    [240,143,90], [242,164,81], [244,184,80], [247,203,86],
+    [250,222,96], [245,240,111],
+];
+
+impl HeatmapColorScheme {
+    pub fn color(&self, t: f64) -> egui::Color32 {
+        let t = t.clamp(0.0, 1.0) as f32;
+        match self {
+            Self::GreenRed => egui::Color32::from_rgb(
+                (255.0 * t) as u8,
+                (255.0 * (1.0 - t)) as u8,
+                0,
+            ),
+            Self::BlueYellow => {
+                let r = (t * 255.0).min(255.0) as u8;
+                let g = (t * 220.0 + 20.0).min(255.0) as u8;
+                let b = ((1.0 - t) * 200.0 + 30.0).min(255.0) as u8;
+                egui::Color32::from_rgb(r, g, b)
+            }
+            Self::Geomagnetic => {
+                let idx = (t * (GEOMAGNETIC_PALETTE.len() - 1) as f32)
+                    as usize;
+                let [r, g, b] = GEOMAGNETIC_PALETTE
+                    [idx.min(GEOMAGNETIC_PALETTE.len() - 1)];
+                egui::Color32::from_rgb(r, g, b)
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct RadiationConfig {
     pub kp_index: f64,
@@ -482,20 +529,44 @@ pub struct RadiationConfig {
     pub shell_phasing: f64,
     pub num_links: usize,
     pub dipole_tilt: f64,
+    pub show_lines: bool,
+    pub show_dots: bool,
+    pub dots_per_line: usize,
+    pub connect_along_shell: bool,
+    pub connect_across_shells: bool,
+    pub show_fill: bool,
+    pub show_heatmap_sphere: bool,
+    pub heatmap_altitude_km: f64,
+    pub heatmap_resolution: usize,
+    pub dipole_offset_km: f64,
+    pub heatmap_color_scheme: HeatmapColorScheme,
+    pub heatmap_mode: HeatmapMode,
 }
 
 impl Default for RadiationConfig {
     fn default() -> Self {
         Self {
-            kp_index: 2.0,
+            kp_index: 5.0,
             show_belts: true,
-            show_magnetopause: true,
+            show_magnetopause: false,
             show_sat_exposure: true,
-            num_meridians: 64,
-            num_shells: 7,
+            num_meridians: 2,
+            num_shells: 32,
             shell_phasing: 0.0,
             num_links: 0,
             dipole_tilt: 11.0,
+            show_lines: true,
+            show_dots: false,
+            dots_per_line: 12,
+            connect_along_shell: false,
+            connect_across_shells: false,
+            show_fill: true,
+            show_heatmap_sphere: false,
+            heatmap_altitude_km: 500.0,
+            heatmap_resolution: 36,
+            dipole_offset_km: 450.0,
+            heatmap_color_scheme: HeatmapColorScheme::GreenRed,
+            heatmap_mode: HeatmapMode::Radiation,
         }
     }
 }

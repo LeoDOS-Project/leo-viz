@@ -1962,14 +1962,48 @@ impl ViewerState {
                         ui.colored_label(kp_color, kp_label);
                     });
                     ui.checkbox(&mut rad.show_belts, "Show belt bands");
+                    ui.checkbox(&mut rad.show_lines, "Show lines");
+                    ui.checkbox(&mut rad.show_dots, "Show dots");
+                    ui.checkbox(&mut rad.connect_along_shell, "Connect along shell");
+                    ui.checkbox(&mut rad.connect_across_shells, "Connect across shells");
+                    ui.checkbox(&mut rad.show_fill, "Show fill");
+                    ui.horizontal(|ui| {
+                        ui.label("Dots per line:");
+                        ui.add(egui::DragValue::new(&mut rad.dots_per_line).range(2..=100).speed(0.5));
+                    });
                     ui.checkbox(&mut rad.show_magnetopause, "Show magnetopause");
                     ui.checkbox(&mut rad.show_sat_exposure, "Satellite exposure coloring");
+
+                    ui.separator();
+                    ui.strong("Heatmap Sphere");
+                    ui.checkbox(&mut rad.show_heatmap_sphere, "Show heatmap sphere");
+                    ui.horizontal(|ui| {
+                        ui.label("Altitude (km):");
+                        ui.add(egui::DragValue::new(&mut rad.heatmap_altitude_km).range(100.0..=50000.0).speed(50.0).max_decimals(0));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Resolution:");
+                        ui.add(egui::DragValue::new(&mut rad.heatmap_resolution).range(12..=120).speed(0.5));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Mode:");
+                        use crate::config::HeatmapMode;
+                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::Radiation, "Radiation");
+                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::FieldStrength, "Field (nT)");
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Colors:");
+                        use crate::config::HeatmapColorScheme;
+                        ui.selectable_value(&mut rad.heatmap_color_scheme, HeatmapColorScheme::GreenRed, "Green-Red");
+                        ui.selectable_value(&mut rad.heatmap_color_scheme, HeatmapColorScheme::BlueYellow, "Blue-Yellow");
+                        ui.selectable_value(&mut rad.heatmap_color_scheme, HeatmapColorScheme::Geomagnetic, "Geomagnetic");
+                    });
 
                     ui.separator();
                     ui.strong("Belt Rendering");
                     ui.horizontal(|ui| {
                         ui.label("Drift shells:");
-                        ui.add(egui::DragValue::new(&mut rad.num_shells).range(2..=60).speed(0.5));
+                        ui.add(egui::DragValue::new(&mut rad.num_shells).range(2..=100).speed(0.5));
                     });
                     ui.horizontal(|ui| {
                         ui.label("Meridians:");
@@ -1982,6 +2016,10 @@ impl ViewerState {
                     ui.horizontal(|ui| {
                         ui.label("Links:");
                         ui.add(egui::DragValue::new(&mut rad.num_links).range(0..=20).speed(0.5));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Dipole offset (km):");
+                        ui.add(egui::DragValue::new(&mut rad.dipole_offset_km).range(0.0..=2000.0).speed(10.0).max_decimals(0));
                     });
                     ui.horizontal(|ui| {
                         ui.label("Dipole tilt (°):");
