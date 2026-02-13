@@ -308,6 +308,10 @@ impl ViewerState {
                 ui.indent("routing_opts", |ui| {
                     ui.add_enabled(on && s.show_routing_paths, egui::Checkbox::new(&mut s.show_manhattan_path, "Manhattan (red)"));
                     ui.add_enabled(on && s.show_routing_paths, egui::Checkbox::new(&mut s.show_shortest_path, "Shortest distance (green)"));
+                    ui.add_enabled(on && s.show_routing_paths, egui::Checkbox::new(&mut s.show_radiation_path, "Radiation-aware (cyan)"));
+                    if s.show_radiation_path && s.show_routing_paths {
+                        ui.add(egui::Slider::new(&mut s.radiation_weight, 0.0..=10.0).text("Rad weight"));
+                    }
                 });
             });
 

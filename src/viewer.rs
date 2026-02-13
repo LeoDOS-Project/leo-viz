@@ -2161,6 +2161,8 @@ impl ViewerState {
         let show_routing_paths = settings.show_routing_paths;
         let show_manhattan_path = settings.show_manhattan_path;
         let show_shortest_path = settings.show_shortest_path;
+        let show_radiation_path = settings.show_radiation_path;
+        let radiation_weight = settings.radiation_weight;
         let show_asc_desc_colors = settings.show_asc_desc_colors;
         let show_altitude_lines = settings.show_altitude_lines;
         let tex_res = self.texture_resolution;
@@ -2204,7 +2206,8 @@ impl ViewerState {
                         let view_flags = View3DFlags {
                             show_orbits, show_axes, show_coverage, show_links, show_intra_links,
                             hide_behind_earth, single_color, dark_mode, show_routing_paths,
-                            show_manhattan_path, show_shortest_path, show_asc_desc_colors,
+                            show_manhattan_path, show_shortest_path, show_radiation_path, radiation_weight,
+                            show_asc_desc_colors,
                             show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
                             show_equator, show_terminator, earth_fixed_camera,
                             use_gpu_rendering: self.use_gpu_rendering, show_clouds, show_day_night,
@@ -2328,6 +2331,7 @@ impl ViewerState {
                 if show_torus {
                     ui.vertical(|ui| {
                         let planet = &mut self.tabs[tab_idx].planets[planet_idx];
+                        let rad_grid = planet.radiation.igrf_rad_cache.as_ref().map(|(_, _, g)| g);
                         let (trot, tzoom) = draw_torus(
                             ui,
                             &format!("torus_{}", view_name),
@@ -2344,6 +2348,8 @@ impl ViewerState {
                             show_routing_paths,
                             show_manhattan_path,
                             show_shortest_path,
+                            show_radiation_path,
+                            radiation_weight,
                             show_asc_desc_colors,
                             planet_radius,
                             &mut planet.pending_cameras,
@@ -2351,6 +2357,8 @@ impl ViewerState {
                             &mut planet.cameras_to_remove,
                             link_width,
                             fixed_sizes,
+                            &body_y_rotation,
+                            rad_grid,
                         );
                         self.torus_rotation = trot;
                         self.torus_zoom = tzoom;

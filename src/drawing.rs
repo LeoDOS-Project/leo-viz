@@ -279,6 +279,123 @@ pub fn compute_shortest_path(
     path
 }
 
+pub fn compute_radiation_path(
+    src_plane: usize, src_sat: usize,
+    dst_plane: usize, dst_sat: usize,
+    num_planes: usize, sats_per_plane: usize,
+    positions: &[SatelliteState],
+    is_star: bool,
+    body_rotation: &Matrix3<f64>,
+    igrf_rad_cache: Option<&crate::igrf::IgrfRadGrid>,
+    rad_weight: f64,
+) -> Vec<(usize, usize)> {
+    use std::collections::BinaryHeap;
+
+    let n = num_planes * sats_per_plane;
+    let node = |p: usize, s: usize| p * sats_per_plane + s;
+    let src = node(src_plane, src_sat);
+    let dst = node(dst_plane, dst_sat);
+
+    let inv_rot = body_rotation.transpose();
+    let mut rad_vals = vec![0.0_f64; n];
+    if let Some(grid) = igrf_rad_cache {
+        for sat in positions.iter() {
+            let bp = inv_rot * Vector3::new(sat.x, sat.y, sat.z);
+            let r = (bp.x * bp.x + bp.y * bp.y + bp.z * bp.z).sqrt();
+            let colat = (bp.y / r).acos();
+            let elon = (-bp.z).atan2(bp.x);
+            let (p, e) = grid.lookup(colat, elon);
+            let idx = node(sat.plane, sat.sat_index);
+            if idx < n {
+                rad_vals[idx] = p.max(e);
+            }
+        }
+    }
+
+    let get_pos = |plane: usize, sat_idx: usize| -> Option<(f64, f64, f64)> {
+        positions.iter()
+            .find(|s| s.plane == plane && s.sat_index == sat_idx)
+            .map(|s| (s.x, s.y, s.z))
+    };
+
+    let dist3d = |a: (f64, f64, f64), b: (f64, f64, f64)| -> f64 {
+        let dx = a.0 - b.0;
+        let dy = a.1 - b.1;
+        let dz = a.2 - b.2;
+        (dx * dx + dy * dy + dz * dz).sqrt()
+    };
+
+    let mut cost = vec![f64::INFINITY; n];
+    let mut prev = vec![usize::MAX; n];
+    cost[src] = 0.0;
+
+    #[derive(PartialEq)]
+    struct State(f64, usize);
+    impl Eq for State {}
+    impl PartialOrd for State {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) }
+    }
+    impl Ord for State {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            other.0.partial_cmp(&self.0).unwrap_or(std::cmp::Ordering::Equal)
+        }
+    }
+
+    let mut heap: BinaryHeap<State> = BinaryHeap::new();
+    heap.push(State(0.0, src));
+
+    while let Some(State(c, u)) = heap.pop() {
+        if u == dst { break; }
+        if c > cost[u] { continue; }
+
+        let up = u / sats_per_plane;
+        let us = u % sats_per_plane;
+        let cur_pos = match get_pos(up, us) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        let mut neighbors = Vec::with_capacity(4);
+        neighbors.push((up, (us + 1) % sats_per_plane));
+        neighbors.push((up, (us + sats_per_plane - 1) % sats_per_plane));
+        let fwd_plane = (up + 1) % num_planes;
+        let bck_plane = (up + num_planes - 1) % num_planes;
+        if !is_star || fwd_plane != 0 || up != num_planes - 1 {
+            neighbors.push((fwd_plane, us));
+        }
+        if !is_star || up != 0 || bck_plane != num_planes - 1 {
+            neighbors.push((bck_plane, us));
+        }
+
+        for (np, ns) in neighbors {
+            let v = node(np, ns);
+            if let Some(npos) = get_pos(np, ns) {
+                let d = dist3d(cur_pos, npos);
+                let rad = rad_vals[u].max(rad_vals[v]);
+                let edge_cost = d * (1.0 + rad_weight * rad);
+                let new_cost = cost[u] + edge_cost;
+                if new_cost < cost[v] {
+                    cost[v] = new_cost;
+                    prev[v] = u;
+                    heap.push(State(new_cost, v));
+                }
+            }
+        }
+    }
+
+    let mut path = Vec::new();
+    let mut cur = dst;
+    while cur != usize::MAX {
+        let p = cur / sats_per_plane;
+        let s = cur % sats_per_plane;
+        path.push((p, s));
+        if cur == src { break; }
+        cur = prev[cur];
+    }
+    path.reverse();
+    path
+}
+
 pub fn draw_routing_path(
     plot_ui: &mut egui_plot::PlotUi,
     path: &[(usize, usize)],
@@ -375,7 +492,8 @@ pub fn draw_3d_view(
     let View3DFlags {
         show_orbits, show_axes, show_coverage, show_links, show_intra_links,
         hide_behind_earth, single_color, dark_mode, show_routing_paths,
-        show_manhattan_path, show_shortest_path, show_asc_desc_colors,
+        show_manhattan_path, show_shortest_path, show_radiation_path, radiation_weight,
+        show_asc_desc_colors,
         show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
         show_equator, show_terminator, earth_fixed_camera, use_gpu_rendering,
         show_clouds, show_day_night, show_stars, show_borders, show_cities,
@@ -1521,6 +1639,8 @@ pub fn draw_3d_view(
         if show_routing_paths && !satellite_cameras.is_empty() {
             let manhattan_color = egui::Color32::from_rgb(255, 100, 100);
             let shortest_color = egui::Color32::from_rgb(100, 255, 100);
+            let radiation_color = egui::Color32::from_rgb(100, 220, 255);
+            let rad_grid = radiation.and_then(|r| r.igrf_rad_cache.as_ref().map(|(_, _, g)| g));
 
             for (cidx, (constellation, positions, _, _, _, _)) in constellations.iter().enumerate() {
                 let tracked: Vec<_> = satellite_cameras.iter()
@@ -1586,6 +1706,23 @@ pub fn draw_3d_view(
                             draw_routing_path(
                                 plot_ui, &path, positions, &satellite_rotation,
                                 shortest_color, (scaled_link_width + 3.0).max(3.0), hide_behind_earth, earth_r_sq,
+                            );
+                        }
+
+                        if show_radiation_path {
+                            let path = compute_radiation_path(
+                                src.plane, src.sat_index,
+                                dst.plane, dst.sat_index,
+                                num_planes, sats_per_plane,
+                                positions,
+                                is_star,
+                                body_rotation,
+                                rad_grid,
+                                radiation_weight,
+                            );
+                            draw_routing_path(
+                                plot_ui, &path, positions, &satellite_rotation,
+                                radiation_color, (scaled_link_width + 3.0).max(3.0), hide_behind_earth, earth_r_sq,
                             );
                         }
                     }
@@ -2577,6 +2714,8 @@ pub fn draw_torus(
     show_routing_paths: bool,
     show_manhattan_path: bool,
     show_shortest_path: bool,
+    show_radiation_path: bool,
+    radiation_weight: f64,
     show_asc_desc_colors: bool,
     planet_radius: f64,
     pending_cameras: &mut Vec<SatelliteCamera>,
@@ -2584,6 +2723,8 @@ pub fn draw_torus(
     cameras_to_remove: &mut Vec<usize>,
     link_width: f32,
     fixed_sizes: bool,
+    body_rotation: &Matrix3<f64>,
+    igrf_rad_cache: Option<&crate::igrf::IgrfRadGrid>,
 ) -> (Matrix3<f64>, f64) {
     let (major_radius, minor_radius) = if let Some((constellation, _, _, _, _, _)) = constellations.first() {
         let inclination_rad = constellation.inclination_deg.to_radians();
@@ -2953,6 +3094,31 @@ pub fn draw_torus(
                                     plot_ui.line(
                                         Line::new("", PlotPoints::new(vec![[x1, y1], [x2, y2]]))
                                             .color(shortest_color)
+                                            .width(2.0),
+                                    );
+                                }
+                            }
+
+                            if show_radiation_path {
+                                let path = compute_radiation_path(
+                                    src.plane, src.sat_index,
+                                    dst.plane, dst.sat_index,
+                                    num_planes, sats_per_plane,
+                                    positions,
+                                    is_star,
+                                    body_rotation,
+                                    igrf_rad_cache,
+                                    radiation_weight,
+                                );
+                                let rad_color = egui::Color32::from_rgb(100, 220, 255);
+                                for k in 0..(path.len() - 1) {
+                                    let (p1, s1) = path[k];
+                                    let (p2, s2) = path[k + 1];
+                                    let (x1, y1, _) = torus_pos(p1, s1);
+                                    let (x2, y2, _) = torus_pos(p2, s2);
+                                    plot_ui.line(
+                                        Line::new("", PlotPoints::new(vec![[x1, y1], [x2, y2]]))
+                                            .color(rad_color)
                                             .width(2.0),
                                     );
                                 }
