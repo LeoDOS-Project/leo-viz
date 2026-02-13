@@ -73,7 +73,7 @@ impl ViewerState {
             }
         }
         ui.horizontal(|ui| {
-            for (label, lat, lon) in [("N", 90.0_f64, 0.0_f64), ("S", -90.0, 0.0), ("E", 0.0, 90.0), ("W", 0.0, -90.0)] {
+            for (label, lat, lon) in [("N", 90.0_f64, 0.0_f64), ("S", -90.0, 0.0), ("E", 0.0, 90.0), ("W", 0.0, -90.0), ("C", 0.0, 0.0)] {
                 if ui.button(label).clicked() {
                     let target_lon = if *earth_fixed_ref {
                         lon.to_radians()
@@ -102,7 +102,7 @@ impl ViewerState {
             if ui.button(pause_label).clicked() {
                 *animate_ref = !*animate_ref;
             }
-            if abs_speed > 60.0 {
+            if abs_speed > 1.0 {
                 let label = if abs_speed >= 31_536_000.0 {
                     format!("{:.1} earth years/s", abs_speed / 31_536_000.0)
                 } else if abs_speed >= 2_592_000.0 {
@@ -111,8 +111,10 @@ impl ViewerState {
                     format!("{:.1} earth days/s", abs_speed / 86400.0)
                 } else if abs_speed >= 3600.0 {
                     format!("{:.1} earth hours/s", abs_speed / 3600.0)
-                } else {
+                } else if abs_speed >= 60.0 {
                     format!("{:.1} earth minutes/s", abs_speed / 60.0)
+                } else {
+                    format!("{:.1} earth seconds/s", abs_speed)
                 };
                 ui.label(egui::RichText::new(label).weak());
             }

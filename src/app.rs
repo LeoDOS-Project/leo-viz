@@ -269,6 +269,8 @@ impl App {
                 hohmann: crate::solar_system::HohmannState::default(),
                 #[cfg(target_arch = "wasm32")]
                 last_url_hash: String::new(),
+                last_frame_instant: None,
+                fps_smooth: 0.0,
             },
             first_frame: true,
         };
@@ -1443,11 +1445,12 @@ impl eframe::App for App {
 
 
         if self.viewer.show_side_panel {
-            egui::SidePanel::left("settings_panel")
+            #[allow(deprecated)]
+            egui::Panel::left("settings_panel")
                 .resizable(true)
-                .default_width(200.0)
+                .default_size(200.0)
                 .show_separator_line(false)
-                .frame(egui::Frame::side_top_panel(ctx.style().as_ref()).inner_margin(4.0).stroke(egui::Stroke::NONE))
+                .frame(egui::Frame::side_top_panel(ctx.global_style().as_ref()).inner_margin(4.0).stroke(egui::Stroke::NONE))
                 .show(ctx, |ui| {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
@@ -1475,7 +1478,7 @@ impl eframe::App for App {
                 });
         }
 
-        let mut dock_style = egui_dock::Style::from_egui(ctx.style().as_ref());
+        let mut dock_style = egui_dock::Style::from_egui(ctx.global_style().as_ref());
         dock_style.main_surface_border_stroke = egui::Stroke::NONE;
         let full_tab_bar_height = dock_style.tab_bar.height;
         let ui_visible = if self.viewer.auto_hide_tab_bar {
