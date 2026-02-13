@@ -118,6 +118,8 @@ pub(crate) struct ViewerState {
     pub(crate) hohmann: crate::solar_system::HohmannState,
     #[cfg(target_arch = "wasm32")]
     pub(crate) last_url_hash: String,
+    pub(crate) last_frame_instant: Option<std::time::Instant>,
+    pub(crate) fps_smooth: f64,
 }
 
 
@@ -190,6 +192,29 @@ impl ViewerState {
     }
 
     fn render_tab_ui(&mut self, ui: &mut egui::Ui, tab_idx: usize) {
+        let now = std::time::Instant::now();
+        if let Some(prev) = self.last_frame_instant {
+            let dt = now.duration_since(prev).as_secs_f64();
+            if dt > 0.0 {
+                let instant_fps = 1.0 / dt;
+                self.fps_smooth = self.fps_smooth * 0.9 + instant_fps * 0.1;
+            }
+        }
+        self.last_frame_instant = Some(now);
+
+        if self.tabs[tab_idx].show_fps {
+            let fps_text = format!("{:.0} FPS", self.fps_smooth);
+            let rect = ui.available_rect_before_wrap();
+            let pos = egui::pos2(rect.right() - 70.0, rect.top() + 4.0);
+            ui.painter().text(
+                pos,
+                egui::Align2::LEFT_TOP,
+                fps_text,
+                egui::FontId::monospace(14.0),
+                egui::Color32::from_rgb(200, 200, 200),
+            );
+        }
+
         for planet in &mut self.tabs[tab_idx].planets {
             for camera in std::mem::take(&mut planet.pending_cameras) {
                 planet.satellite_cameras.push(camera);
@@ -351,6 +376,10 @@ impl ViewerState {
             let show_rad = self.tabs[tab_idx].planets[planet_idx].show_radiation_window;
             if ui.selectable_label(show_rad, "Rad").clicked() {
                 self.tabs[tab_idx].planets[planet_idx].show_radiation_window = !show_rad;
+            }
+            let show_fps = self.tabs[tab_idx].show_fps;
+            if ui.selectable_label(show_fps, "FPS").clicked() {
+                self.tabs[tab_idx].show_fps = !show_fps;
             }
         }); });
         } // ui_visible
@@ -1979,7 +2008,7 @@ impl ViewerState {
                     ui.checkbox(&mut rad.show_heatmap_sphere, "Show heatmap sphere");
                     ui.horizontal(|ui| {
                         ui.label("Altitude (km):");
-                        ui.add(egui::DragValue::new(&mut rad.heatmap_altitude_km).range(100.0..=50000.0).speed(50.0).max_decimals(0));
+                        ui.add(egui::DragValue::new(&mut rad.heatmap_altitude_km).range(0.0..=50000.0).speed(50.0).max_decimals(0));
                     });
                     ui.horizontal(|ui| {
                         ui.label("Resolution:");
@@ -1989,15 +2018,17 @@ impl ViewerState {
                         ui.label("Mode:");
                         use crate::config::HeatmapMode;
                         ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::Radiation, "Radiation");
-                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::FieldStrength, "Field (nT)");
+                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::IgrfRadiation, "IGRF Rad");
+                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::FieldStrength, "Dipole (nT)");
+                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::IgrfField, "IGRF-14 (nT)");
                     });
-                    ui.horizontal(|ui| {
-                        ui.label("Colors:");
-                        use crate::config::HeatmapColorScheme;
-                        ui.selectable_value(&mut rad.heatmap_color_scheme, HeatmapColorScheme::GreenRed, "Green-Red");
-                        ui.selectable_value(&mut rad.heatmap_color_scheme, HeatmapColorScheme::BlueYellow, "Blue-Yellow");
-                        ui.selectable_value(&mut rad.heatmap_color_scheme, HeatmapColorScheme::Geomagnetic, "Geomagnetic");
-                    });
+                    if rad.heatmap_mode == crate::config::HeatmapMode::IgrfRadiation {
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut rad.show_protons, "Protons");
+                            ui.checkbox(&mut rad.show_electrons, "Electrons");
+                        });
+                    }
+                    ui.checkbox(&mut rad.smooth_colors, "Smooth colors");
 
                     ui.separator();
                     ui.strong("Belt Rendering");
@@ -2220,6 +2251,26 @@ impl ViewerState {
                         } else {
                             HashSet::new()
                         };
+                        if show_radiation_belts || planet.show_radiation_window {
+                            let sphere_r = planet_radius + planet.radiation.heatmap_altitude_km;
+                            match planet.radiation.heatmap_mode {
+                                crate::config::HeatmapMode::IgrfField => {
+                                    if planet.radiation.igrf_grid_cache.as_ref().map(|(r, _)| *r) != Some(sphere_r) {
+                                        planet.radiation.igrf_grid_cache = Some((sphere_r, crate::igrf::IgrfGrid::new(sphere_r)));
+                                    }
+                                }
+                                crate::config::HeatmapMode::IgrfRadiation => {
+                                    let kp = planet.radiation.kp_index;
+                                    let stale = planet.radiation.igrf_rad_cache.as_ref()
+                                        .map(|(r, k, _)| *r != sphere_r || *k != kp)
+                                        .unwrap_or(true);
+                                    if stale {
+                                        planet.radiation.igrf_rad_cache = Some((sphere_r, kp, crate::igrf::IgrfRadGrid::new(sphere_r, kp)));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
                         let (rot, new_zoom) = draw_3d_view(
                             ui,
                             &view_name,

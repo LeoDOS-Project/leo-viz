@@ -323,6 +323,7 @@ pub struct TabConfig {
     pub planet_counter: usize,
     pub show_stats: bool,
     pub show_sat_list: bool,
+    pub show_fps: bool,
     pub settings: TabSettings,
 }
 
@@ -340,6 +341,7 @@ impl TabConfig {
             planet_counter: 0,
             show_stats: false,
             show_sat_list: false,
+            show_fps: false,
             settings: TabSettings::default(),
         }
     }
@@ -475,13 +477,8 @@ pub struct KesslerSimulation {
 pub enum HeatmapMode {
     Radiation,
     FieldStrength,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub enum HeatmapColorScheme {
-    GreenRed,
-    BlueYellow,
-    Geomagnetic,
+    IgrfField,
+    IgrfRadiation,
 }
 
 const GEOMAGNETIC_PALETTE: [[u8; 3]; 18] = [
@@ -492,31 +489,27 @@ const GEOMAGNETIC_PALETTE: [[u8; 3]; 18] = [
     [250,222,96], [245,240,111],
 ];
 
-impl HeatmapColorScheme {
-    pub fn color(&self, t: f64) -> egui::Color32 {
-        let t = t.clamp(0.0, 1.0) as f32;
-        match self {
-            Self::GreenRed => egui::Color32::from_rgb(
-                (255.0 * t) as u8,
-                (255.0 * (1.0 - t)) as u8,
-                0,
-            ),
-            Self::BlueYellow => {
-                let r = (t * 255.0).min(255.0) as u8;
-                let g = (t * 220.0 + 20.0).min(255.0) as u8;
-                let b = ((1.0 - t) * 200.0 + 30.0).min(255.0) as u8;
-                egui::Color32::from_rgb(r, g, b)
-            }
-            Self::Geomagnetic => {
-                let idx = (t * (GEOMAGNETIC_PALETTE.len() - 1) as f32)
-                    as usize;
-                let [r, g, b] = GEOMAGNETIC_PALETTE
-                    [idx.min(GEOMAGNETIC_PALETTE.len() - 1)];
-                egui::Color32::from_rgb(r, g, b)
-            }
-        }
+pub fn heatmap_color(t: f64, smooth: bool) -> egui::Color32 {
+    let t = t.clamp(0.0, 1.0) as f32;
+    let last = (GEOMAGNETIC_PALETTE.len() - 1) as f32;
+    if smooth {
+        let pos = t * last;
+        let lo = (pos as usize).min(GEOMAGNETIC_PALETTE.len() - 2);
+        let frac = pos - lo as f32;
+        let [r0, g0, b0] = GEOMAGNETIC_PALETTE[lo];
+        let [r1, g1, b1] = GEOMAGNETIC_PALETTE[lo + 1];
+        egui::Color32::from_rgb(
+            (r0 as f32 + (r1 as f32 - r0 as f32) * frac) as u8,
+            (g0 as f32 + (g1 as f32 - g0 as f32) * frac) as u8,
+            (b0 as f32 + (b1 as f32 - b0 as f32) * frac) as u8,
+        )
+    } else {
+        let idx = (t * last) as usize;
+        let [r, g, b] = GEOMAGNETIC_PALETTE[idx.min(GEOMAGNETIC_PALETTE.len() - 1)];
+        egui::Color32::from_rgb(r, g, b)
     }
 }
+
 
 #[derive(Clone)]
 pub struct RadiationConfig {
@@ -539,8 +532,12 @@ pub struct RadiationConfig {
     pub heatmap_altitude_km: f64,
     pub heatmap_resolution: usize,
     pub dipole_offset_km: f64,
-    pub heatmap_color_scheme: HeatmapColorScheme,
     pub heatmap_mode: HeatmapMode,
+    pub show_protons: bool,
+    pub show_electrons: bool,
+    pub smooth_colors: bool,
+    pub igrf_grid_cache: Option<(f64, crate::igrf::IgrfGrid)>,
+    pub igrf_rad_cache: Option<(f64, f64, crate::igrf::IgrfRadGrid)>,
 }
 
 impl Default for RadiationConfig {
@@ -555,18 +552,22 @@ impl Default for RadiationConfig {
             shell_phasing: 0.0,
             num_links: 0,
             dipole_tilt: 11.0,
-            show_lines: true,
+            show_lines: false,
             show_dots: false,
             dots_per_line: 12,
             connect_along_shell: false,
             connect_across_shells: false,
-            show_fill: true,
-            show_heatmap_sphere: false,
-            heatmap_altitude_km: 500.0,
+            show_fill: false,
+            show_heatmap_sphere: true,
+            heatmap_altitude_km: 200.0,
             heatmap_resolution: 36,
             dipole_offset_km: 450.0,
-            heatmap_color_scheme: HeatmapColorScheme::GreenRed,
             heatmap_mode: HeatmapMode::Radiation,
+            show_protons: true,
+            show_electrons: true,
+            smooth_colors: false,
+            igrf_grid_cache: None,
+            igrf_rad_cache: None,
         }
     }
 }

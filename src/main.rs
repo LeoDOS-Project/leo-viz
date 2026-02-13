@@ -19,6 +19,8 @@ mod pass;
 mod conjunction;
 mod kessler;
 mod radiation;
+mod igrf;
+mod aep8;
 mod solar_system;
 
 pub(crate) use viewer::ViewerState;

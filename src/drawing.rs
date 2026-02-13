@@ -27,6 +27,19 @@ use crate::EARTH_VISUAL_SCALE;
 pub const COLOR_ASCENDING: egui::Color32 = egui::Color32::from_rgb(200, 120, 50);
 pub const COLOR_DESCENDING: egui::Color32 = egui::Color32::from_rgb(50, 100, 180);
 
+fn normalize_field_nt(f: f64, r_earth_radii: f64) -> f64 {
+    let ref_field = 30000.0 / r_earth_radii.powi(3);
+    let lo = ref_field * 0.67;
+    let hi = ref_field * 2.2;
+    ((f - lo) / (hi - lo)).clamp(0.0, 1.0)
+}
+
+fn blend_proton_electron(p: f64, e: f64, show_p: bool, show_e: bool, smooth: bool) -> egui::Color32 {
+    let pv = if show_p { p } else { 0.0 };
+    let ev = if show_e { e } else { 0.0 };
+    crate::config::heatmap_color(pv.max(ev), smooth)
+}
+
 
 
 fn clip_link_at_earth(
@@ -642,6 +655,8 @@ pub fn draw_3d_view(
 
                 let texel_size = 2.0 * sphere_r / tex_size as f64;
                 let aa_width = texel_size * 3.0;
+                let igrf_grid = rad_config.igrf_grid_cache.as_ref().map(|(_, g)| g);
+                let igrf_rad_grid = rad_config.igrf_rad_cache.as_ref().map(|(_, _, g)| g);
                 let mut pixels = Vec::with_capacity(tex_size * tex_size);
                 for ty in 0..tex_size {
                     let py = sphere_r * (1.0 - 2.0 * ty as f64 / (tex_size - 1) as f64);
@@ -662,22 +677,38 @@ pub fn draw_3d_view(
                         let mag_dot = dx * ma.x + dy * ma.y + dz * ma.z;
                         let sin_ml = mag_dot / r_d;
                         let r_d_er = r_d / planet_radius;
-                        let intensity = match rad_config.heatmap_mode {
-                            crate::config::HeatmapMode::Radiation => {
-                                let r_c = (gp.x * gp.x + gp.y * gp.y + gp.z * gp.z).sqrt();
-                                let saa_factor = (r_d / r_c).powi(12);
-                                let cos_ml_sq = 1.0 - sin_ml * sin_ml;
-                                let l = if cos_ml_sq > 1e-6 { r_d_er / cos_ml_sq } else { r_d_er * 1e6 };
-                                (belt_profile_r(l, rad_config.kp_index) * saa_factor).clamp(0.0, 1.0)
-                            }
-                            crate::config::HeatmapMode::FieldStrength => {
-                                let b0 = 30115.0;
-                                let f = b0 / r_d_er.powi(3) * (1.0 + 3.0 * sin_ml * sin_ml).sqrt();
-                                ((f - 20000.0) / 46000.0).clamp(0.0, 1.0)
-                            }
-                        };
                         let alpha = (180.0 * edge_alpha) as u8;
-                        let c = rad_config.heatmap_color_scheme.color(intensity);
+                        let smooth = rad_config.smooth_colors;
+                        let c = if rad_config.heatmap_mode == crate::config::HeatmapMode::IgrfRadiation {
+                            let colat = (gp.y / (gp.x * gp.x + gp.y * gp.y + gp.z * gp.z).sqrt()).acos();
+                            let elon = (-gp.z).atan2(gp.x);
+                            let (p, e) = igrf_rad_grid.unwrap().lookup(colat, elon);
+                            blend_proton_electron(p, e, rad_config.show_protons, rad_config.show_electrons, smooth)
+                        } else {
+                            let intensity = match rad_config.heatmap_mode {
+                                crate::config::HeatmapMode::Radiation => {
+                                    let r_c = (gp.x * gp.x + gp.y * gp.y + gp.z * gp.z).sqrt();
+                                    let saa_factor = (r_d / r_c).powi(12);
+                                    let cos_ml_sq = 1.0 - sin_ml * sin_ml;
+                                    let l = if cos_ml_sq > 1e-6 { r_d_er / cos_ml_sq } else { r_d_er * 1e6 };
+                                    (belt_profile_r(l, rad_config.kp_index) * saa_factor).clamp(0.0, 1.0)
+                                }
+                                crate::config::HeatmapMode::FieldStrength => {
+                                    let b0 = 30115.0;
+                                    let f = b0 / r_d_er.powi(3) * (1.0 + 3.0 * sin_ml * sin_ml).sqrt();
+                                    normalize_field_nt(f, r_d_er)
+                                }
+                                crate::config::HeatmapMode::IgrfField => {
+                                    let r_km = (gp.x * gp.x + gp.y * gp.y + gp.z * gp.z).sqrt();
+                                    let colat = (gp.y / r_km).acos();
+                                    let elon = (-gp.z).atan2(gp.x);
+                                    let g = igrf_grid.unwrap();
+                                    g.normalize(g.lookup(colat, elon))
+                                }
+                                _ => 0.0,
+                            };
+                            crate::config::heatmap_color(intensity, smooth)
+                        };
                         pixels.push(egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha));
                     }
                 }
@@ -1700,8 +1731,38 @@ pub fn draw_3d_view(
                             let cos_ml_sq = 1.0 - sin_ml * sin_ml;
                             let r_d_er = r_d / planet_radius;
                             let l = if cos_ml_sq > 1e-6 { r_d_er / cos_ml_sq } else { r_d_er * 1e6 };
-                            let exp = (crate::radiation::belt_profile_r(l, rc.kp_index) * saa_factor).clamp(0.0, 1.0);
-                            color = rc.heatmap_color_scheme.color(exp);
+                            let exp = match rc.heatmap_mode {
+                                crate::config::HeatmapMode::Radiation => {
+                                    (crate::radiation::belt_profile_r(l, rc.kp_index) * saa_factor).clamp(0.0, 1.0)
+                                }
+                                crate::config::HeatmapMode::FieldStrength => {
+                                    let b0 = 30115.0;
+                                    let f = b0 / r_d_er.powi(3) * (1.0 + 3.0 * sin_ml * sin_ml).sqrt();
+                                    normalize_field_nt(f, r_d_er)
+                                }
+                                crate::config::HeatmapMode::IgrfField => {
+                                    let r_km = (bp.x * bp.x + bp.y * bp.y + bp.z * bp.z).sqrt();
+                                    let colat = (bp.y / r_km).acos();
+                                    let elon = (-bp.z).atan2(bp.x);
+                                    let f = crate::igrf::igrf_field_nt(r_km, colat, elon);
+                                    if let Some((_, ref g)) = rc.igrf_grid_cache {
+                                        g.normalize(f)
+                                    } else {
+                                        normalize_field_nt(f, r_km / 6371.0)
+                                    }
+                                }
+                                crate::config::HeatmapMode::IgrfRadiation => { 0.0 }
+                            };
+                            if rc.heatmap_mode == crate::config::HeatmapMode::IgrfRadiation {
+                                let colat = (bp.y / (bp.x * bp.x + bp.y * bp.y + bp.z * bp.z).sqrt()).acos();
+                                let elon = (-bp.z).atan2(bp.x);
+                                if let Some((_, _, ref grid)) = rc.igrf_rad_cache {
+                                    let (p, e) = grid.lookup(colat, elon);
+                                    color = blend_proton_electron(p, e, rc.show_protons, rc.show_electrons, rc.smooth_colors);
+                                }
+                            } else {
+                                color = crate::config::heatmap_color(exp, rc.smooth_colors);
+                            }
                         }
                     }
                     let dim_col = egui::Color32::from_rgba_unmultiplied(
@@ -1799,8 +1860,38 @@ pub fn draw_3d_view(
                             let cos_ml_sq = 1.0 - sin_ml * sin_ml;
                             let r_d_er = r_d / planet_radius;
                             let l = if cos_ml_sq > 1e-6 { r_d_er / cos_ml_sq } else { r_d_er * 1e6 };
-                            let exp = (crate::radiation::belt_profile_r(l, rc.kp_index) * saa_factor).clamp(0.0, 1.0);
-                            rc.heatmap_color_scheme.color(exp)
+                            let exp = match rc.heatmap_mode {
+                                crate::config::HeatmapMode::Radiation => {
+                                    (crate::radiation::belt_profile_r(l, rc.kp_index) * saa_factor).clamp(0.0, 1.0)
+                                }
+                                crate::config::HeatmapMode::FieldStrength => {
+                                    let b0 = 30115.0;
+                                    let f = b0 / r_d_er.powi(3) * (1.0 + 3.0 * sin_ml * sin_ml).sqrt();
+                                    normalize_field_nt(f, r_d_er)
+                                }
+                                crate::config::HeatmapMode::IgrfField => {
+                                    let r_km = (bp.x * bp.x + bp.y * bp.y + bp.z * bp.z).sqrt();
+                                    let colat = (bp.y / r_km).acos();
+                                    let elon = (-bp.z).atan2(bp.x);
+                                    let f = crate::igrf::igrf_field_nt(r_km, colat, elon);
+                                    if let Some((_, ref g)) = rc.igrf_grid_cache {
+                                        g.normalize(f)
+                                    } else {
+                                        normalize_field_nt(f, r_km / 6371.0)
+                                    }
+                                }
+                                crate::config::HeatmapMode::IgrfRadiation => { 0.0 }
+                            };
+                            if rc.heatmap_mode == crate::config::HeatmapMode::IgrfRadiation {
+                                let colat = (bp.y / (bp.x * bp.x + bp.y * bp.y + bp.z * bp.z).sqrt()).acos();
+                                let elon = (-bp.z).atan2(bp.x);
+                                if let Some((_, _, ref grid)) = rc.igrf_rad_cache {
+                                    let (p, e) = grid.lookup(colat, elon);
+                                    blend_proton_electron(p, e, rc.show_protons, rc.show_electrons, rc.smooth_colors)
+                                } else { color }
+                            } else {
+                                crate::config::heatmap_color(exp, rc.smooth_colors)
+                            }
                         } else {
                             color
                         }
