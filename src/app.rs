@@ -271,6 +271,7 @@ impl App {
                 last_url_hash: String::new(),
                 last_frame_instant: None,
                 fps_smooth: 0.0,
+                map_texture_cache: None,
             },
             first_frame: true,
         };
@@ -425,7 +426,9 @@ impl eframe::App for App {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if (v.show_borders || v.show_cities) && matches!(v.geo_data, GeoLoadState::NotLoaded) {
+            let need_geo = v.show_borders || v.show_cities
+                || v.tabs.iter().any(|t| t.settings.show_ground_track);
+            if need_geo && matches!(v.geo_data, GeoLoadState::NotLoaded) {
                 let (tx, rx) = mpsc::channel();
                 v.geo_fetch_rx = Some(rx);
                 v.geo_data = GeoLoadState::Loading;

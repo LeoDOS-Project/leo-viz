@@ -20,6 +20,7 @@ mod conjunction;
 mod kessler;
 mod radiation;
 mod igrf;
+mod projection;
 mod aep8;
 mod solar_system;
 

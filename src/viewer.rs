@@ -9,7 +9,7 @@ use crate::config::{
     AreaOfInterest, DeviceLayer, GroundStation, Preset, TabConfig, View3DFlags,
 };
 use crate::drawing::{
-    draw_3d_view, draw_ground_track, draw_torus, plane_color,
+    draw_3d_view, draw_map_view, draw_torus, plane_color,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::geo::{GeoLoadState, GeoOverlayData};
@@ -120,6 +120,7 @@ pub(crate) struct ViewerState {
     pub(crate) last_url_hash: String,
     pub(crate) last_frame_instant: Option<std::time::Instant>,
     pub(crate) fps_smooth: f64,
+    pub(crate) map_texture_cache: Option<(crate::projection::ProjectionKind, usize, CelestialBody, Skin, TextureResolution, egui::TextureHandle)>,
 }
 
 
@@ -2182,6 +2183,7 @@ impl ViewerState {
         let show_borders = settings.show_borders;
         let show_cities = settings.show_cities;
         let show_radiation_belts = settings.show_radiation_belts;
+        let map_projection = settings.map_projection;
         let log_power = settings.solar_system_log_power;
         let detail_gl_info = self.tile_overlay_detail_gl_info(celestial_body);
 
@@ -2505,15 +2507,87 @@ impl ViewerState {
                 }
 
                 if show_ground_track {
+                    let cache_key = (map_projection, 0usize, celestial_body, skin, tex_res);
+                    let needs_regen = match &self.map_texture_cache {
+                        Some((pk, res, cb, sk, tr, _)) => {
+                            *pk != cache_key.0 || *res != cache_key.1 || *cb != cache_key.2 || *sk != cache_key.3 || *tr != cache_key.4
+                        }
+                        None => true,
+                    };
+                    if needs_regen {
+                        if let Some(earth_tex) = self.planet_textures.get(&(celestial_body, skin, tex_res)) {
+                            let proj = map_projection.instance();
+                            let (xmin, xmax) = proj.x_range();
+                            let (ymin, ymax) = proj.y_range();
+                            let src_w = earth_tex.width as usize;
+                            let src_h = earth_tex.height as usize;
+                            let map_tex_w = src_w;
+                            let map_tex_h = src_h;
+                            let mut pixels = Vec::with_capacity(map_tex_w * map_tex_h);
+                            for py in 0..map_tex_h {
+                                let y = ymax - (py as f64 + 0.5) * (ymax - ymin) / map_tex_h as f64;
+                                for px in 0..map_tex_w {
+                                    let x = xmin + (px as f64 + 0.5) * (xmax - xmin) / map_tex_w as f64;
+                                    if let Some((lat, lon)) = proj.inverse(x, y) {
+                                        let u = (lon + 180.0) / 360.0;
+                                        let v = (90.0 - lat) / 180.0;
+                                        let [r, g, b] = earth_tex.sample_bilinear(u, v);
+                                        pixels.push(egui::Color32::from_rgb(r, g, b));
+                                    } else {
+                                        pixels.push(egui::Color32::TRANSPARENT);
+                                    }
+                                }
+                            }
+                            let image = egui::ColorImage::new([map_tex_w, map_tex_h], pixels);
+                            let handle = ui.ctx().load_texture("map_earth", image, egui::TextureOptions::LINEAR);
+                            self.map_texture_cache = Some((map_projection, 0, celestial_body, skin, tex_res, handle));
+                        }
+                    }
+                    let map_tex_ref = self.map_texture_cache.as_ref().map(|(_, _, _, _, _, h)| h);
                     ui.vertical(|ui| {
-                        draw_ground_track(
+                        let planet = &self.tabs[tab_idx].planets[planet_idx];
+                        let proj_kind = map_projection;
+                        let proj = proj_kind.instance();
+                        let rad_ref = if show_radiation_belts || planet.show_radiation_window {
+                            Some(&planet.radiation)
+                        } else {
+                            None
+                        };
+                        draw_map_view(
                             ui,
                             &format!("ground_{}", view_name),
                             &constellations_data,
+                            proj,
                             view_width,
                             view_height,
                             sat_radius,
                             single_color,
+                            link_width,
+                            show_orbits,
+                            show_links,
+                            show_intra_links,
+                            show_coverage,
+                            coverage_angle,
+                            show_routing_paths,
+                            show_manhattan_path,
+                            show_shortest_path,
+                            show_radiation_path,
+                            radiation_weight,
+                            &planet.satellite_cameras,
+                            planet_radius,
+                            #[cfg(not(target_arch = "wasm32"))]
+                            { match &self.geo_data { GeoLoadState::Loaded(d) => if show_borders { d.borders.as_slice() } else { &[] }, _ => &[] } },
+                            #[cfg(target_arch = "wasm32")]
+                            &[],
+                            #[cfg(not(target_arch = "wasm32"))]
+                            { match &self.geo_data { GeoLoadState::Loaded(d) => if show_cities { d.cities.as_slice() } else { &[] }, _ => &[] } },
+                            #[cfg(target_arch = "wasm32")]
+                            &[],
+                            &planet.ground_stations,
+                            rad_ref,
+                            &body_y_rotation,
+                            time,
+                            map_tex_ref,
                         );
                     });
                 }

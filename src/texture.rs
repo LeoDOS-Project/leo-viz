@@ -92,6 +92,29 @@ impl EarthTexture {
         self.pixels[(y * self.width + x) as usize]
     }
 
+    pub fn sample_bilinear(&self, u: f64, v: f64) -> [u8; 3] {
+        let fx = u * self.width as f64 - 0.5;
+        let fy = v * self.height as f64 - 0.5;
+        let x0 = (fx.floor() as i64).clamp(0, self.width as i64 - 1) as u32;
+        let y0 = (fy.floor() as i64).clamp(0, self.height as i64 - 1) as u32;
+        let x1 = (x0 + 1).min(self.width - 1);
+        let y1 = (y0 + 1).min(self.height - 1);
+        let tx = (fx - fx.floor()).clamp(0.0, 1.0) as f32;
+        let ty = (fy - fy.floor()).clamp(0.0, 1.0) as f32;
+        let p00 = self.pixels[(y0 * self.width + x0) as usize];
+        let p10 = self.pixels[(y0 * self.width + x1) as usize];
+        let p01 = self.pixels[(y1 * self.width + x0) as usize];
+        let p11 = self.pixels[(y1 * self.width + x1) as usize];
+        let lerp = |a: u8, b: u8, t: f32| -> u8 {
+            (a as f32 + (b as f32 - a as f32) * t) as u8
+        };
+        [
+            lerp(lerp(p00[0], p10[0], tx), lerp(p01[0], p11[0], tx), ty),
+            lerp(lerp(p00[1], p10[1], tx), lerp(p01[1], p11[1], tx), ty),
+            lerp(lerp(p00[2], p10[2], tx), lerp(p01[2], p11[2], tx), ty),
+        ]
+    }
+
     pub fn render_sphere(&self, size: usize, rot: &Matrix3<f64>, flattening: f64) -> egui::ColorImage {
         self.render_sphere_with_rings(size, rot, flattening, crate::celestial::CelestialBody::Earth, None)
     }

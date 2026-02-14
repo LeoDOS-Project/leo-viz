@@ -2649,35 +2649,227 @@ pub fn draw_3d_view(
     (rotation, zoom)
 }
 
-pub fn draw_ground_track(
+fn project_segments(
+    proj: &dyn crate::projection::Projection,
+    points: &[(f64, f64)],
+) -> Vec<Vec<[f64; 2]>> {
+    let mut result = Vec::new();
+    let mut seg: Vec<[f64; 2]> = Vec::new();
+    for &(lat, lon) in points {
+        if let Some((x, y)) = proj.project(lat, lon) {
+            if let Some(last) = seg.last() {
+                if (x - last[0]).abs() > 180.0 {
+                    if seg.len() >= 2 { result.push(std::mem::take(&mut seg)); }
+                    else { seg.clear(); }
+                }
+            }
+            seg.push([x, y]);
+        } else {
+            if seg.len() >= 2 { result.push(std::mem::take(&mut seg)); }
+            else { seg.clear(); }
+        }
+    }
+    if seg.len() >= 2 { result.push(seg); }
+    result
+}
+
+pub fn draw_map_view(
     ui: &mut egui::Ui,
     id: &str,
     constellations: &[(WalkerConstellation, Vec<SatelliteState>, usize, u8, usize, String)],
+    proj: &dyn crate::projection::Projection,
     width: f32,
     height: f32,
     sat_radius: f32,
     single_color: bool,
+    link_width: f32,
+    show_orbits: bool,
+    show_links: bool,
+    show_intra_links: bool,
+    show_coverage: bool,
+    coverage_angle: f64,
+    show_routing_paths: bool,
+    show_manhattan_path: bool,
+    show_shortest_path: bool,
+    show_radiation_path: bool,
+    radiation_weight: f64,
+    satellite_cameras: &[SatelliteCamera],
+    planet_radius: f64,
+    geo_borders: &[Vec<(f64, f64)>],
+    geo_cities: &[crate::geo::CityLabel],
+    ground_stations: &[GroundStation],
+    radiation: Option<&RadiationConfig>,
+    body_rotation: &Matrix3<f64>,
+    time: f64,
+    map_texture: Option<&egui::TextureHandle>,
 ) {
+    let (xmin, xmax) = proj.x_range();
+    let (ymin, ymax) = proj.y_range();
+
     let plot = Plot::new(id)
         .width(width)
         .height(height)
-        .include_x(-180.0)
-        .include_x(180.0)
-        .include_y(-90.0)
-        .include_y(90.0)
+        .include_x(xmin)
+        .include_x(xmax)
+        .include_y(ymin)
+        .include_y(ymax)
+        .data_aspect(1.0)
         .show_axes([true, true]);
 
     plot.show(ui, |plot_ui| {
-        for (constellation, positions, color_offset, _tle_kind, _, _) in constellations {
+        if let Some(handle) = map_texture {
+            let cx = (xmin + xmax) / 2.0;
+            let cy = (ymin + ymax) / 2.0;
+            let size = egui::Vec2::new((xmax - xmin) as f32, (ymax - ymin) as f32);
+            plot_ui.image(PlotImage::new("", handle.id(), PlotPoint::new(cx, cy), size));
+        }
+
+        let grid_color = egui::Color32::from_rgba_unmultiplied(80, 80, 80, 60);
+        for lat in (-60..=60).step_by(30) {
+            let pts: Vec<[f64; 2]> = (-180..=180).step_by(2)
+                .filter_map(|lon| proj.project(lat as f64, lon as f64).map(|(x, y)| [x, y]))
+                .collect();
+            if pts.len() >= 2 {
+                plot_ui.line(Line::new("", PlotPoints::new(pts)).color(grid_color).width(0.5));
+            }
+        }
+        for lon in (-150..=150).step_by(30) {
+            let pts: Vec<[f64; 2]> = (-90..=90).step_by(2)
+                .filter_map(|lat| proj.project(lat as f64, lon as f64).map(|(x, y)| [x, y]))
+                .collect();
+            if pts.len() >= 2 {
+                plot_ui.line(Line::new("", PlotPoints::new(pts)).color(grid_color).width(0.5));
+            }
+        }
+        if let Some((x0, y0)) = proj.project(0.0, -180.0) {
+            if let Some((x1, y1)) = proj.project(0.0, 180.0) {
+                plot_ui.line(Line::new("", PlotPoints::new(vec![[x0, y0], [x1, y1]])).color(egui::Color32::DARK_GRAY).width(0.8));
+            }
+        }
+        if let Some((x0, y0)) = proj.project(-90.0, 0.0) {
+            if let Some((x1, y1)) = proj.project(90.0, 0.0) {
+                plot_ui.line(Line::new("", PlotPoints::new(vec![[x0, y0], [x1, y1]])).color(egui::Color32::DARK_GRAY).width(0.8));
+            }
+        }
+
+        for polyline in geo_borders {
+            let border_color = egui::Color32::from_rgb(80, 120, 80);
+            for seg in project_segments(proj, polyline) {
+                plot_ui.line(Line::new("", PlotPoints::new(seg)).color(border_color).width(0.8));
+            }
+        }
+
+        for city in geo_cities {
+            if let Some((cx, cy)) = proj.project(city.lat, city.lon) {
+                plot_ui.text(
+                    Text::new("", PlotPoint::new(cx, cy), &city.name)
+                        .color(egui::Color32::from_rgb(160, 160, 160))
+                );
+            }
+        }
+
+        for gs in ground_stations {
+            if let Some((gx, gy)) = proj.project(gs.lat, gs.lon) {
+                plot_ui.points(
+                    Points::new("", PlotPoints::new(vec![[gx, gy]]))
+                        .color(gs.color).radius(4.0).filled(true),
+                );
+            }
+        }
+
+        for (constellation, positions, color_offset, _, _, _) in constellations {
+            if show_orbits {
+                for plane in 0..constellation.num_planes {
+                    let color = plane_color(if single_color { *color_offset } else { plane + color_offset });
+                    let dim = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 80);
+                    let orbit_pts = constellation.orbit_points_3d(plane, time);
+                    let latlon: Vec<(f64, f64)> = orbit_pts.iter().map(|&(x, y, z)| {
+                        let r = (x * x + y * y + z * z).sqrt();
+                        (y / r).asin().to_degrees().clamp(-90.0, 90.0)
+                    }).zip(orbit_pts.iter().map(|&(x, _, z)| {
+                        (-z).atan2(x).to_degrees()
+                    })).map(|(lat, lon)| (lat, lon)).collect();
+                    for seg in project_segments(proj, &latlon) {
+                        plot_ui.line(Line::new("", PlotPoints::new(seg)).color(dim).width(1.0));
+                    }
+                }
+            }
+
+            if show_links {
+                for sat in positions.iter() {
+                    if let Some(ni) = sat.neighbor_idx {
+                        if let Some(neigh) = positions.get(ni) {
+                            let link_color = egui::Color32::from_rgba_unmultiplied(120, 120, 120, 60);
+                            if let (Some((x1, y1)), Some((x2, y2))) = (
+                                proj.project(sat.lat, sat.lon),
+                                proj.project(neigh.lat, neigh.lon),
+                            ) {
+                                if (x1 - x2).abs() < 180.0 {
+                                    plot_ui.line(Line::new("", PlotPoints::new(vec![[x1, y1], [x2, y2]])).color(link_color).width(link_width));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if show_intra_links {
+                for plane in 0..constellation.num_planes {
+                    let plane_sats: Vec<_> = positions.iter().filter(|s| s.plane == plane).collect();
+                    let link_color = egui::Color32::from_rgba_unmultiplied(120, 120, 120, 40);
+                    for i in 0..plane_sats.len() {
+                        let j = (i + 1) % plane_sats.len();
+                        if let (Some((x1, y1)), Some((x2, y2))) = (
+                            proj.project(plane_sats[i].lat, plane_sats[i].lon),
+                            proj.project(plane_sats[j].lat, plane_sats[j].lon),
+                        ) {
+                            if (x1 - x2).abs() < 180.0 {
+                                plot_ui.line(Line::new("", PlotPoints::new(vec![[x1, y1], [x2, y2]])).color(link_color).width(link_width * 0.5));
+                            }
+                        }
+                    }
+                }
+            }
+
+            if show_coverage {
+                let orbit_radius = planet_radius + constellation.altitude_km;
+                let cone_half_angle = coverage_angle.to_radians();
+                let max_earth_angle = (planet_radius / orbit_radius).acos();
+                let earth_central_angle = (orbit_radius * cone_half_angle.sin() / planet_radius).asin();
+                let angular_radius = earth_central_angle.min(max_earth_angle);
+
+                for sat in positions.iter() {
+                    let color = plane_color(if single_color { *color_offset } else { sat.plane + color_offset });
+                    let fill = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 30);
+                    let lat = sat.lat.to_radians();
+                    let lon = sat.lon.to_radians();
+                    let circle_pts: Vec<(f64, f64)> = (0..=32).map(|i| {
+                        let angle = 2.0 * PI * i as f64 / 32.0;
+                        let clat = (lat.sin() * angular_radius.cos()
+                            + lat.cos() * angular_radius.sin() * angle.cos()).asin();
+                        let clon = lon + (angular_radius.sin() * angle.sin())
+                            .atan2(lat.cos() * angular_radius.cos()
+                                - lat.sin() * angular_radius.sin() * angle.cos());
+                        (clat.to_degrees(), clon.to_degrees())
+                    }).collect();
+                    let projected: Vec<[f64; 2]> = circle_pts.iter()
+                        .filter_map(|&(la, lo)| proj.project(la, lo).map(|(x, y)| [x, y]))
+                        .collect();
+                    if projected.len() >= 3 {
+                        plot_ui.polygon(Polygon::new("", PlotPoints::new(projected)).fill_color(fill));
+                    }
+                }
+            }
+
             for plane in 0..constellation.num_planes {
                 let color = plane_color(if single_color { *color_offset } else { plane + color_offset });
-                let pts: PlotPoints = positions
+                let pts: Vec<[f64; 2]> = positions
                     .iter()
                     .filter(|s| s.plane == plane)
-                    .map(|s| [s.lon, s.lat])
+                    .filter_map(|s| proj.project(s.lat, s.lon).map(|(x, y)| [x, y]))
                     .collect();
                 plot_ui.points(
-                    Points::new("", pts)
+                    Points::new("", PlotPoints::new(pts))
                         .color(color)
                         .radius(sat_radius)
                         .filled(true),
@@ -2685,16 +2877,62 @@ pub fn draw_ground_track(
             }
         }
 
-        plot_ui.line(
-            Line::new("", PlotPoints::new(vec![[-180.0, 0.0], [180.0, 0.0]]))
-                .color(egui::Color32::DARK_GRAY)
-                .width(0.5),
-        );
-        plot_ui.line(
-            Line::new("", PlotPoints::new(vec![[0.0, -90.0], [0.0, 90.0]]))
-                .color(egui::Color32::DARK_GRAY)
-                .width(0.5),
-        );
+        if show_routing_paths && !satellite_cameras.is_empty() {
+            let manhattan_color = egui::Color32::from_rgb(255, 100, 100);
+            let shortest_color = egui::Color32::from_rgb(100, 255, 100);
+            let rad_color = egui::Color32::from_rgb(100, 220, 255);
+            let rad_grid = radiation.and_then(|r| r.igrf_rad_cache.as_ref().map(|(_, _, g)| g));
+
+            for (cidx, (constellation, positions, _, _, _, _)) in constellations.iter().enumerate() {
+                let tracked: Vec<_> = satellite_cameras.iter()
+                    .filter(|c| c.constellation_idx == cidx)
+                    .collect();
+                if tracked.len() < 2 { continue; }
+
+                let num_planes = constellation.num_planes;
+                let sats_per_plane = constellation.sats_per_plane();
+                let is_star = constellation.walker_type == WalkerType::Star;
+
+                for i in 0..tracked.len() {
+                    for j in (i + 1)..tracked.len() {
+                        let src = tracked[i];
+                        let dst = tracked[j];
+
+                        let draw_path = |path: &[(usize, usize)], color: egui::Color32, w: f32| -> Vec<Line> {
+                            let mut lines = Vec::new();
+                            for k in 0..(path.len() - 1) {
+                                let s1 = positions.iter().find(|s| s.plane == path[k].0 && s.sat_index == path[k].1);
+                                let s2 = positions.iter().find(|s| s.plane == path[k+1].0 && s.sat_index == path[k+1].1);
+                                if let (Some(a), Some(b)) = (s1, s2) {
+                                    if let (Some((x1, y1)), Some((x2, y2))) = (
+                                        proj.project(a.lat, a.lon),
+                                        proj.project(b.lat, b.lon),
+                                    ) {
+                                        if (x1 - x2).abs() < 180.0 {
+                                            lines.push(Line::new("", PlotPoints::new(vec![[x1, y1], [x2, y2]])).color(color).width(w));
+                                        }
+                                    }
+                                }
+                            }
+                            lines
+                        };
+
+                        if show_manhattan_path {
+                            let path = compute_manhattan_path(src.plane, src.sat_index, dst.plane, dst.sat_index, num_planes, sats_per_plane, is_star);
+                            for line in draw_path(&path, manhattan_color, 2.5) { plot_ui.line(line); }
+                        }
+                        if show_shortest_path {
+                            let path = compute_shortest_path(src.plane, src.sat_index, dst.plane, dst.sat_index, num_planes, sats_per_plane, positions, is_star);
+                            for line in draw_path(&path, shortest_color, 2.0) { plot_ui.line(line); }
+                        }
+                        if show_radiation_path {
+                            let path = compute_radiation_path(src.plane, src.sat_index, dst.plane, dst.sat_index, num_planes, sats_per_plane, positions, is_star, body_rotation, rad_grid, radiation_weight);
+                            for line in draw_path(&path, rad_color, 2.0) { plot_ui.line(line); }
+                        }
+                    }
+                }
+            }
+        }
     });
 }
 

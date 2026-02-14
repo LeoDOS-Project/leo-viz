@@ -447,6 +447,25 @@ impl ViewerState {
                 });
             });
             ui.checkbox(&mut s.show_ground_track, "Show ground track");
+            if s.show_ground_track {
+                ui.indent("proj_opts", |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Projection:");
+                        use crate::projection::ProjectionKind;
+                        egui::ComboBox::from_id_salt("proj_kind")
+                            .selected_text(match s.map_projection {
+                                ProjectionKind::Equirectangular => "Equirectangular",
+                                ProjectionKind::Mercator => "Mercator",
+                                ProjectionKind::Mollweide => "Mollweide",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut s.map_projection, ProjectionKind::Equirectangular, "Equirectangular");
+                                ui.selectable_value(&mut s.map_projection, ProjectionKind::Mercator, "Mercator");
+                                ui.selectable_value(&mut s.map_projection, ProjectionKind::Mollweide, "Mollweide");
+                            });
+                    });
+                });
+            }
 
             ui.checkbox(&mut self.auto_hide_tab_bar, "Auto-hide UI");
             ui.checkbox(&mut self.auto_cycle_tabs, "Auto-cycle tabs");
