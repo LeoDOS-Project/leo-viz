@@ -427,7 +427,7 @@ impl eframe::App for App {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let need_geo = v.show_borders || v.show_cities
-                || v.tabs.iter().any(|t| t.settings.show_ground_track);
+                || v.tabs.iter().any(|t| t.settings.planet_projection != crate::projection::ProjectionKind::Orthographic);
             if need_geo && matches!(v.geo_data, GeoLoadState::NotLoaded) {
                 let (tx, rx) = mpsc::channel();
                 v.geo_fetch_rx = Some(rx);

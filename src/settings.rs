@@ -263,6 +263,26 @@ impl ViewerState {
             ui.checkbox(&mut s.render_planet, "Show planet");
             ui.indent("planet_opts", |ui| {
                 let on = s.render_planet;
+                ui.add_enabled_ui(on, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Projection:");
+                        use crate::projection::ProjectionKind;
+                        egui::ComboBox::from_id_salt("proj_kind")
+                            .selected_text(s.planet_projection.label())
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut s.planet_projection, ProjectionKind::Orthographic, "Orthographic");
+                                ui.selectable_value(&mut s.planet_projection, ProjectionKind::Equirectangular, "Equirectangular");
+                                ui.selectable_value(&mut s.planet_projection, ProjectionKind::Mercator, "Mercator");
+                                ui.selectable_value(&mut s.planet_projection, ProjectionKind::Mollweide, "Mollweide");
+                                ui.selectable_value(&mut s.planet_projection, ProjectionKind::Sinusoidal, "Sinusoidal");
+                                ui.selectable_value(&mut s.planet_projection, ProjectionKind::AzimuthalEquidistant, "Azimuthal Equidistant");
+                                ui.selectable_value(&mut s.planet_projection, ProjectionKind::Hammer, "Hammer");
+                                ui.selectable_value(&mut s.planet_projection, ProjectionKind::HEALPix, "HEALPix");
+                                ui.selectable_value(&mut s.planet_projection, ProjectionKind::SpaceObliqueMercator, "SOM (53°)");
+                                ui.selectable_value(&mut s.planet_projection, ProjectionKind::TransverseMercator, "UTM");
+                            });
+                    });
+                });
                 {
                     let mut show_behind = !s.hide_behind_earth;
                     if ui.add_enabled(on, egui::Checkbox::new(&mut show_behind, "Show behind planet")).changed() {
@@ -430,8 +450,6 @@ impl ViewerState {
         }
 
         {
-            let s = &mut self.tabs[active].settings;
-
             ui.checkbox(&mut self.show_planet_sizes, "Show planet sizes");
             ui.indent("planet_sizes_opts", |ui| {
                 ui.add_enabled_ui(self.show_planet_sizes, |ui| {
@@ -448,27 +466,6 @@ impl ViewerState {
                     });
                 });
             });
-            ui.checkbox(&mut s.show_ground_track, "Show ground track");
-            if s.show_ground_track {
-                ui.indent("proj_opts", |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Projection:");
-                        use crate::projection::ProjectionKind;
-                        egui::ComboBox::from_id_salt("proj_kind")
-                            .selected_text(match s.map_projection {
-                                ProjectionKind::Equirectangular => "Equirectangular",
-                                ProjectionKind::Mercator => "Mercator",
-                                ProjectionKind::Mollweide => "Mollweide",
-                            })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut s.map_projection, ProjectionKind::Equirectangular, "Equirectangular");
-                                ui.selectable_value(&mut s.map_projection, ProjectionKind::Mercator, "Mercator");
-                                ui.selectable_value(&mut s.map_projection, ProjectionKind::Mollweide, "Mollweide");
-                            });
-                    });
-                });
-            }
-
             ui.checkbox(&mut self.auto_hide_tab_bar, "Auto-hide UI");
             ui.checkbox(&mut self.auto_cycle_tabs, "Auto-cycle tabs");
             ui.indent("cycle_opts", |ui| {

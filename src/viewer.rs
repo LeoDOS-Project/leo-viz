@@ -2130,7 +2130,7 @@ impl ViewerState {
         let settings = &self.tabs[tab_idx].settings;
         let render_planet = settings.render_planet;
         let show_torus = settings.show_torus;
-        let show_ground_track = settings.show_ground_track;
+        let planet_projection = settings.planet_projection;
         let show_solar_system = settings.show_solar_system;
         let show_orbits = settings.show_orbits;
         let show_axes = settings.show_axes;
@@ -2185,14 +2185,14 @@ impl ViewerState {
         let show_radiation_belts = settings.show_radiation_belts;
         let trackpad_rotate = settings.trackpad_rotate;
         let north_up = settings.north_up;
-        let map_projection = settings.map_projection;
+        let is_2d_projection = planet_projection != crate::projection::ProjectionKind::Orthographic;
         let log_power = settings.solar_system_log_power;
         let detail_gl_info = self.tile_overlay_detail_gl_info(celestial_body);
 
         let show_torus = show_torus && render_planet;
         let show_planet_sizes = self.show_planet_sizes;
 
-        let num_views = [render_planet, show_torus, show_solar_system, show_ground_track, show_planet_sizes]
+        let num_views = [render_planet, show_torus, show_solar_system, show_planet_sizes]
             .iter().filter(|v| **v).count();
 
         if num_views > 0 {
@@ -2204,7 +2204,7 @@ impl ViewerState {
 
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                if render_planet {
+                if render_planet && !is_2d_projection {
                     ui.vertical(|ui| {
                         let planet = &mut self.tabs[tab_idx].planets[planet_idx];
                         let view_flags = View3DFlags {
@@ -2331,6 +2331,89 @@ impl ViewerState {
                         );
                         self.tabs[tab_idx].settings.rotation = rot;
                         self.tabs[tab_idx].settings.zoom = new_zoom;
+                    });
+                } else if render_planet && is_2d_projection {
+                    let cache_key = (planet_projection, 0usize, celestial_body, skin, tex_res);
+                    let needs_regen = match &self.map_texture_cache {
+                        Some((pk, res, cb, sk, tr, _)) => {
+                            *pk != cache_key.0 || *res != cache_key.1 || *cb != cache_key.2 || *sk != cache_key.3 || *tr != cache_key.4
+                        }
+                        None => true,
+                    };
+                    if needs_regen {
+                        if let Some(earth_tex) = self.planet_textures.get(&(celestial_body, skin, tex_res)) {
+                            let proj = planet_projection.instance();
+                            let (xmin, xmax) = proj.x_range();
+                            let (ymin, ymax) = proj.y_range();
+                            let src_w = earth_tex.width as usize;
+                            let src_h = earth_tex.height as usize;
+                            let map_tex_w = src_w;
+                            let map_tex_h = src_h;
+                            let mut pixels = Vec::with_capacity(map_tex_w * map_tex_h);
+                            for py in 0..map_tex_h {
+                                let y = ymax - (py as f64 + 0.5) * (ymax - ymin) / map_tex_h as f64;
+                                for px in 0..map_tex_w {
+                                    let x = xmin + (px as f64 + 0.5) * (xmax - xmin) / map_tex_w as f64;
+                                    if let Some((lat, lon)) = proj.inverse(x, y) {
+                                        let u = (lon + 180.0) / 360.0;
+                                        let v = (90.0 - lat) / 180.0;
+                                        let [r, g, b] = earth_tex.sample_bilinear(u, v);
+                                        pixels.push(egui::Color32::from_rgb(r, g, b));
+                                    } else {
+                                        pixels.push(egui::Color32::TRANSPARENT);
+                                    }
+                                }
+                            }
+                            let image = egui::ColorImage::new([map_tex_w, map_tex_h], pixels);
+                            let handle = ui.ctx().load_texture("map_earth", image, egui::TextureOptions::LINEAR);
+                            self.map_texture_cache = Some((planet_projection, 0, celestial_body, skin, tex_res, handle));
+                        }
+                    }
+                    let map_tex_ref = self.map_texture_cache.as_ref().map(|(_, _, _, _, _, h)| h);
+                    ui.vertical(|ui| {
+                        let planet = &self.tabs[tab_idx].planets[planet_idx];
+                        let proj = planet_projection.instance();
+                        let rad_ref = if show_radiation_belts || planet.show_radiation_window {
+                            Some(&planet.radiation)
+                        } else {
+                            None
+                        };
+                        draw_map_view(
+                            ui,
+                            &format!("ground_{}", view_name),
+                            &constellations_data,
+                            proj,
+                            view_width,
+                            view_height,
+                            sat_radius,
+                            single_color,
+                            link_width,
+                            show_orbits,
+                            show_links,
+                            show_intra_links,
+                            show_coverage,
+                            coverage_angle,
+                            show_routing_paths,
+                            show_manhattan_path,
+                            show_shortest_path,
+                            show_radiation_path,
+                            radiation_weight,
+                            &planet.satellite_cameras,
+                            planet_radius,
+                            #[cfg(not(target_arch = "wasm32"))]
+                            { match &self.geo_data { GeoLoadState::Loaded(d) => if show_borders { d.borders.as_slice() } else { &[] }, _ => &[] } },
+                            #[cfg(target_arch = "wasm32")]
+                            &[],
+                            #[cfg(not(target_arch = "wasm32"))]
+                            { match &self.geo_data { GeoLoadState::Loaded(d) => if show_cities { d.cities.as_slice() } else { &[] }, _ => &[] } },
+                            #[cfg(target_arch = "wasm32")]
+                            &[],
+                            &planet.ground_stations,
+                            rad_ref,
+                            &body_y_rotation,
+                            time,
+                            map_tex_ref,
+                        );
                     });
                 }
 
@@ -2507,92 +2590,6 @@ impl ViewerState {
                         if let Some(new_body) = ss_result.inner {
                             self.tabs[tab_idx].planets[planet_idx].celestial_body = new_body;
                         }
-                    });
-                }
-
-                if show_ground_track {
-                    let cache_key = (map_projection, 0usize, celestial_body, skin, tex_res);
-                    let needs_regen = match &self.map_texture_cache {
-                        Some((pk, res, cb, sk, tr, _)) => {
-                            *pk != cache_key.0 || *res != cache_key.1 || *cb != cache_key.2 || *sk != cache_key.3 || *tr != cache_key.4
-                        }
-                        None => true,
-                    };
-                    if needs_regen {
-                        if let Some(earth_tex) = self.planet_textures.get(&(celestial_body, skin, tex_res)) {
-                            let proj = map_projection.instance();
-                            let (xmin, xmax) = proj.x_range();
-                            let (ymin, ymax) = proj.y_range();
-                            let src_w = earth_tex.width as usize;
-                            let src_h = earth_tex.height as usize;
-                            let map_tex_w = src_w;
-                            let map_tex_h = src_h;
-                            let mut pixels = Vec::with_capacity(map_tex_w * map_tex_h);
-                            for py in 0..map_tex_h {
-                                let y = ymax - (py as f64 + 0.5) * (ymax - ymin) / map_tex_h as f64;
-                                for px in 0..map_tex_w {
-                                    let x = xmin + (px as f64 + 0.5) * (xmax - xmin) / map_tex_w as f64;
-                                    if let Some((lat, lon)) = proj.inverse(x, y) {
-                                        let u = (lon + 180.0) / 360.0;
-                                        let v = (90.0 - lat) / 180.0;
-                                        let [r, g, b] = earth_tex.sample_bilinear(u, v);
-                                        pixels.push(egui::Color32::from_rgb(r, g, b));
-                                    } else {
-                                        pixels.push(egui::Color32::TRANSPARENT);
-                                    }
-                                }
-                            }
-                            let image = egui::ColorImage::new([map_tex_w, map_tex_h], pixels);
-                            let handle = ui.ctx().load_texture("map_earth", image, egui::TextureOptions::LINEAR);
-                            self.map_texture_cache = Some((map_projection, 0, celestial_body, skin, tex_res, handle));
-                        }
-                    }
-                    let map_tex_ref = self.map_texture_cache.as_ref().map(|(_, _, _, _, _, h)| h);
-                    ui.vertical(|ui| {
-                        let planet = &self.tabs[tab_idx].planets[planet_idx];
-                        let proj_kind = map_projection;
-                        let proj = proj_kind.instance();
-                        let rad_ref = if show_radiation_belts || planet.show_radiation_window {
-                            Some(&planet.radiation)
-                        } else {
-                            None
-                        };
-                        draw_map_view(
-                            ui,
-                            &format!("ground_{}", view_name),
-                            &constellations_data,
-                            proj,
-                            view_width,
-                            view_height,
-                            sat_radius,
-                            single_color,
-                            link_width,
-                            show_orbits,
-                            show_links,
-                            show_intra_links,
-                            show_coverage,
-                            coverage_angle,
-                            show_routing_paths,
-                            show_manhattan_path,
-                            show_shortest_path,
-                            show_radiation_path,
-                            radiation_weight,
-                            &planet.satellite_cameras,
-                            planet_radius,
-                            #[cfg(not(target_arch = "wasm32"))]
-                            { match &self.geo_data { GeoLoadState::Loaded(d) => if show_borders { d.borders.as_slice() } else { &[] }, _ => &[] } },
-                            #[cfg(target_arch = "wasm32")]
-                            &[],
-                            #[cfg(not(target_arch = "wasm32"))]
-                            { match &self.geo_data { GeoLoadState::Loaded(d) => if show_cities { d.cities.as_slice() } else { &[] }, _ => &[] } },
-                            #[cfg(target_arch = "wasm32")]
-                            &[],
-                            &planet.ground_stations,
-                            rad_ref,
-                            &body_y_rotation,
-                            time,
-                            map_tex_ref,
-                        );
                     });
                 }
 
