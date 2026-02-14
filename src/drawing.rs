@@ -2470,6 +2470,20 @@ pub fn draw_3d_view(
         }
     }
 
+    if response.response.double_clicked() {
+        let up_screen = rotation * Vector3::new(0.0, 1.0, 0.0);
+        let bearing = up_screen.x.atan2(up_screen.y);
+        if bearing.abs() > 1e-6 {
+            let cb = bearing.cos();
+            let sb = bearing.sin();
+            rotation = Matrix3::new(
+                cb, sb, 0.0,
+                -sb, cb, 0.0,
+                0.0, 0.0, 1.0,
+            ) * rotation;
+        }
+    }
+
     if response.response.drag_started() {
         if let Some(pos) = response.response.interact_pointer_pos() {
             let mut found = false;
