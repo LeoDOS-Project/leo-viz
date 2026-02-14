@@ -72,6 +72,8 @@ impl ViewerState {
                 *rotation_ref *= body_y_rot.transpose();
             }
         }
+        ui.checkbox(&mut s.trackpad_rotate, "Trackpad rotate");
+        ui.checkbox(&mut s.north_up, "North up");
         ui.horizontal(|ui| {
             for (label, lat, lon) in [("N", 90.0_f64, 0.0_f64), ("S", -90.0, 0.0), ("E", 0.0, 90.0), ("W", 0.0, -90.0), ("C", 0.0, 0.0)] {
                 if ui.button(label).clicked() {

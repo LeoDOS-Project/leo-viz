@@ -2183,6 +2183,8 @@ impl ViewerState {
         let show_borders = settings.show_borders;
         let show_cities = settings.show_cities;
         let show_radiation_belts = settings.show_radiation_belts;
+        let trackpad_rotate = settings.trackpad_rotate;
+        let north_up = settings.north_up;
         let map_projection = settings.map_projection;
         let log_power = settings.solar_system_log_power;
         let detail_gl_info = self.tile_overlay_detail_gl_info(celestial_body);
@@ -2214,6 +2216,8 @@ impl ViewerState {
                             show_equator, show_terminator, earth_fixed_camera,
                             use_gpu_rendering: self.use_gpu_rendering, show_clouds, show_day_night,
                             show_stars, show_borders, show_cities,
+                            trackpad_rotate,
+                            north_up,
                         };
                         let sun_dir = {
                             use chrono::Datelike;

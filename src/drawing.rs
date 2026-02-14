@@ -497,6 +497,8 @@ pub fn draw_3d_view(
         show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
         show_equator, show_terminator, earth_fixed_camera, use_gpu_rendering,
         show_clouds, show_day_night, show_stars, show_borders, show_cities,
+        trackpad_rotate,
+        north_up,
     } = flags;
     let max_altitude = constellations.iter()
         .map(|(c, _, _, _, _, _)| c.altitude_km)
@@ -2404,16 +2406,67 @@ pub fn draw_3d_view(
         }
     }
 
+    if !hovering_satellite {
+        if let (Some(hover_pos), Some(rc)) = (response.response.hover_pos(), radiation) {
+            let plot_pos = response.transform.value_from_position(hover_pos);
+            let px = plot_pos.x;
+            let py = plot_pos.y;
+            let r_sq = planet_radius * planet_radius;
+            if px * px + py * py <= r_sq {
+                let pz = (r_sq - px * px - py * py).sqrt();
+                let surface_rot = if earth_fixed_camera {
+                    rotation
+                } else {
+                    rotation * *body_rotation
+                };
+                let inv = surface_rot.transpose();
+                let orig = inv * Vector3::new(px, py, pz);
+                let lat = (orig.y / planet_radius).asin().to_degrees();
+                let lon = -(orig.z.atan2(orig.x)).to_degrees();
+                let colat = (orig.y / planet_radius).acos();
+                let elon = (-orig.z).atan2(orig.x);
+                let sphere_r = planet_radius + rc.heatmap_altitude_km;
+
+                let tip = match rc.heatmap_mode {
+                    crate::config::HeatmapMode::IgrfField => {
+                        let f = crate::igrf::igrf_field_nt(sphere_r, colat, elon);
+                        Some(format!("{:.1}° {:.1}°  F: {:.0} nT", lat, lon, f))
+                    }
+                    crate::config::HeatmapMode::IgrfRadiation => {
+                        if let Some((_, _, ref g)) = rc.igrf_rad_cache {
+                            let (p, e) = g.lookup(colat, elon);
+                            Some(format!("{:.1}° {:.1}°\nProtons: {:.3}  Electrons: {:.3}", lat, lon, p, e))
+                        } else { None }
+                    }
+                    crate::config::HeatmapMode::FieldStrength => {
+                        let b0 = 30115.0;
+                        let r_er = sphere_r / 6371.2;
+                        let sin_ml = orig.y / planet_radius;
+                        let f = b0 / r_er.powi(3) * (1.0 + 3.0 * sin_ml * sin_ml).sqrt();
+                        Some(format!("{:.1}° {:.1}°  F: {:.0} nT (dipole)", lat, lon, f))
+                    }
+                    _ => None,
+                };
+
+                if let Some(text) = tip {
+                    let galley = ui.painter().layout_no_wrap(text, egui::FontId::monospace(12.0), egui::Color32::WHITE);
+                    let text_pos = hover_pos + egui::Vec2::new(15.0, -15.0);
+                    let rect = egui::Rect::from_min_size(
+                        text_pos - egui::Vec2::new(0.0, galley.size().y),
+                        galley.size(),
+                    ).expand(4.0);
+                    ui.painter().rect_filled(rect, 4.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200));
+                    ui.painter().galley(text_pos - egui::Vec2::new(0.0, galley.size().y), galley, egui::Color32::WHITE);
+                }
+            }
+        }
+    }
+
     if response.response.is_pointer_button_down_on() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     } else if !hovering_satellite {
-        if let Some(hover_pos) = response.response.hover_pos() {
-            let plot_pos = response.transform.value_from_position(hover_pos);
-            let on_label = label_rects.iter().any(|(rect, _, _)| rect.contains(hover_pos));
-            let on_earth = plot_pos.x * plot_pos.x + plot_pos.y * plot_pos.y <= planet_radius * planet_radius;
-            if on_label || on_earth {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-            }
+        if response.response.hover_pos().is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
     }
 
@@ -2555,11 +2608,156 @@ pub fn draw_3d_view(
     }
 
     if response.response.hovered() {
-        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-        if scroll != 0.0 {
+        let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
+        let zd = ui.input(|i| i.zoom_delta());
+        let rot_delta = ui.input(|i| i.rotation_delta()) as f64;
+        if rot_delta.abs() > 0.001 {
+            let cr = rot_delta.cos();
+            let sr = rot_delta.sin();
+            rotation = Matrix3::new(
+                cr, sr, 0.0,
+                -sr, cr, 0.0,
+                0.0, 0.0, 1.0,
+            ) * rotation;
+        }
+        let is_pinching = (zd - 1.0).abs() > 0.001;
+        if trackpad_rotate && !is_pinching {
+            let sx = scroll_delta.x as f64;
+            let sy = scroll_delta.y as f64;
+            if sx.abs() > 0.1 || sy.abs() > 0.1 {
+                let sensitivity = 0.002 / (1.0 + zoom.ln().max(0.0));
+                let pitch = -sy * sensitivity;
+                let yaw = sx * sensitivity;
+                let cp = pitch.cos(); let sp = pitch.sin();
+                let rx = Matrix3::new(
+                    1.0, 0.0, 0.0,
+                    0.0, cp, sp,
+                    0.0, -sp, cp,
+                );
+                if north_up {
+                    rotation = rx * rotation;
+                    let cy = yaw.cos(); let s_y = yaw.sin();
+                    let ry_world = Matrix3::new(
+                        cy, 0.0, s_y,
+                        0.0, 1.0, 0.0,
+                        -s_y, 0.0, cy,
+                    );
+                    rotation = rotation * ry_world;
+                    let up_screen = rotation * Vector3::new(0.0, 1.0, 0.0);
+                    let bearing = up_screen.x.atan2(up_screen.y);
+                    if bearing.abs() > 1e-6 {
+                        let max_corr = 0.05;
+                        let corr = (-bearing * 0.4).clamp(-max_corr, max_corr);
+                        let cc = corr.cos();
+                        let sc = corr.sin();
+                        rotation = Matrix3::new(
+                            cc, sc, 0.0,
+                            -sc, cc, 0.0,
+                            0.0, 0.0, 1.0,
+                        ) * rotation;
+                    }
+                } else {
+                    let cy = (-yaw).cos(); let s_y = (-yaw).sin();
+                    let ry = Matrix3::new(
+                        cy, 0.0, -s_y,
+                        0.0, 1.0, 0.0,
+                        s_y, 0.0, cy,
+                    );
+                    rotation = rx * ry * rotation;
+                }
+            }
+        } else {
+            let scroll = scroll_delta.y;
+            if scroll != 0.0 {
+                let old_zoom = zoom;
+                let factor = 1.0 + scroll as f64 * 0.001;
+                zoom = (zoom * factor).clamp(0.01, 20000.0);
+
+                if let Some(hover_pos) = response.response.hover_pos() {
+                    let plot_pos = response.transform.value_from_position(hover_pos);
+                    let cx = plot_pos.x;
+                    let cy = plot_pos.y;
+                    let r_sq = planet_radius * planet_radius;
+                    if cx * cx + cy * cy <= r_sq {
+                        let ratio = old_zoom / zoom;
+                        let tx = cx * ratio;
+                        let ty = cy * ratio;
+                        if tx * tx + ty * ty <= r_sq {
+                            let a = Vector3::new(cx, cy, (r_sq - cx*cx - cy*cy).sqrt()).normalize();
+                            let b = Vector3::new(tx, ty, (r_sq - tx*tx - ty*ty).sqrt()).normalize();
+                            let cross = a.cross(&b);
+                            let cross_len = cross.norm();
+                            if cross_len > 1e-12 {
+                                let axis = cross / cross_len;
+                                let angle = cross_len.atan2(a.dot(&b));
+                                let ca = angle.cos();
+                                let sa = angle.sin();
+                                let t = 1.0 - ca;
+                                let (x, y, z) = (axis.x, axis.y, axis.z);
+                                let rot = Matrix3::new(
+                                    t*x*x+ca,    t*x*y-sa*z, t*x*z+sa*y,
+                                    t*x*y+sa*z,  t*y*y+ca,   t*y*z-sa*x,
+                                    t*x*z-sa*y,  t*y*z+sa*x, t*z*z+ca,
+                                );
+                                rotation = rot * rotation;
+                            }
+                        }
+
+                        let center = rotation.transpose() * Vector3::new(0.0, 0.0, 1.0);
+                        let lat_limit = 85.0_f64.to_radians().sin();
+                        let clamped_y = center.y.clamp(-lat_limit, lat_limit);
+                        let needs_clamp = (center.y - clamped_y).abs() > 1e-8;
+                        if needs_clamp {
+                            let horiz = (center.x * center.x + center.z * center.z).sqrt();
+                            let new_horiz = (1.0 - clamped_y * clamped_y).sqrt();
+                            let scale = if horiz > 1e-10 { new_horiz / horiz } else { 1.0 };
+                            let clamped = Vector3::new(center.x * scale, clamped_y, center.z * scale).normalize();
+                            let right_raw = Vector3::new(clamped.z, 0.0, -clamped.x);
+                            let right_len = right_raw.norm();
+                            if right_len > 0.01 {
+                                let right = right_raw / right_len;
+                                let up = clamped.cross(&right);
+                                let r0 = Matrix3::new(
+                                    right.x, right.y, right.z,
+                                    up.x, up.y, up.z,
+                                    clamped.x, clamped.y, clamped.z,
+                                );
+                                let up_screen = rotation * Vector3::new(0.0, 1.0, 0.0);
+                                let bearing = up_screen.x.atan2(up_screen.y);
+                                let cb = bearing.cos();
+                                let sb = bearing.sin();
+                                let rz = Matrix3::new(
+                                     cb, sb, 0.0,
+                                    -sb, cb, 0.0,
+                                    0.0, 0.0, 1.0,
+                                );
+                                rotation = rz * r0;
+                            }
+                        }
+                        if north_up {
+                            let north_blend = (zoom.log2() / 4.0).clamp(0.0, 1.0);
+                            if north_blend > 0.0 {
+                                let up_screen = rotation * Vector3::new(0.0, 1.0, 0.0);
+                                let bearing = up_screen.x.atan2(up_screen.y);
+                                let zoom_octaves = (zoom / old_zoom).ln().abs() / (2.0_f64).ln();
+                                let decay = (-north_blend * zoom_octaves * 1.5).exp();
+                                let correction = bearing * (decay - 1.0);
+                                let ca = correction.cos();
+                                let sa = correction.sin();
+                                rotation = Matrix3::new(
+                                    ca, sa, 0.0,
+                                    -sa, ca, 0.0,
+                                    0.0, 0.0, 1.0,
+                                ) * rotation;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if is_pinching {
             let old_zoom = zoom;
-            let factor = 1.0 + scroll as f64 * 0.001;
-            zoom = (zoom * factor).clamp(0.01, 20000.0);
+            zoom = (zoom * zd as f64).clamp(0.01, 20000.0);
 
             if let Some(hover_pos) = response.response.hover_pos() {
                 let plot_pos = response.transform.value_from_position(hover_pos);
@@ -2622,27 +2820,25 @@ pub fn draw_3d_view(
                             rotation = rz * r0;
                         }
                     }
-                    let north_blend = (zoom.log2() / 4.0).clamp(0.0, 1.0);
-                    if north_blend > 0.0 {
-                        let up_screen = rotation * Vector3::new(0.0, 1.0, 0.0);
-                        let bearing = up_screen.x.atan2(up_screen.y);
-                        let zoom_octaves = (zoom / old_zoom).ln().abs() / (2.0_f64).ln();
-                        let decay = (-north_blend * zoom_octaves * 1.5).exp();
-                        let correction = bearing * (decay - 1.0);
-                        let ca = correction.cos();
-                        let sa = correction.sin();
-                        rotation = Matrix3::new(
-                            ca, sa, 0.0,
-                            -sa, ca, 0.0,
-                            0.0, 0.0, 1.0,
-                        ) * rotation;
+                    if north_up {
+                        let north_blend = (zoom.log2() / 4.0).clamp(0.0, 1.0);
+                        if north_blend > 0.0 {
+                            let up_screen = rotation * Vector3::new(0.0, 1.0, 0.0);
+                            let bearing = up_screen.x.atan2(up_screen.y);
+                            let zoom_octaves = (zoom / old_zoom).ln().abs() / (2.0_f64).ln();
+                            let decay = (-north_blend * zoom_octaves * 1.5).exp();
+                            let correction = bearing * (decay - 1.0);
+                            let ca = correction.cos();
+                            let sa = correction.sin();
+                            rotation = Matrix3::new(
+                                ca, sa, 0.0,
+                                -sa, ca, 0.0,
+                                0.0, 0.0, 1.0,
+                            ) * rotation;
+                        }
                     }
                 }
             }
-        }
-        if let Some(touch) = ui.input(|i| i.multi_touch()) {
-            let factor = touch.zoom_delta as f64;
-            zoom = (zoom * factor).clamp(0.01, 20000.0);
         }
     }
 
@@ -3381,9 +3577,9 @@ pub fn draw_torus(
             let factor = 1.0 + scroll as f64 * 0.001;
             zoom = (zoom * factor).clamp(0.01, 20000.0);
         }
-        if let Some(touch) = ui.input(|i| i.multi_touch()) {
-            let factor = touch.zoom_delta as f64;
-            zoom = (zoom * factor).clamp(0.01, 20000.0);
+        let zd = ui.input(|i| i.zoom_delta());
+        if (zd - 1.0).abs() > 0.001 {
+            zoom = (zoom * zd as f64).clamp(0.01, 20000.0);
         }
     }
 

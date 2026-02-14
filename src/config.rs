@@ -226,6 +226,8 @@ pub struct View3DFlags {
     pub show_stars: bool,
     pub show_borders: bool,
     pub show_cities: bool,
+    pub trackpad_rotate: bool,
+    pub north_up: bool,
 }
 
 #[derive(Clone)]
@@ -273,6 +275,8 @@ pub struct TabSettings {
     pub sat_radius: f32,
     pub link_width: f32,
     pub fixed_sizes: bool,
+    pub trackpad_rotate: bool,
+    pub north_up: bool,
 }
 
 impl Default for TabSettings {
@@ -321,6 +325,8 @@ impl Default for TabSettings {
             sat_radius: 1.5,
             link_width: 0.25,
             fixed_sizes: false,
+            trackpad_rotate: true,
+            north_up: true,
         }
     }
 }
