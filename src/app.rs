@@ -119,6 +119,8 @@ impl App {
                 #[cfg(not(target_arch = "wasm32"))]
                 geo_fetch_rx: None,
                 dragging_place: None,
+                context_menu: None,
+                editing_place: None,
                 night_texture: None,
                 star_texture: None,
                 milky_way_texture: None,

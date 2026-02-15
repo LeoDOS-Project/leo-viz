@@ -488,9 +488,11 @@ pub fn draw_3d_view(
     conjunction_heatmap: &[(ConjunctionInfo, f64)],
     correcting_sats: &HashSet<String>,
     radiation: Option<&RadiationConfig>,
+    context_menu_request: &mut Option<(egui::Pos2, f64, f64)>,
+    label_click_request: &mut Option<(bool, usize, egui::Pos2)>,
 ) -> (Matrix3<f64>, f64) {
     let View3DFlags {
-        show_orbits, show_axes, show_coverage, show_links, show_intra_links,
+        show_orbits, show_axes, show_magnetic_axis, show_coverage, show_links, show_intra_links,
         hide_behind_earth, single_color, dark_mode, show_routing_paths,
         show_manhattan_path, show_shortest_path, show_radiation_path, radiation_weight,
         show_asc_desc_colors,
@@ -1642,6 +1644,21 @@ pub fn draw_3d_view(
             plot_ui.text(Text::new("", PlotPoint::new(s_x, s_y), "S").color(egui::Color32::WHITE));
             plot_ui.text(Text::new("", PlotPoint::new(e_x, e_y), "E").color(egui::Color32::WHITE));
             plot_ui.text(Text::new("", PlotPoint::new(w_x, w_y), "W").color(egui::Color32::WHITE));
+        }
+
+        if show_magnetic_axis {
+            let mag_lat = 80.65_f64.to_radians();
+            let mag_lon = 72.68_f64.to_radians();
+            let mx = mag_lat.cos() * mag_lon.cos();
+            let my = mag_lat.sin();
+            let mz = mag_lat.cos() * mag_lon.sin();
+            let (np_x, np_y, _) = rotate_point_matrix(mx * axis_len, my * axis_len, mz * axis_len, &surface_rotation);
+            let (sp_x, sp_y, _) = rotate_point_matrix(-mx * axis_len, -my * axis_len, -mz * axis_len, &surface_rotation);
+            plot_ui.line(
+                Line::new("", PlotPoints::new(vec![[sp_x, sp_y], [np_x, np_y]]))
+                    .color(egui::Color32::from_rgb(255, 100, 255))
+                    .width(1.5),
+            );
         }
 
         if show_orbits {
@@ -2933,46 +2950,78 @@ pub fn draw_3d_view(
 
     if response.response.clicked() {
         if let Some(pos) = response.response.interact_pointer_pos() {
-            let plot_pos = response.transform.value_from_position(pos);
-            let click_x = plot_pos.x;
-            let click_y = plot_pos.y;
-            let click_threshold = margin * 0.03;
+            let mut handled = false;
+            for (rect, is_gs, idx) in &label_rects {
+                if rect.contains(pos) {
+                    *label_click_request = Some((*is_gs, *idx, pos));
+                    handled = true;
+                    break;
+                }
+            }
+            if !handled {
+                let plot_pos = response.transform.value_from_position(pos);
+                let click_x = plot_pos.x;
+                let click_y = plot_pos.y;
+                let click_threshold = margin * 0.03;
 
-            'outer: for (_constellation, positions, _color_offset, _, orig_idx, _) in constellations {
-                for sat in positions {
-                    let (rx, ry, rz) = rotate_point_matrix(sat.x, sat.y, sat.z, &satellite_rotation);
-                    let earth_r_sq = (planet_radius * EARTH_VISUAL_SCALE).powi(2);
-                    let visible = rz >= 0.0 || (rx * rx + ry * ry) >= earth_r_sq;
-                    if !visible && hide_behind_earth {
-                        continue;
-                    }
-                    let dx = rx - click_x;
-                    let dy = ry - click_y;
-                    if dx * dx + dy * dy < click_threshold * click_threshold {
-                        let existing = satellite_cameras.iter().find(|c|
-                            c.constellation_idx == *orig_idx && c.plane == sat.plane && c.sat_index == sat.sat_index
-                        );
-                        if let Some(cam) = existing {
-                            cameras_to_remove.push(cam.id);
-                        } else {
-                            let in_pending = pending_cameras.iter().any(|c|
+                'outer: for (_constellation, positions, _color_offset, _, orig_idx, _) in constellations {
+                    for sat in positions {
+                        let (rx, ry, rz) = rotate_point_matrix(sat.x, sat.y, sat.z, &satellite_rotation);
+                        let earth_r_sq = (planet_radius * EARTH_VISUAL_SCALE).powi(2);
+                        let visible = rz >= 0.0 || (rx * rx + ry * ry) >= earth_r_sq;
+                        if !visible && hide_behind_earth {
+                            continue;
+                        }
+                        let dx = rx - click_x;
+                        let dy = ry - click_y;
+                        if dx * dx + dy * dy < click_threshold * click_threshold {
+                            let existing = satellite_cameras.iter().find(|c|
                                 c.constellation_idx == *orig_idx && c.plane == sat.plane && c.sat_index == sat.sat_index
                             );
-                            if !in_pending {
-                                *camera_id_counter += 1;
-                                pending_cameras.push(SatelliteCamera {
-                                    id: *camera_id_counter,
-                                    label: format!("Sat {}-{}", sat.plane + 1, sat.sat_index + 1),
-                                    constellation_idx: *orig_idx,
-                                    plane: sat.plane,
-                                    sat_index: sat.sat_index,
-                                    screen_pos: None,
-                                });
+                            if let Some(cam) = existing {
+                                cameras_to_remove.push(cam.id);
+                            } else {
+                                let in_pending = pending_cameras.iter().any(|c|
+                                    c.constellation_idx == *orig_idx && c.plane == sat.plane && c.sat_index == sat.sat_index
+                                );
+                                if !in_pending {
+                                    *camera_id_counter += 1;
+                                    pending_cameras.push(SatelliteCamera {
+                                        id: *camera_id_counter,
+                                        label: format!("Sat {}-{}", sat.plane + 1, sat.sat_index + 1),
+                                        constellation_idx: *orig_idx,
+                                        plane: sat.plane,
+                                        sat_index: sat.sat_index,
+                                        screen_pos: None,
+                                    });
+                                }
                             }
+                            break 'outer;
                         }
-                        break 'outer;
                     }
                 }
+            }
+        }
+    }
+
+    if response.response.secondary_clicked() {
+        if let Some(pos) = response.response.interact_pointer_pos() {
+            let plot_pos = response.transform.value_from_position(pos);
+            let px = plot_pos.x;
+            let py = plot_pos.y;
+            let r_sq = planet_radius * planet_radius;
+            if px * px + py * py <= r_sq {
+                let pz = (r_sq - px * px - py * py).sqrt();
+                let surface_rot = if earth_fixed_camera {
+                    rotation
+                } else {
+                    rotation * *body_rotation
+                };
+                let inv = surface_rot.transpose();
+                let orig = inv * Vector3::new(px, py, pz);
+                let lat = (orig.y / planet_radius).asin().to_degrees();
+                let lon = -(orig.z.atan2(orig.x)).to_degrees();
+                *context_menu_request = Some((pos, lat, lon));
             }
         }
     }

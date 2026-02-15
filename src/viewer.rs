@@ -42,6 +42,23 @@ use std::f64::consts::PI;
 use std::sync::{Arc, mpsc};
 use chrono::{DateTime, Utc};
 
+pub(crate) struct ContextMenuState {
+    pub(crate) screen_pos: egui::Pos2,
+    pub(crate) lat: f64,
+    pub(crate) lon: f64,
+    pub(crate) tab_idx: usize,
+    pub(crate) planet_idx: usize,
+}
+
+pub(crate) struct EditingPlaceState {
+    pub(crate) is_gs: bool,
+    pub(crate) idx: usize,
+    pub(crate) tab_idx: usize,
+    pub(crate) planet_idx: usize,
+    pub(crate) screen_pos: egui::Pos2,
+    pub(crate) just_opened: bool,
+}
+
 pub(crate) struct ViewerState {
     pub(crate) tabs: Vec<TabConfig>,
     pub(crate) camera_id_counter: usize,
@@ -79,6 +96,8 @@ pub(crate) struct ViewerState {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) geo_fetch_rx: Option<mpsc::Receiver<Result<GeoOverlayData, String>>>,
     pub(crate) dragging_place: Option<(usize, usize, bool, usize)>,
+    pub(crate) context_menu: Option<ContextMenuState>,
+    pub(crate) editing_place: Option<EditingPlaceState>,
     pub(crate) night_texture: Option<Arc<EarthTexture>>,
     pub(crate) star_texture: Option<Arc<EarthTexture>>,
     pub(crate) milky_way_texture: Option<Arc<EarthTexture>>,
@@ -263,6 +282,235 @@ impl ViewerState {
         }
         if add_planet {
             self.tabs[tab_idx].add_planet();
+        }
+
+        if self.dragging_place.is_some() {
+            self.context_menu = None;
+        }
+
+        if let Some(ref cm) = self.context_menu {
+            if cm.tab_idx == tab_idx {
+                let cm_lat = cm.lat;
+                let cm_lon = cm.lon;
+                let cm_planet_idx = cm.planet_idx;
+                let area_resp = egui::Area::new(egui::Id::new("planet_context_menu"))
+                    .fixed_pos(cm.screen_pos)
+                    .order(egui::Order::Foreground)
+                    .show(ui.ctx(), |ui| {
+                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                            ui.label(format!(
+                                "{:.2}°, {:.2}°",
+                                cm_lat, cm_lon,
+                            ));
+                            ui.separator();
+                            let add_gs = ui.button("Add Ground Station").clicked();
+                            let add_aoi = ui.button("Add Area of Interest").clicked();
+                            (add_gs, add_aoi)
+                        }).inner
+                    });
+                let (add_gs, add_aoi) = area_resp.inner;
+                let clicked_outside = ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
+                    && !area_resp.response.rect.contains(
+                        ui.input(|i| i.pointer.interact_pos().unwrap_or_default()),
+                    );
+                if add_gs {
+                    if let Some(planet) = self.tabs[tab_idx].planets.get_mut(cm_planet_idx) {
+                        let n = planet.ground_stations.len() + 1;
+                        planet.ground_stations.push(GroundStation {
+                            name: format!("GS{}", n),
+                            lat: cm_lat,
+                            lon: cm_lon,
+                            radius_km: 500.0,
+                            color: egui::Color32::from_rgb(255, 100, 100),
+                            selected: false,
+                        });
+                    }
+                    self.context_menu = None;
+                } else if add_aoi {
+                    if let Some(planet) = self.tabs[tab_idx].planets.get_mut(cm_planet_idx) {
+                        let n = planet.areas_of_interest.len() + 1;
+                        planet.areas_of_interest.push(AreaOfInterest {
+                            name: format!("AOI{}", n),
+                            lat: cm_lat,
+                            lon: cm_lon,
+                            radius_km: 500.0,
+                            color: egui::Color32::from_rgba_unmultiplied(100, 200, 100, 100),
+                            ground_station_idx: None,
+                            job_mode: crate::config::AoiJobMode::Route,
+                            job_n: 3,
+                            selected: false,
+                        });
+                    }
+                    self.context_menu = None;
+                } else if clicked_outside {
+                    self.context_menu = None;
+                }
+            }
+        }
+
+        if let Some(ref ep) = self.editing_place {
+            if ep.tab_idx == tab_idx {
+                let ep_is_gs = ep.is_gs;
+                let ep_idx = ep.idx;
+                let ep_planet_idx = ep.planet_idx;
+                let ep_screen_pos = ep.screen_pos;
+                let ep_just_opened = ep.just_opened;
+                let title = if ep_is_gs {
+                    self.tabs[tab_idx].planets.get(ep_planet_idx)
+                        .and_then(|p| p.ground_stations.get(ep_idx))
+                        .map(|gs| format!("Edit GS: {}", gs.name))
+                } else {
+                    self.tabs[tab_idx].planets.get(ep_planet_idx)
+                        .and_then(|p| p.areas_of_interest.get(ep_idx))
+                        .map(|aoi| format!("Edit AOI: {}", aoi.name))
+                };
+                if let Some(title) = title {
+                    let mut open = true;
+                    let mut win = egui::Window::new(title)
+                        .id(egui::Id::new("edit_place_window"))
+                        .open(&mut open)
+                        .title_bar(true)
+                        .collapsible(false)
+                        .default_width(200.0);
+                    if ep_just_opened {
+                        win = win.current_pos(ep_screen_pos);
+                    }
+                    let delete = win.show(ui.ctx(), |ui| {
+                            let mut del = false;
+                            if ep_is_gs {
+                                if let Some(gs) = self.tabs[tab_idx].planets
+                                    .get_mut(ep_planet_idx)
+                                    .and_then(|p| p.ground_stations.get_mut(ep_idx))
+                                {
+                                    ui.horizontal(|ui| {
+                                        ui.label("Name");
+                                        ui.text_edit_singleline(&mut gs.name);
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Lat");
+                                        ui.add(egui::DragValue::new(&mut gs.lat).speed(0.1).range(-90.0..=90.0));
+                                        ui.label("Lon");
+                                        ui.add(egui::DragValue::new(&mut gs.lon).speed(0.1).range(-180.0..=180.0));
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Radius (km)");
+                                        ui.add(egui::DragValue::new(&mut gs.radius_km).speed(1.0).range(0.0..=f64::MAX));
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Color");
+                                        let mut c = gs.color.to_array();
+                                        if ui.color_edit_button_srgba_unmultiplied(&mut c).changed() {
+                                            gs.color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+                                        }
+                                    });
+                                    ui.separator();
+                                    if ui.button("Delete").clicked() { del = true; }
+                                }
+                            } else {
+                                let gs_names: Vec<String> = self.tabs[tab_idx].planets
+                                    .get(ep_planet_idx)
+                                    .map(|p| p.ground_stations.iter().map(|gs| gs.name.clone()).collect())
+                                    .unwrap_or_default();
+                                if let Some(aoi) = self.tabs[tab_idx].planets
+                                    .get_mut(ep_planet_idx)
+                                    .and_then(|p| p.areas_of_interest.get_mut(ep_idx))
+                                {
+                                    ui.horizontal(|ui| {
+                                        ui.label("Name");
+                                        ui.text_edit_singleline(&mut aoi.name);
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Lat");
+                                        ui.add(egui::DragValue::new(&mut aoi.lat).speed(0.1).range(-90.0..=90.0));
+                                        ui.label("Lon");
+                                        ui.add(egui::DragValue::new(&mut aoi.lon).speed(0.1).range(-180.0..=180.0));
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Radius (km)");
+                                        ui.add(egui::DragValue::new(&mut aoi.radius_km).speed(1.0).range(0.0..=f64::MAX));
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Color");
+                                        let mut c = aoi.color.to_array();
+                                        if ui.color_edit_button_srgba_unmultiplied(&mut c).changed() {
+                                            aoi.color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+                                        }
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("GS");
+                                        let gs_label = aoi.ground_station_idx
+                                            .and_then(|i| gs_names.get(i))
+                                            .map(|s| s.as_str())
+                                            .unwrap_or("None");
+                                        egui::ComboBox::from_id_salt("edit_aoi_gs_link")
+                                            .selected_text(gs_label)
+                                            .show_ui(ui, |ui| {
+                                                if ui.selectable_label(aoi.ground_station_idx.is_none(), "None").clicked() {
+                                                    aoi.ground_station_idx = None;
+                                                }
+                                                for (gs_idx, name) in gs_names.iter().enumerate() {
+                                                    if ui.selectable_label(aoi.ground_station_idx == Some(gs_idx), name).clicked() {
+                                                        aoi.ground_station_idx = Some(gs_idx);
+                                                    }
+                                                }
+                                            });
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Mode");
+                                        egui::ComboBox::from_id_salt("edit_aoi_mode")
+                                            .selected_text(match aoi.job_mode {
+                                                crate::config::AoiJobMode::Route => "Route",
+                                                crate::config::AoiJobMode::SpaceComp => "SpaceCoMP",
+                                            })
+                                            .show_ui(ui, |ui| {
+                                                if ui.selectable_label(aoi.job_mode == crate::config::AoiJobMode::Route, "Route").clicked() {
+                                                    aoi.job_mode = crate::config::AoiJobMode::Route;
+                                                }
+                                                if ui.selectable_label(aoi.job_mode == crate::config::AoiJobMode::SpaceComp, "SpaceCoMP").clicked() {
+                                                    aoi.job_mode = crate::config::AoiJobMode::SpaceComp;
+                                                }
+                                            });
+                                        if aoi.job_mode == crate::config::AoiJobMode::SpaceComp {
+                                            ui.label("n");
+                                            ui.add(egui::DragValue::new(&mut aoi.job_n).range(1..=50).speed(0.2));
+                                        }
+                                    });
+                                    ui.separator();
+                                    if ui.button("Delete").clicked() { del = true; }
+                                }
+                            }
+                            del
+                        });
+                    let should_delete = delete.and_then(|r| r.inner).unwrap_or(false);
+                    if !open || should_delete {
+                        if should_delete {
+                            if let Some(planet) = self.tabs[tab_idx].planets.get_mut(ep_planet_idx) {
+                                if ep_is_gs {
+                                    if ep_idx < planet.ground_stations.len() {
+                                        planet.ground_stations.remove(ep_idx);
+                                        for aoi in &mut planet.areas_of_interest {
+                                            match aoi.ground_station_idx {
+                                                Some(i) if i == ep_idx => aoi.ground_station_idx = None,
+                                                Some(i) if i > ep_idx => aoi.ground_station_idx = Some(i - 1),
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                } else if ep_idx < planet.areas_of_interest.len() {
+                                    planet.areas_of_interest.remove(ep_idx);
+                                }
+                            }
+                        }
+                        self.editing_place = None;
+                    } else if ep_just_opened {
+                        if let Some(ref mut ep) = self.editing_place {
+                            ep.just_opened = false;
+                        }
+                    }
+                } else {
+                    self.editing_place = None;
+                }
+            }
         }
     }
 
@@ -2158,6 +2406,7 @@ impl ViewerState {
         let show_solar_system = settings.show_solar_system;
         let show_orbits = settings.show_orbits;
         let show_axes = settings.show_axes;
+        let show_magnetic_axis = settings.show_magnetic_axis;
         let show_coverage = settings.show_coverage;
         let coverage_angle = settings.coverage_angle;
         let time = settings.time;
@@ -2234,7 +2483,7 @@ impl ViewerState {
                     ui.vertical(|ui| {
                         let planet = &mut self.tabs[tab_idx].planets[planet_idx];
                         let view_flags = View3DFlags {
-                            show_orbits, show_axes, show_coverage, show_links, show_intra_links,
+                            show_orbits, show_axes, show_magnetic_axis, show_coverage, show_links, show_intra_links,
                             hide_behind_earth, single_color, dark_mode, show_routing_paths,
                             show_manhattan_path, show_shortest_path, show_radiation_path, radiation_weight,
                             show_asc_desc_colors,
@@ -2306,6 +2555,8 @@ impl ViewerState {
                                 _ => {}
                             }
                         }
+                        let mut ctx_menu_req: Option<(egui::Pos2, f64, f64)> = None;
+                        let mut label_click_req: Option<(bool, usize, egui::Pos2)> = None;
                         let (rot, new_zoom) = draw_3d_view(
                             ui,
                             &view_name,
@@ -2354,9 +2605,27 @@ impl ViewerState {
                             } else {
                                 None
                             },
+                            &mut ctx_menu_req,
+                            &mut label_click_req,
                         );
                         self.tabs[tab_idx].settings.rotation = rot;
                         self.tabs[tab_idx].settings.zoom = new_zoom;
+                        if let Some((screen_pos, lat, lon)) = ctx_menu_req {
+                            self.context_menu = Some(crate::viewer::ContextMenuState {
+                                screen_pos, lat, lon,
+                                tab_idx, planet_idx,
+                            });
+                            self.editing_place = None;
+                        }
+                        if let Some((is_gs, idx, click_pos)) = label_click_req {
+                            self.editing_place = Some(crate::viewer::EditingPlaceState {
+                                is_gs, idx,
+                                tab_idx, planet_idx,
+                                screen_pos: click_pos,
+                                just_opened: true,
+                            });
+                            self.context_menu = None;
+                        }
                     });
                 } else if render_planet && is_2d_projection {
                     ui.vertical(|ui| {
