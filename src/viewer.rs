@@ -578,6 +578,28 @@ impl ViewerState {
                                             }
                                         }
                                     });
+                                ui.label("Mode:");
+                                egui::ComboBox::from_id_salt(format!("aoi_mode_{}", idx))
+                                    .selected_text(match aoi.job_mode {
+                                        crate::config::AoiJobMode::Route => "Route",
+                                        crate::config::AoiJobMode::SpaceComp => "SpaceCoMP",
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        if ui.selectable_label(aoi.job_mode == crate::config::AoiJobMode::Route, "Route").clicked() {
+                                            aoi.job_mode = crate::config::AoiJobMode::Route;
+                                            aoi_changed = true;
+                                        }
+                                        if ui.selectable_label(aoi.job_mode == crate::config::AoiJobMode::SpaceComp, "SpaceCoMP").clicked() {
+                                            aoi.job_mode = crate::config::AoiJobMode::SpaceComp;
+                                            aoi_changed = true;
+                                        }
+                                    });
+                                if aoi.job_mode == crate::config::AoiJobMode::SpaceComp {
+                                    ui.label("n:");
+                                    if ui.add(egui::DragValue::new(&mut aoi.job_n).range(1..=50).speed(0.2)).changed() {
+                                        aoi_changed = true;
+                                    }
+                                }
                             });
                         }
                         if let Some(clicked) = aoi_pass_clicked {
@@ -601,6 +623,8 @@ impl ViewerState {
                                 radius_km: 500.0,
                                 color: egui::Color32::from_rgba_unmultiplied(100, 200, 100, 100),
                                 ground_station_idx: None,
+                                job_mode: crate::config::AoiJobMode::Route,
+                                job_n: 3,
                                 selected: false,
                             });
                             aoi_changed = true;

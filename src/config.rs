@@ -109,6 +109,12 @@ pub struct GroundStation {
     pub selected: bool,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum AoiJobMode {
+    Route,
+    SpaceComp,
+}
+
 #[derive(Clone)]
 pub struct AreaOfInterest {
     pub name: String,
@@ -117,6 +123,8 @@ pub struct AreaOfInterest {
     pub radius_km: f64,
     pub color: egui::Color32,
     pub ground_station_idx: Option<usize>,
+    pub job_mode: AoiJobMode,
+    pub job_n: usize,
     pub selected: bool,
 }
 

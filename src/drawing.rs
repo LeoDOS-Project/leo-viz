@@ -6,7 +6,7 @@
 
 use crate::celestial::{CelestialBody, Skin, TextureResolution};
 use crate::config::{
-    AreaOfInterest, ConjunctionInfo, DeviceLayer, GroundStation, RadiationConfig, SatelliteCamera, View3DFlags,
+    AoiJobMode, AreaOfInterest, ConjunctionInfo, DeviceLayer, GroundStation, RadiationConfig, SatelliteCamera, View3DFlags,
 };
 use crate::geo::CityLabel;
 use crate::math::{rotate_point_matrix, rotation_from_drag};
@@ -1886,6 +1886,8 @@ pub fn draw_3d_view(
         for aoi in areas_of_interest {
             if let Some(gs_idx) = aoi.ground_station_idx {
                 if let Some(gs) = ground_stations.get(gs_idx) {
+                    match aoi.job_mode {
+                    AoiJobMode::Route => {
                     let find_nearest_sat = |center_lat: f64, center_lon: f64, radius_km: f64, ascending_filter: Option<bool>|
                         -> Option<(usize, &WalkerConstellation, &Vec<SatelliteState>, &SatelliteState)>
                     {
@@ -1973,6 +1975,209 @@ pub fn draw_3d_view(
                                 .radius(dot_size as f32)
                                 .color(path_color),
                         );
+                    }
+                    }
+                    AoiJobMode::SpaceComp => {
+                        let routing_width = (scaled_link_width + 3.0).max(3.0);
+                        let color_collector = egui::Color32::from_rgb(100, 200, 255);
+                        let color_mapper = egui::Color32::from_rgb(255, 165, 0);
+                        let color_reducer = egui::Color32::from_rgb(220, 50, 220);
+                        let color_gs = egui::Color32::from_rgb(255, 255, 0);
+
+                        for (_cidx, (cons, positions, _, tle_kind, _, _)) in constellations.iter().enumerate() {
+                            if *tle_kind != 0 { continue; }
+                            let is_star = cons.walker_type == WalkerType::Star;
+                            let job = crate::spacecomp::compute_spacecomp_job(
+                                aoi.lat, aoi.lon, aoi.radius_km,
+                                gs.lat, gs.lon, gs.radius_km,
+                                positions,
+                                cons,
+                                is_star,
+                                planet_radius, body_rot_angle,
+                                aoi.job_n,
+                            );
+                            let Some(job) = job else { continue };
+
+                            let px_to_world_off = 2.0 * margin / width as f64;
+                            let offset_unit = routing_width as f64 * px_to_world_off * 1.3;
+
+                            let mut all_paths: Vec<(Vec<(usize, usize)>, egui::Color32)> = Vec::new();
+
+                            for &(ci, mi) in &job.assignments {
+                                let (cp, cs) = job.collectors[ci];
+                                let (mp, ms) = job.mappers[mi];
+                                let path = compute_shortest_path(
+                                    cp, cs, mp, ms,
+                                    cons.num_planes, cons.sats_per_plane(),
+                                    positions, is_star,
+                                );
+                                all_paths.push((path, color_collector));
+                            }
+
+                            let mut drawn_mappers = std::collections::HashSet::new();
+                            for &(_ci, mi) in &job.assignments {
+                                if drawn_mappers.insert(mi) {
+                                    let (mp, ms) = job.mappers[mi];
+                                    let (rp, rs) = job.reducer;
+                                    let path = compute_shortest_path(
+                                        mp, ms, rp, rs,
+                                        cons.num_planes, cons.sats_per_plane(),
+                                        positions, is_star,
+                                    );
+                                    all_paths.push((path, color_mapper));
+                                }
+                            }
+
+                            {
+                                let (rp, rs) = job.reducer;
+                                let (gp, gsi) = job.gs_sat;
+                                let path = compute_shortest_path(
+                                    rp, rs, gp, gsi,
+                                    cons.num_planes, cons.sats_per_plane(),
+                                    positions, is_star,
+                                );
+                                all_paths.push((path, color_reducer));
+                            }
+
+                            type Edge = ((usize, usize), (usize, usize));
+                            let norm_edge = |a: (usize, usize), b: (usize, usize)| -> Edge {
+                                if a <= b { (a, b) } else { (b, a) }
+                            };
+                            let mut edge_count: std::collections::HashMap<Edge, usize> = std::collections::HashMap::new();
+                            for (path, _) in &all_paths {
+                                for w in path.windows(2) {
+                                    let e = norm_edge(w[0], w[1]);
+                                    *edge_count.entry(e).or_insert(0) += 1;
+                                }
+                            }
+                            let mut edge_idx: std::collections::HashMap<Edge, usize> = std::collections::HashMap::new();
+
+                            let mut edge_perp: std::collections::HashMap<Edge, (f64, f64)> = std::collections::HashMap::new();
+                            for (path, _) in &all_paths {
+                                for w in path.windows(2) {
+                                    let e = norm_edge(w[0], w[1]);
+                                    if edge_perp.contains_key(&e) { continue; }
+                                    let pa = positions.iter().find(|s| s.plane == e.0.0 && s.sat_index == e.0.1);
+                                    let pb = positions.iter().find(|s| s.plane == e.1.0 && s.sat_index == e.1.1);
+                                    if let (Some(a), Some(b)) = (pa, pb) {
+                                        let (ax, ay, _) = rotate_point_matrix(a.x, a.y, a.z, &satellite_rotation);
+                                        let (bx, by, _) = rotate_point_matrix(b.x, b.y, b.z, &satellite_rotation);
+                                        let dx = bx - ax;
+                                        let dy = by - ay;
+                                        let len = (dx * dx + dy * dy).sqrt();
+                                        if len > 1e-12 {
+                                            edge_perp.insert(e, (-dy / len, dx / len));
+                                        } else {
+                                            edge_perp.insert(e, (0.0, 0.0));
+                                        }
+                                    }
+                                }
+                            }
+
+                            for (path, color) in &all_paths {
+                                for w in path.windows(2) {
+                                    let e = norm_edge(w[0], w[1]);
+                                    let total = edge_count[&e];
+                                    let idx = edge_idx.entry(e).or_insert(0);
+                                    let spread = (*idx as f64 - (total - 1) as f64 / 2.0) * offset_unit;
+                                    *idx += 1;
+
+                                    let &(px, py) = edge_perp.get(&e).unwrap_or(&(0.0, 0.0));
+                                    let nx = px * spread;
+                                    let ny = py * spread;
+
+                                    let pos1 = positions.iter().find(|s| s.plane == w[0].0 && s.sat_index == w[0].1);
+                                    let pos2 = positions.iter().find(|s| s.plane == w[1].0 && s.sat_index == w[1].1);
+                                    if let (Some(p1), Some(p2)) = (pos1, pos2) {
+                                        let (rx1, ry1, rz1) = rotate_point_matrix(p1.x, p1.y, p1.z, &satellite_rotation);
+                                        let (rx2, ry2, rz2) = rotate_point_matrix(p2.x, p2.y, p2.z, &satellite_rotation);
+
+                                        let visible1 = rz1 >= 0.0 || (rx1 * rx1 + ry1 * ry1) >= earth_r_sq;
+                                        let visible2 = rz2 >= 0.0 || (rx2 * rx2 + ry2 * ry2) >= earth_r_sq;
+
+                                        if hide_behind_earth {
+                                            if let Some((cp1, cp2)) = clip_link_at_earth(rx1, ry1, rz1, visible1, rx2, ry2, rz2, visible2, earth_r_sq) {
+                                                plot_ui.line(
+                                                    Line::new("", PlotPoints::new(vec![
+                                                        [cp1[0] + nx, cp1[1] + ny],
+                                                        [cp2[0] + nx, cp2[1] + ny],
+                                                    ]))
+                                                        .color(*color)
+                                                        .width(routing_width),
+                                                );
+                                            }
+                                        } else {
+                                            let line_color = if visible1 && visible2 {
+                                                *color
+                                            } else {
+                                                egui::Color32::from_rgba_unmultiplied(
+                                                    color.r() / 2, color.g() / 2, color.b() / 2, 150,
+                                                )
+                                            };
+                                            plot_ui.line(
+                                                Line::new("", PlotPoints::new(vec![
+                                                    [rx1 + nx, ry1 + ny], [rx2 + nx, ry2 + ny],
+                                                ]))
+                                                    .color(line_color)
+                                                    .width(routing_width),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+
+                            let px_to_world = 2.0 * margin / width as f64;
+                            let circle_r = scaled_sat_radius as f64 * px_to_world * 2.5;
+                            let circle_segs = 24;
+                            let make_circle = |cx: f64, cy: f64, r: f64| -> Vec<[f64; 2]> {
+                                (0..=circle_segs)
+                                    .map(|i| {
+                                        let angle = 2.0 * PI * i as f64 / circle_segs as f64;
+                                        [cx + r * angle.cos(), cy + r * angle.sin()]
+                                    })
+                                    .collect()
+                            };
+
+                            let mut circles: Vec<(f64, f64, f64, egui::Color32)> = Vec::new();
+                            for &(cp, cs) in &job.collectors {
+                                if let Some(s) = positions.iter().find(|s| s.plane == cp && s.sat_index == cs) {
+                                    let (rx, ry, _) = rotate_point_matrix(s.x, s.y, s.z, &satellite_rotation);
+                                    circles.push((rx, ry, circle_r, color_collector));
+                                }
+                            }
+                            for &(mp, ms) in &job.mappers {
+                                if let Some(s) = positions.iter().find(|s| s.plane == mp && s.sat_index == ms) {
+                                    let (rx, ry, _) = rotate_point_matrix(s.x, s.y, s.z, &satellite_rotation);
+                                    circles.push((rx, ry, circle_r, color_mapper));
+                                }
+                            }
+                            {
+                                let (rp, rs) = job.reducer;
+                                if let Some(s) = positions.iter().find(|s| s.plane == rp && s.sat_index == rs) {
+                                    let (rx, ry, _) = rotate_point_matrix(s.x, s.y, s.z, &satellite_rotation);
+                                    circles.push((rx, ry, circle_r * 1.5, color_reducer));
+                                }
+                            }
+                            {
+                                let (gp, gsi) = job.gs_sat;
+                                if let Some(s) = positions.iter().find(|s| s.plane == gp && s.sat_index == gsi) {
+                                    let (rx, ry, _) = rotate_point_matrix(s.x, s.y, s.z, &satellite_rotation);
+                                    circles.push((rx, ry, circle_r * 1.2, color_gs));
+                                }
+                            }
+
+                            for &(cx, cy, r, color) in &circles {
+                                let pts = make_circle(cx, cy, r);
+                                plot_ui.line(
+                                    Line::new("", PlotPoints::new(pts))
+                                        .color(color)
+                                        .width(routing_width * 0.6),
+                                );
+                            }
+
+                            break;
+                        }
+                    }
                     }
                 }
             }

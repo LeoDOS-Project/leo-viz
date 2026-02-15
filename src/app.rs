@@ -277,6 +277,13 @@ impl App {
             first_frame: true,
         };
 
+        {
+            let gmst = greenwich_mean_sidereal_time(app.viewer.start_timestamp);
+            app.viewer.current_gmst = gmst;
+            let body_rot = body_rotation_angle(CelestialBody::Earth, 0.0, gmst);
+            app.viewer.tabs[0].settings.rotation = crate::math::lat_lon_to_matrix(0.0, body_rot);
+        }
+
         #[cfg(target_arch = "wasm32")]
         {
             let loc = web_sys::window().and_then(|w| Some(w.location()));

@@ -21,6 +21,7 @@ mod kessler;
 mod radiation;
 mod igrf;
 mod projection;
+mod spacecomp;
 mod aep8;
 mod solar_system;
 
