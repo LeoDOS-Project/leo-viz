@@ -135,7 +135,7 @@ impl Projection for AzimuthalEquidistant {
         let lon_rad = lon_deg.to_radians();
         let c = (PI / 2.0) - lat_rad;
         let x = c * lon_rad.sin();
-        let y = c * lon_rad.cos();
+        let y = -c * lon_rad.cos();
         Some((x / PI * AE_SCALE, y / PI * AE_SCALE))
     }
     fn inverse(&self, x: f64, y: f64) -> Option<(f64, f64)> {
@@ -144,7 +144,7 @@ impl Projection for AzimuthalEquidistant {
         let c = (xn * xn + yn * yn).sqrt();
         if c > PI { return None; }
         let lat_rad = (PI / 2.0) - c;
-        let lon_rad = yn.atan2(xn);
+        let lon_rad = xn.atan2(-yn);
         Some((lat_rad.to_degrees(), lon_rad.to_degrees()))
     }
     fn x_range(&self) -> (f64, f64) { (-AE_SCALE, AE_SCALE) }

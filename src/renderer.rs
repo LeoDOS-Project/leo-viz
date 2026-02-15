@@ -996,7 +996,7 @@ impl MapRenderer {
                         float c=sqrt(xn*xn+yn*yn);
                         if(c>PI) return vec2(-999.0);
                         return vec2(degrees(PI/2.0-c),
-                                    degrees(atan(yn,xn)));
+                                    degrees(atan(xn,-yn)));
                     }
                     if (p == 5) {
                         float xn=x/HAM_S, yn=y/HAM_S;

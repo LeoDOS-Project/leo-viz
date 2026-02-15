@@ -495,7 +495,7 @@ pub fn draw_3d_view(
         show_manhattan_path, show_shortest_path, show_radiation_path, radiation_weight,
         show_asc_desc_colors,
         show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
-        show_equator, show_graticule, show_terminator, earth_fixed_camera, use_gpu_rendering,
+        show_equator, show_graticule, show_crosshairs, show_terminator, earth_fixed_camera, use_gpu_rendering,
         show_clouds, show_day_night, show_stars, show_borders, show_cities,
         trackpad_rotate,
         north_up,
@@ -1273,6 +1273,67 @@ pub fn draw_3d_view(
                 if !back_seg.is_empty() && !hide_behind_earth {
                     plot_ui.line(Line::new("", PlotPoints::new(back_seg))
                         .color(grat_dim).width(0.5));
+                }
+            }
+        }
+
+        if show_crosshairs {
+            if let Some(ptr) = plot_ui.pointer_coordinate() {
+                let px = ptr.x;
+                let py = ptr.y;
+                if px * px + py * py <= earth_r_sq {
+                    let pz = (earth_r_sq - px * px - py * py).sqrt();
+                    let inv = surface_rotation.transpose();
+                    let orig = inv * Vector3::new(px, py, pz);
+                    let lat = (orig.y / planet_radius).asin();
+                    let lon = -(orig.z.atan2(orig.x));
+                    let cursor_color = egui::Color32::from_rgba_unmultiplied(200, 200, 200, 100);
+                    let n_pts = 200;
+                    let cos_lat = lat.cos();
+                    let sin_lat = lat.sin();
+                    let mut front_seg: Vec<[f64; 2]> = Vec::new();
+                    for i in 0..=n_pts {
+                        let theta = 2.0 * PI * i as f64 / n_pts as f64;
+                        let x = planet_radius * cos_lat * theta.cos();
+                        let y = planet_radius * sin_lat;
+                        let z = planet_radius * cos_lat * theta.sin();
+                        let (rx, ry, rz) = rotate_point_matrix(x, y, z, &surface_rotation);
+                        if rz < 0.0 && (rx * rx + ry * ry) < earth_r_sq {
+                            if front_seg.len() >= 2 {
+                                plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut front_seg)))
+                                    .color(cursor_color).width(0.5));
+                            } else { front_seg.clear(); }
+                        } else {
+                            front_seg.push([rx, ry]);
+                        }
+                    }
+                    if front_seg.len() >= 2 {
+                        plot_ui.line(Line::new("", PlotPoints::new(front_seg))
+                            .color(cursor_color).width(0.5));
+                    }
+                    let cos_lon = lon.cos();
+                    let sin_lon = lon.sin();
+                    let mut front_seg: Vec<[f64; 2]> = Vec::new();
+                    for i in 0..=n_pts {
+                        let phi = -PI / 2.0 + PI * i as f64 / n_pts as f64;
+                        let cp = phi.cos();
+                        let x = planet_radius * cp * cos_lon;
+                        let y = planet_radius * phi.sin();
+                        let z = -planet_radius * cp * sin_lon;
+                        let (rx, ry, rz) = rotate_point_matrix(x, y, z, &surface_rotation);
+                        if rz < 0.0 && (rx * rx + ry * ry) < earth_r_sq {
+                            if front_seg.len() >= 2 {
+                                plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut front_seg)))
+                                    .color(cursor_color).width(0.5));
+                            } else { front_seg.clear(); }
+                        } else {
+                            front_seg.push([rx, ry]);
+                        }
+                    }
+                    if front_seg.len() >= 2 {
+                        plot_ui.line(Line::new("", PlotPoints::new(front_seg))
+                            .color(cursor_color).width(0.5));
+                    }
                 }
             }
         }
@@ -2994,6 +3055,7 @@ pub fn draw_map_view(
     show_radiation_path: bool,
     radiation_weight: f64,
     show_graticule: bool,
+    show_crosshairs: bool,
     satellite_cameras: &[SatelliteCamera],
     planet_radius: f64,
     geo_borders: &[Vec<(f64, f64)>],
@@ -3040,8 +3102,11 @@ pub fn draw_map_view(
         .data_aspect(1.0)
         .show_axes([!use_gpu, !use_gpu])
         .show_grid(!use_gpu)
+        .show_x(!use_gpu)
+        .show_y(!use_gpu)
         .show_background(!use_gpu);
 
+    let mut crosshair_tooltip: Option<(egui::Pos2, f64, f64)> = None;
     plot.show(ui, |plot_ui| {
         let pb = plot_ui.plot_bounds();
         *shared_bounds.lock() = [pb.min()[0], pb.max()[0], pb.min()[1], pb.max()[1]];
@@ -3074,6 +3139,27 @@ pub fn draw_map_view(
                 .map(|lat| (lat as f64, 0.0)).collect();
             for seg in project_segments(proj, &prime) {
                 plot_ui.line(Line::new("", PlotPoints::new(seg)).color(grid_color).width(0.5));
+            }
+        }
+
+        if show_crosshairs {
+            if let Some(ptr) = plot_ui.pointer_coordinate() {
+                if let Some((lat, lon)) = proj.inverse(ptr.x, ptr.y) {
+                    let cursor_color = egui::Color32::from_rgba_unmultiplied(200, 200, 200, 100);
+                    let lat_line: Vec<(f64, f64)> = (-180..=180).step_by(2)
+                        .map(|lo| (lat, lo as f64)).collect();
+                    for seg in project_segments(proj, &lat_line) {
+                        plot_ui.line(Line::new("", PlotPoints::new(seg)).color(cursor_color).width(0.5));
+                    }
+                    let lon_line: Vec<(f64, f64)> = (-90..=90).step_by(2)
+                        .map(|la| (la as f64, lon)).collect();
+                    for seg in project_segments(proj, &lon_line) {
+                        plot_ui.line(Line::new("", PlotPoints::new(seg)).color(cursor_color).width(0.5));
+                    }
+                    if let Some(screen_pos) = plot_ui.response().hover_pos() {
+                        crosshair_tooltip = Some((screen_pos, lat, lon));
+                    }
+                }
             }
         }
 
@@ -3259,6 +3345,19 @@ pub fn draw_map_view(
             }
         }
     });
+
+    if let Some((screen_pos, lat, lon)) = crosshair_tooltip {
+        let text = format!("{:.1}° {:.1}°", lat, lon);
+        let font = egui::FontId::proportional(12.0);
+        let text_pos = screen_pos + egui::Vec2::new(15.0, -15.0);
+        let galley = ui.painter().layout_no_wrap(text, font, egui::Color32::WHITE);
+        let rect = egui::Rect::from_min_size(
+            text_pos - egui::Vec2::new(0.0, galley.size().y),
+            galley.size(),
+        ).expand(3.0);
+        ui.painter().rect_filled(rect, 3.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180));
+        ui.painter().galley(text_pos - egui::Vec2::new(0.0, galley.size().y), galley, egui::Color32::WHITE);
+    }
 }
 
 pub fn draw_torus(

@@ -310,6 +310,7 @@ impl ViewerState {
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_polar_circle, "Show polar circle"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_equator, "Show equator"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_graticule, "Show graticule"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_crosshairs, "Show crosshairs"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_borders, "Country borders"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_cities, "City labels"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_devices, "Show devices"));
