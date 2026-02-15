@@ -92,6 +92,7 @@ impl EarthTexture {
         self.pixels[(y * self.width + x) as usize]
     }
 
+    #[allow(dead_code)]
     pub fn sample_bilinear(&self, u: f64, v: f64) -> [u8; 3] {
         let fx = u * self.width as f64 - 0.5;
         let fy = v * self.height as f64 - 0.5;

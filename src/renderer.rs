@@ -827,3 +827,489 @@ impl SphereRenderer {
         }
     }
 }
+
+pub struct MapRenderer {
+    program: glow::Program,
+    vertex_array: glow::VertexArray,
+    earth_texture: Option<glow::Texture>,
+    texture_key: Option<(CelestialBody, Skin, TextureResolution)>,
+}
+
+impl MapRenderer {
+    pub fn new(gl: &glow::Context) -> Self {
+        let shader_version = if cfg!(target_arch = "wasm32") {
+            "#version 300 es"
+        } else {
+            "#version 330"
+        };
+
+        unsafe {
+            let program = gl.create_program().expect("Cannot create program");
+
+            let vertex_shader_source = r#"
+                const vec2 verts[4] = vec2[4](
+                    vec2(-1.0, -1.0),
+                    vec2( 1.0, -1.0),
+                    vec2(-1.0,  1.0),
+                    vec2( 1.0,  1.0)
+                );
+                out vec2 v_uv;
+                void main() {
+                    v_uv = verts[gl_VertexID] * 0.5 + 0.5;
+                    gl_Position = vec4(verts[gl_VertexID], 0.0, 1.0);
+                }
+            "#;
+
+            let fragment_shader_source = r#"
+                precision highp float;
+                in vec2 v_uv;
+                out vec4 out_color;
+
+                uniform sampler2D u_earth;
+                uniform int u_projection;
+                uniform vec4 u_bounds;
+                uniform vec4 u_peirce;
+                uniform float u_peirce_inv_scale;
+
+                const float PI = 3.14159265359;
+                const float MOLL_S = 90.0;
+                const float SIN_SX = 180.0;
+                const float SIN_SY = 90.0;
+                const float AE_S = 180.0;
+                const float HAM_S = 90.0;
+                const float CASS_S = 57.29577951;
+                const float UTM_S = 57.29577951;
+                const float LAEA_S = 90.0;
+
+                vec3 ej(float u, float m) {
+                    if (m < 1e-15) return vec3(sin(u), cos(u), 1.0);
+                    if (m >= 1.0 - 1e-15) {
+                        float t = tanh(u);
+                        float s = 1.0 / cosh(u);
+                        return vec3(t, s, s);
+                    }
+                    float aa[9], cc[9];
+                    aa[0] = 1.0; cc[0] = sqrt(m);
+                    float b = sqrt(1.0 - m);
+                    int i = 0; float twon = 1.0;
+                    for (int iter = 0; iter < 8; iter++) {
+                        float ai = aa[i];
+                        if (abs(cc[i] / ai) <= 1e-14) break;
+                        i++;
+                        cc[i] = (ai - b) / 2.0;
+                        aa[i] = (ai + b) / 2.0;
+                        b = sqrt(ai * b);
+                        twon *= 2.0;
+                    }
+                    float phi = twon * aa[i] * u;
+                    float bp = phi;
+                    for (int iter = 0; iter < 9; iter++) {
+                        bp = phi;
+                        float t = cc[i] * sin(phi) / aa[i];
+                        phi = (asin(clamp(t, -1.0, 1.0)) + phi) / 2.0;
+                        i--;
+                        if (i == 0) break;
+                    }
+                    float cn = cos(phi);
+                    float dc = cos(phi - bp);
+                    float dn = abs(dc) > 1e-30 ? cn / dc : 1.0;
+                    return vec3(sin(phi), cn, dn);
+                }
+
+                void eji(float u, float v, float m,
+                         out vec2 sn, out vec2 cn, out vec2 dn) {
+                    if (abs(u) < 1e-15) {
+                        vec3 j = ej(v, 1.0 - m);
+                        sn = vec2(0.0, j.x / j.y);
+                        cn = vec2(1.0 / j.y, 0.0);
+                        dn = vec2(j.z / j.y, 0.0);
+                        return;
+                    }
+                    vec3 ja = ej(u, m);
+                    if (abs(v) < 1e-15) {
+                        sn = vec2(ja.x, 0.0);
+                        cn = vec2(ja.y, 0.0);
+                        dn = vec2(ja.z, 0.0);
+                        return;
+                    }
+                    vec3 jb = ej(v, 1.0 - m);
+                    float d = jb.y * jb.y + m * ja.x * ja.x * jb.x * jb.x;
+                    sn = vec2(ja.x * jb.z / d,
+                              ja.y * ja.z * jb.x * jb.y / d);
+                    cn = vec2(ja.y * jb.y / d,
+                             -ja.x * ja.z * jb.x * jb.z / d);
+                    dn = vec2(ja.z * jb.y * jb.z / d,
+                             -m * ja.x * ja.y * jb.x / d);
+                }
+
+                vec2 guyou_inv(float x, float y,
+                               float k_, float m, float bk) {
+                    vec2 sn, cn, dn;
+                    eji(0.5 * bk - y, -x, m, sn, cn, dn);
+                    float d = cn.x * cn.x + cn.y * cn.y;
+                    if (d < 1e-30) return vec2(0.0, 0.0);
+                    float tr = (sn.x * cn.x + sn.y * cn.y) / d;
+                    float ti = (sn.y * cn.x - sn.x * cn.y) / d;
+                    float lam = -atan(ti, tr);
+                    float la = k_ * (tr * tr + ti * ti);
+                    float phi = 2.0 * atan(exp(-0.5 * log(la)))
+                                - PI / 2.0;
+                    return vec2(lam, phi);
+                }
+
+                vec2 inv_proj(int p, float x, float y) {
+                    if (p == 0) {
+                        if (abs(x) > 180.0 || abs(y) > 90.0)
+                            return vec2(-999.0);
+                        return vec2(y, x);
+                    }
+                    if (p == 1) {
+                        float lr = 2.0*atan(exp(radians(y)))-PI/2.0;
+                        float ld = degrees(lr);
+                        if (abs(ld)>85.0||abs(x)>180.0)
+                            return vec2(-999.0);
+                        return vec2(ld, x);
+                    }
+                    if (p == 2) {
+                        float xn=x/MOLL_S, yn=y/MOLL_S;
+                        float st=yn/sqrt(2.0);
+                        if(abs(st)>1.0) return vec2(-999.0);
+                        float th=asin(st), ct=cos(th);
+                        if(abs(ct)<1e-10) return vec2(-999.0);
+                        float lon=PI*xn/(2.0*sqrt(2.0)*ct);
+                        if(abs(lon)>PI) return vec2(-999.0);
+                        float sl=(2.0*th+sin(2.0*th))/PI;
+                        if(abs(sl)>1.0) return vec2(-999.0);
+                        return vec2(degrees(asin(sl)),degrees(lon));
+                    }
+                    if (p == 3) {
+                        float lr=y/SIN_SY*(PI/2.0);
+                        if(abs(lr)>PI/2.0) return vec2(-999.0);
+                        float cl=cos(lr);
+                        if(abs(cl)<1e-10) return vec2(-999.0);
+                        float lon=x/SIN_SX*PI/cl;
+                        if(abs(lon)>PI) return vec2(-999.0);
+                        return vec2(degrees(lr),degrees(lon));
+                    }
+                    if (p == 4) {
+                        float xn=x/AE_S*PI, yn=y/AE_S*PI;
+                        float c=sqrt(xn*xn+yn*yn);
+                        if(c>PI) return vec2(-999.0);
+                        return vec2(degrees(PI/2.0-c),
+                                    degrees(atan(yn,xn)));
+                    }
+                    if (p == 5) {
+                        float xn=x/HAM_S, yn=y/HAM_S;
+                        float z2=1.0-(xn/4.0)*(xn/4.0)
+                                     -(yn/2.0)*(yn/2.0);
+                        if(z2<0.0) return vec2(-999.0);
+                        float z=sqrt(z2);
+                        float lon=2.0*atan(z*xn,
+                                           2.0*(2.0*z2-1.0));
+                        float sl=z*yn;
+                        if(abs(sl)>1.0) return vec2(-999.0);
+                        if(abs(lon)>PI) return vec2(-999.0);
+                        return vec2(degrees(asin(sl)),
+                                    degrees(lon));
+                    }
+                    if (p == 6) {
+                        float xr=radians(x), yr=radians(y);
+                        if(abs(yr)>PI/2.0) return vec2(-999.0);
+                        if(abs(yr)<=PI/4.0) {
+                            float sp=8.0*yr/(3.0*PI);
+                            if(abs(sp)>1.0) return vec2(-999.0);
+                            if(abs(xr)>PI) return vec2(-999.0);
+                            return vec2(degrees(asin(sp)),
+                                        degrees(xr));
+                        }
+                        float sv=sign(yr);
+                        float sig=2.0-4.0*abs(yr)/PI;
+                        if(sig<1e-10) return vec2(sv*90.0,0.0);
+                        float step=PI/2.0;
+                        float lc=round((xr-PI/4.0)/step)*step
+                                  +PI/4.0;
+                        float lam=lc+(xr-lc)/sig;
+                        if(abs(lam-lc)>step/2.0+0.001)
+                            return vec2(-999.0);
+                        if(abs(lam)>PI+0.001)
+                            return vec2(-999.0);
+                        float sp=1.0-sig*sig/3.0;
+                        if(sp>1.0) return vec2(-999.0);
+                        return vec2(sv*degrees(asin(sp)),
+                                    clamp(degrees(lam),
+                                          -180.0,180.0));
+                    }
+                    if (p == 7) {
+                        float xr=x/CASS_S, yr=y/CASS_S;
+                        if(abs(xr)>PI/2.0)return vec2(-999.0);
+                        return vec2(degrees(asin(sin(yr)*cos(xr))),
+                                    degrees(atan(tan(xr),cos(yr))));
+                    }
+                    if (p == 8) {
+                        float zone=clamp(floor((x+180.0)/6.0),
+                                         0.0,59.0);
+                        float cm=zone*6.0-177.0;
+                        float xr=(x-cm)/UTM_S, yr=y/UTM_S;
+                        float sl=sin(yr)/cosh(xr);
+                        if(abs(sl)>1.0) return vec2(-999.0);
+                        float dl=atan(sinh(xr),cos(yr));
+                        if(abs(dl)>radians(3.0)+0.001)
+                            return vec2(-999.0);
+                        return vec2(degrees(asin(sl)),
+                                    cm+degrees(dl));
+                    }
+                    if (p == 9) {
+                        float xn=x/LAEA_S, yn=y/LAEA_S;
+                        float rho=sqrt(xn*xn+yn*yn);
+                        if(rho>2.0) return vec2(-999.0);
+                        if(rho<1e-10) return vec2(0.0,0.0);
+                        float c=2.0*asin(rho/2.0);
+                        return vec2(degrees(asin(yn*sin(c)/rho)),
+                                    degrees(atan(xn*sin(c),
+                                                 rho*cos(c))));
+                    }
+                    if (p == 10) {
+                        float s12 = sqrt(0.5);
+                        float pm = u_peirce.x;
+                        float pk = u_peirce.y;
+                        float pbk = u_peirce.z;
+                        float pdx = u_peirce.w;
+                        float xx = x * u_peirce_inv_scale;
+                        float yy = y * u_peirce_inv_scale;
+                        float gx = (xx + yy) * s12;
+                        float gy = (yy - xx) * s12;
+                        float hd = 0.5 * pdx;
+                        bool front = abs(gx)<hd+0.001
+                                  && abs(gy)<hd+0.001;
+                        if (front) {
+                            vec2 ll = guyou_inv(gx, gy,
+                                               pk, pm, pbk);
+                            float la = degrees(ll.y);
+                            float lo = degrees(ll.x);
+                            if (abs(la)<=90.0&&abs(lo)<=180.0)
+                                return vec2(la, lo);
+                            return vec2(-999.0);
+                        }
+                        float dd = pdx * s12;
+                        float ss = ((xx>0.0)!=(yy>0.0))
+                                   ? -1.0 : 1.0;
+                        float x1 = -ss*xx
+                            + (yy>0.0?1.0:-1.0)*dd;
+                        float y1 = -ss*yy
+                            + (xx>0.0?1.0:-1.0)*dd;
+                        float gx2 = (-x1-y1)*s12;
+                        float gy2 = (x1-y1)*s12;
+                        vec2 ll = guyou_inv(gx2, gy2,
+                                           pk, pm, pbk);
+                        float lo = degrees(ll.x)
+                            + (gx2>0.0 ? 180.0 : -180.0);
+                        float la = degrees(ll.y);
+                        if (abs(la)<=90.0&&abs(lo)<=180.0)
+                            return vec2(la, lo);
+                        return vec2(-999.0);
+                    }
+                    return vec2(-999.0);
+                }
+
+                void main() {
+                    float x = mix(u_bounds.x, u_bounds.y, v_uv.x);
+                    float y = mix(u_bounds.z, u_bounds.w, v_uv.y);
+                    vec2 ll = inv_proj(u_projection, x, y);
+                    if (ll.x < -900.0) {
+                        out_color = vec4(0.0);
+                        return;
+                    }
+                    float u = (ll.y + 180.0) / 360.0;
+                    float v = (90.0 - ll.x) / 180.0;
+                    out_color = texture(u_earth, vec2(u, v));
+                }
+            "#;
+
+            let shader_sources = [
+                (glow::VERTEX_SHADER, vertex_shader_source),
+                (glow::FRAGMENT_SHADER, fragment_shader_source),
+            ];
+
+            let shaders: Vec<_> = shader_sources
+                .iter()
+                .map(|(shader_type, shader_source)| {
+                    let shader = gl
+                        .create_shader(*shader_type)
+                        .expect("Cannot create shader");
+                    gl.shader_source(
+                        shader,
+                        &format!("{shader_version}\n{shader_source}"),
+                    );
+                    gl.compile_shader(shader);
+                    assert!(
+                        gl.get_shader_compile_status(shader),
+                        "Failed to compile map shader: {}",
+                        gl.get_shader_info_log(shader)
+                    );
+                    gl.attach_shader(program, shader);
+                    shader
+                })
+                .collect();
+
+            gl.link_program(program);
+            assert!(
+                gl.get_program_link_status(program),
+                "Failed to link map program: {}",
+                gl.get_program_info_log(program)
+            );
+
+            for shader in shaders {
+                gl.detach_shader(program, shader);
+                gl.delete_shader(shader);
+            }
+
+            let vertex_array = gl
+                .create_vertex_array()
+                .expect("Cannot create vertex array");
+
+            Self {
+                program,
+                vertex_array,
+                earth_texture: None,
+                texture_key: None,
+            }
+        }
+    }
+
+    pub fn upload_earth_texture(
+        &mut self,
+        gl: &glow::Context,
+        key: (CelestialBody, Skin, TextureResolution),
+        earth_tex: &crate::texture::EarthTexture,
+    ) {
+        if self.texture_key == Some(key) {
+            return;
+        }
+        if let Some(old) = self.earth_texture.take() {
+            unsafe { gl.delete_texture(old); }
+        }
+        unsafe {
+            let texture = gl
+                .create_texture()
+                .expect("Cannot create texture");
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            let pixels: Vec<u8> = earth_tex
+                .pixels
+                .iter()
+                .flat_map(|&[r, g, b]| [r, g, b])
+                .collect();
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGB as i32,
+                earth_tex.width as i32,
+                earth_tex.height as i32,
+                0,
+                glow::RGB,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(&pixels)),
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::LINEAR as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::LINEAR as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::REPEAT as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            self.earth_texture = Some(texture);
+            self.texture_key = Some(key);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn has_texture(&self) -> bool {
+        self.earth_texture.is_some()
+    }
+
+    #[allow(dead_code)]
+    pub fn invalidate_texture(&mut self, gl: &glow::Context) {
+        if let Some(tex) = self.earth_texture.take() {
+            unsafe { gl.delete_texture(tex); }
+        }
+    }
+
+    pub fn paint(
+        &self,
+        gl: &glow::Context,
+        proj_id: i32,
+        xmin: f64,
+        xmax: f64,
+        ymin: f64,
+        ymax: f64,
+    ) {
+        let Some(earth_tex) = self.earth_texture else {
+            return;
+        };
+
+        let pc = crate::projection::peirce_const();
+
+        unsafe {
+            gl.use_program(Some(self.program));
+            gl.bind_vertex_array(Some(self.vertex_array));
+
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(earth_tex));
+            gl.uniform_1_i32(
+                gl.get_uniform_location(self.program, "u_earth")
+                    .as_ref(),
+                0,
+            );
+
+            gl.uniform_1_i32(
+                gl.get_uniform_location(
+                    self.program, "u_projection",
+                ).as_ref(),
+                proj_id,
+            );
+            gl.uniform_4_f32(
+                gl.get_uniform_location(
+                    self.program, "u_bounds",
+                ).as_ref(),
+                xmin as f32, xmax as f32, ymin as f32, ymax as f32,
+            );
+            gl.uniform_4_f32(
+                gl.get_uniform_location(
+                    self.program, "u_peirce",
+                ).as_ref(),
+                pc.m as f32, pc.k_ as f32,
+                pc.big_k as f32, pc.dx as f32,
+            );
+            gl.uniform_1_f32(
+                gl.get_uniform_location(
+                    self.program, "u_peirce_inv_scale",
+                ).as_ref(),
+                pc.inv_scale as f32,
+            );
+
+            gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+        }
+    }
+
+    pub fn destroy(&self, gl: &glow::Context) {
+        unsafe {
+            gl.delete_program(self.program);
+            gl.delete_vertex_array(self.vertex_array);
+            if let Some(tex) = self.earth_texture {
+                gl.delete_texture(tex);
+            }
+        }
+    }
+}

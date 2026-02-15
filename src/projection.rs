@@ -15,7 +15,7 @@ pub(crate) struct Sinusoidal;
 pub(crate) struct AzimuthalEquidistant;
 pub(crate) struct Hammer;
 pub(crate) struct HEALPix;
-pub(crate) struct SpaceObliqueMercator;
+pub(crate) struct Cassini;
 pub(crate) struct TransverseMercator;
 
 impl Projection for Equirectangular {
@@ -232,42 +232,26 @@ impl Projection for HEALPix {
     fn y_range(&self) -> (f64, f64) { (-90.0, 90.0) }
 }
 
-const SOM_INCL_RAD: f64 = 53.0 * PI / 180.0;
-const SOM_SCALE: f64 = 180.0 / PI;
-const SOM_SWATH_DEG: f64 = 20.0;
+const CASSINI_SCALE: f64 = 180.0 / PI;
 
-impl Projection for SpaceObliqueMercator {
+impl Projection for Cassini {
     fn project(&self, lat_deg: f64, lon_deg: f64) -> Option<(f64, f64)> {
         let phi = lat_deg.to_radians();
         let lam = lon_deg.to_radians();
-        let (ci, si) = (SOM_INCL_RAD.cos(), SOM_INCL_RAD.sin());
-        let (x0, y0, z0) = (phi.cos() * lam.cos(), phi.cos() * lam.sin(), phi.sin());
-        let y1 = y0 * ci + z0 * si;
-        let z1 = -y0 * si + z0 * ci;
-        let phi1 = z1.clamp(-1.0, 1.0).asin();
-        if phi1.abs() > SOM_SWATH_DEG.to_radians() { return None; }
-        let lam1 = y1.atan2(x0);
-        let y_merc = (PI / 4.0 + phi1 / 2.0).tan().ln();
-        Some((lam1 * SOM_SCALE, y_merc * SOM_SCALE))
+        let x = (phi.cos() * lam.sin()).asin();
+        let y = phi.sin().atan2(phi.cos() * lam.cos());
+        Some((x * CASSINI_SCALE, y * CASSINI_SCALE))
     }
     fn inverse(&self, x: f64, y: f64) -> Option<(f64, f64)> {
-        let lam1 = x / SOM_SCALE;
-        let y_merc = y / SOM_SCALE;
-        let phi1 = 2.0 * y_merc.exp().atan() - PI / 2.0;
-        if phi1.abs() > SOM_SWATH_DEG.to_radians() { return None; }
-        let (ci, si) = (SOM_INCL_RAD.cos(), SOM_INCL_RAD.sin());
-        let (x1, y1, z1) = (phi1.cos() * lam1.cos(), phi1.cos() * lam1.sin(), phi1.sin());
-        let y0 = y1 * ci - z1 * si;
-        let z0 = y1 * si + z1 * ci;
-        let phi = z0.clamp(-1.0, 1.0).asin();
-        let lam = y0.atan2(x1);
-        Some((phi.to_degrees(), lam.to_degrees()))
+        let xr = x / CASSINI_SCALE;
+        let yr = y / CASSINI_SCALE;
+        if xr.abs() > PI / 2.0 { return None; }
+        let lat = (yr.sin() * xr.cos()).asin();
+        let lon = xr.tan().atan2(yr.cos());
+        Some((lat.to_degrees(), lon.to_degrees()))
     }
-    fn x_range(&self) -> (f64, f64) { (-180.0, 180.0) }
-    fn y_range(&self) -> (f64, f64) {
-        let y_max = (PI / 4.0 + SOM_SWATH_DEG.to_radians() / 2.0).tan().ln() * SOM_SCALE;
-        (-y_max, y_max)
-    }
+    fn x_range(&self) -> (f64, f64) { (-90.0, 90.0) }
+    fn y_range(&self) -> (f64, f64) { (-180.0, 180.0) }
 }
 
 const UTM_SCALE: f64 = 180.0 / PI;
@@ -300,6 +284,329 @@ impl Projection for TransverseMercator {
     fn y_range(&self) -> (f64, f64) { (-90.0, 90.0) }
 }
 
+const LAEA_SCALE: f64 = 90.0;
+
+pub(crate) struct LambertAzimuthalEqualArea;
+
+impl Projection for LambertAzimuthalEqualArea {
+    fn project(&self, lat_deg: f64, lon_deg: f64) -> Option<(f64, f64)> {
+        let phi = lat_deg.to_radians();
+        let lam = lon_deg.to_radians();
+        let denom = 1.0 + phi.cos() * lam.cos();
+        if denom < 1e-10 { return None; }
+        let k = (2.0 / denom).sqrt();
+        let x = k * phi.cos() * lam.sin();
+        let y = k * phi.sin();
+        Some((x * LAEA_SCALE, y * LAEA_SCALE))
+    }
+    fn inverse(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        let xn = x / LAEA_SCALE;
+        let yn = y / LAEA_SCALE;
+        let rho = (xn * xn + yn * yn).sqrt();
+        if rho > 2.0 { return None; }
+        if rho < 1e-10 { return Some((0.0, 0.0)); }
+        let c = 2.0 * (rho / 2.0).asin();
+        let lat = (yn * c.sin() / rho).asin();
+        let lon = (xn * c.sin()).atan2(rho * c.cos());
+        Some((lat.to_degrees(), lon.to_degrees()))
+    }
+    fn x_range(&self) -> (f64, f64) {
+        (-2.0 * LAEA_SCALE, 2.0 * LAEA_SCALE)
+    }
+    fn y_range(&self) -> (f64, f64) {
+        (-2.0 * LAEA_SCALE, 2.0 * LAEA_SCALE)
+    }
+}
+
+pub(crate) struct PeirceQuincuncial;
+
+const PEIRCE_SCALE: f64 = 90.0;
+
+fn elliptic_f(phi: f64, m: f64) -> f64 {
+    if m.abs() < 1e-15 { return phi; }
+    if (m - 1.0).abs() < 1e-15 {
+        return (phi / 2.0 + PI / 4.0).tan().ln();
+    }
+    let mut a = 1.0_f64;
+    let mut b = (1.0 - m).sqrt();
+    let mut c = m.sqrt();
+    let mut phi = phi;
+    let mut n = 0u32;
+    while c.abs() > 1e-14 && n < 30 {
+        let rem = phi % PI;
+        if rem.abs() > 1e-14 {
+            let mut d_phi = (b * phi.tan() / a).atan();
+            if d_phi < 0.0 { d_phi += PI; }
+            phi += d_phi + (phi / PI).floor() as f64 * PI;
+        } else {
+            phi += phi;
+        }
+        let temp = (a + b) / 2.0;
+        b = (a * b).sqrt();
+        a = temp;
+        c = a - b;
+        n += 1;
+    }
+    phi / (2.0_f64.powi(n as i32) * a)
+}
+
+fn elliptic_fi(phi: f64, psi: f64, m: f64) -> (f64, f64) {
+    let r = phi.abs();
+    let i_abs = psi.abs();
+    let sinh_psi = i_abs.sinh();
+    if r > 1e-14 {
+        let csc_phi = 1.0 / r.sin();
+        let cot_phi2 = 1.0 / (r.tan() * r.tan());
+        let b = -(cot_phi2
+            + m * (sinh_psi * sinh_psi * csc_phi * csc_phi)
+            - 1.0
+            + m);
+        let c = (m - 1.0) * cot_phi2;
+        let disc = (b * b - 4.0 * c).max(0.0);
+        let cot_lambda2 = (-b + disc.sqrt()) / 2.0;
+        (
+            elliptic_f((1.0 / cot_lambda2.sqrt()).atan(), m)
+                * phi.signum(),
+            elliptic_f(
+                ((cot_lambda2 / cot_phi2 - 1.0).max(0.0) / m)
+                    .sqrt()
+                    .atan(),
+                1.0 - m,
+            ) * psi.signum(),
+        )
+    } else {
+        (0.0, elliptic_f(sinh_psi.atan(), 1.0 - m) * psi.signum())
+    }
+}
+
+#[allow(dead_code)]
+fn elliptic_j(u: f64, m: f64) -> (f64, f64, f64) {
+    if m < 1e-15 {
+        return (u.sin(), u.cos(), 1.0);
+    }
+    if m >= 1.0 - 1e-15 {
+        let t = u.tanh();
+        let s = 1.0 / u.cosh();
+        return (t, s, s);
+    }
+    let mut a = [0.0_f64; 9];
+    let mut c = [0.0_f64; 9];
+    a[0] = 1.0;
+    c[0] = m.sqrt();
+    let mut b = (1.0 - m).sqrt();
+    let mut i = 0;
+    let mut twon = 1.0_f64;
+    while (c[i] / a[i]).abs() > 1e-14 && i < 8 {
+        let ai = a[i];
+        i += 1;
+        c[i] = (ai - b) / 2.0;
+        a[i] = (ai + b) / 2.0;
+        b = (ai * b).sqrt();
+        twon *= 2.0;
+    }
+    let mut phi = twon * a[i] * u;
+    let mut b_prev;
+    loop {
+        b_prev = phi;
+        let t = c[i] * phi.sin() / a[i];
+        phi = (t.clamp(-1.0, 1.0).asin() + phi) / 2.0;
+        i -= 1;
+        if i == 0 { break; }
+    }
+    let cn = phi.cos();
+    let diff_cos = (phi - b_prev).cos();
+    let dn = if diff_cos.abs() > 1e-30 { cn / diff_cos } else { 1.0 };
+    (phi.sin(), cn, dn)
+}
+
+#[allow(dead_code)]
+fn elliptic_ji(
+    u: f64, v: f64, m: f64,
+) -> ([f64; 2], [f64; 2], [f64; 2]) {
+    if u.abs() < 1e-15 {
+        let (sn, cn, dn) = elliptic_j(v, 1.0 - m);
+        return (
+            [0.0, sn / cn],
+            [1.0 / cn, 0.0],
+            [dn / cn, 0.0],
+        );
+    }
+    let (sn_a, cn_a, dn_a) = elliptic_j(u, m);
+    if v.abs() < 1e-15 {
+        return ([sn_a, 0.0], [cn_a, 0.0], [dn_a, 0.0]);
+    }
+    let (sn_b, cn_b, dn_b) = elliptic_j(v, 1.0 - m);
+    let d = cn_b * cn_b + m * sn_a * sn_a * sn_b * sn_b;
+    (
+        [sn_a * dn_b / d, cn_a * dn_a * sn_b * cn_b / d],
+        [cn_a * cn_b / d, -sn_a * dn_a * sn_b * dn_b / d],
+        [dn_a * cn_b * dn_b / d, -m * sn_a * cn_a * sn_b / d],
+    )
+}
+
+fn complex_atan(x: f64, y: f64) -> (f64, f64) {
+    let x2 = x * x;
+    let y_1 = y + 1.0;
+    let t = 1.0 - x2 - y * y;
+    (
+        0.5 * ((if x >= 0.0 { PI / 2.0 } else { -PI / 2.0 })
+            - t.atan2(2.0 * x)),
+        -0.25 * (t * t + 4.0 * x2).ln()
+            + 0.5 * (y_1 * y_1 + x2).ln(),
+    )
+}
+
+pub(crate) struct PeirceConst {
+    pub(crate) m: f64,
+    pub(crate) k_: f64,
+    pub(crate) big_k: f64,
+    pub(crate) dx: f64,
+    scale: f64,
+    pub(crate) inv_scale: f64,
+    extent: f64,
+}
+
+pub(crate) fn peirce_const() -> &'static PeirceConst {
+    use std::sync::LazyLock;
+    static C: LazyLock<PeirceConst> = LazyLock::new(|| {
+        let sqrt2 = 2.0_f64.sqrt();
+        let k_ = (sqrt2 - 1.0) / (sqrt2 + 1.0);
+        let k = (1.0 - k_ * k_).sqrt();
+        let m = k * k;
+        let big_k = elliptic_f(PI / 2.0, m);
+        let sqrt1_2 = (0.5_f64).sqrt();
+        let g_pos = guyou_fwd(PI / 2.0, 0.0, k_, m, big_k);
+        let g_neg = guyou_fwd(-PI / 2.0, 0.0, k_, m, big_k);
+        let dx = g_pos.0 - g_neg.0;
+        let scale = PEIRCE_SCALE / (big_k * sqrt1_2);
+        PeirceConst {
+            m, k_, big_k, dx,
+            scale,
+            inv_scale: 1.0 / scale,
+            extent: PEIRCE_SCALE / sqrt1_2,
+        }
+    });
+    &C
+}
+
+fn guyou_fwd(
+    lambda: f64, phi: f64, k_: f64, m: f64, big_k: f64,
+) -> (f64, f64) {
+    let psi = (PI / 4.0 + phi.abs() / 2.0).tan().ln();
+    let r = (-psi).exp() / k_.sqrt();
+    let at = complex_atan(r * (-lambda).cos(), r * (-lambda).sin());
+    let t = elliptic_fi(at.0, at.1, m);
+    (
+        -t.1,
+        (if phi >= 0.0 { 1.0 } else { -1.0 }) * (0.5 * big_k - t.0),
+    )
+}
+
+#[allow(dead_code)]
+fn guyou_inv(
+    x: f64, y: f64, k_: f64, m: f64, big_k: f64,
+) -> (f64, f64) {
+    let j = elliptic_ji(0.5 * big_k - y, -x, m);
+    let sn = j.0;
+    let cn = j.1;
+    let d = cn[0] * cn[0] + cn[1] * cn[1];
+    if d < 1e-30 { return (0.0, 0.0); }
+    let tn_re = (sn[0] * cn[0] + sn[1] * cn[1]) / d;
+    let tn_im = (sn[1] * cn[0] - sn[0] * cn[1]) / d;
+    let lambda = -tn_im.atan2(tn_re);
+    let log_arg = k_ * (tn_re * tn_re + tn_im * tn_im);
+    let phi = 2.0 * (-0.5 * log_arg.ln()).exp().atan() - PI / 2.0;
+    (lambda, phi)
+}
+
+impl Projection for PeirceQuincuncial {
+    fn project(&self, lat_deg: f64, lon_deg: f64) -> Option<(f64, f64)> {
+        let phi = lat_deg.to_radians();
+        let lambda = lon_deg.to_radians();
+        let c = peirce_const();
+        let sqrt1_2 = (0.5_f64).sqrt();
+
+        let front = lambda.abs() < PI / 2.0;
+        let lam = if front {
+            lambda
+        } else if lambda > 0.0 {
+            lambda - PI
+        } else {
+            lambda + PI
+        };
+
+        let p = guyou_fwd(lam, phi, c.k_, c.m, c.big_k);
+        let (px, py) = (p.0, p.1);
+
+        let (rx, ry) = if front {
+            ((px - py) * sqrt1_2, (px + py) * sqrt1_2)
+        } else {
+            let d = c.dx * sqrt1_2;
+            let x = (px - py) * sqrt1_2;
+            let y = (px + py) * sqrt1_2;
+            let s = if (x > 0.0) ^ (y > 0.0) { -1.0 } else { 1.0 };
+            (s * x - y.signum() * d, s * y - x.signum() * d)
+        };
+
+        let (fx, fy) = (rx * c.scale, ry * c.scale);
+        if fx.is_finite() && fy.is_finite() {
+            Some((fx, fy))
+        } else {
+            None
+        }
+    }
+    fn inverse(&self, x0: f64, y0: f64) -> Option<(f64, f64)> {
+        let c = peirce_const();
+        let sqrt1_2 = (0.5_f64).sqrt();
+
+        let x0 = x0 * c.inv_scale;
+        let y0 = y0 * c.inv_scale;
+
+        let gx = (x0 + y0) * sqrt1_2;
+        let gy = (y0 - x0) * sqrt1_2;
+        let half_dx = 0.5 * c.dx;
+        let front = gx.abs() < half_dx + 0.001
+            && gy.abs() < half_dx + 0.001;
+
+        if front {
+            let (lam, phi) =
+                guyou_inv(gx, gy, c.k_, c.m, c.big_k);
+            let lat = phi.to_degrees();
+            let lon = lam.to_degrees();
+            if lat.abs() <= 90.0 && lon.abs() <= 180.0 {
+                Some((lat, lon))
+            } else {
+                None
+            }
+        } else {
+            let d = c.dx * sqrt1_2;
+            let s = if (x0 > 0.0) ^ (y0 > 0.0) { -1.0 } else { 1.0 };
+            let x1 = -s * x0 + (if y0 > 0.0 { 1.0 } else { -1.0 }) * d;
+            let y1 = -s * y0 + (if x0 > 0.0 { 1.0 } else { -1.0 }) * d;
+            let gx2 = (-x1 - y1) * sqrt1_2;
+            let gy2 = (x1 - y1) * sqrt1_2;
+
+            let (lam, phi) =
+                guyou_inv(gx2, gy2, c.k_, c.m, c.big_k);
+            let lon = lam.to_degrees()
+                + if gx2 > 0.0 { 180.0 } else { -180.0 };
+            let lat = phi.to_degrees();
+            if lat.abs() <= 90.0 && lon.abs() <= 180.0 {
+                Some((lat, lon))
+            } else {
+                None
+            }
+        }
+    }
+    fn x_range(&self) -> (f64, f64) {
+        let e = peirce_const().extent;
+        (-e, e)
+    }
+    fn y_range(&self) -> (f64, f64) {
+        self.x_range()
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum ProjectionKind {
     Orthographic,
@@ -310,8 +617,10 @@ pub(crate) enum ProjectionKind {
     AzimuthalEquidistant,
     Hammer,
     HEALPix,
-    SpaceObliqueMercator,
+    Cassini,
     TransverseMercator,
+    LambertAzimuthalEqualArea,
+    PeirceQuincuncial,
 }
 
 impl ProjectionKind {
@@ -325,8 +634,26 @@ impl ProjectionKind {
             ProjectionKind::AzimuthalEquidistant => &AzimuthalEquidistant,
             ProjectionKind::Hammer => &Hammer,
             ProjectionKind::HEALPix => &HEALPix,
-            ProjectionKind::SpaceObliqueMercator => &SpaceObliqueMercator,
+            ProjectionKind::Cassini => &Cassini,
             ProjectionKind::TransverseMercator => &TransverseMercator,
+            ProjectionKind::LambertAzimuthalEqualArea => &LambertAzimuthalEqualArea,
+            ProjectionKind::PeirceQuincuncial => &PeirceQuincuncial,
+        }
+    }
+
+    pub(crate) fn shader_id(&self) -> i32 {
+        match self {
+            ProjectionKind::Orthographic | ProjectionKind::Equirectangular => 0,
+            ProjectionKind::Mercator => 1,
+            ProjectionKind::Mollweide => 2,
+            ProjectionKind::Sinusoidal => 3,
+            ProjectionKind::AzimuthalEquidistant => 4,
+            ProjectionKind::Hammer => 5,
+            ProjectionKind::HEALPix => 6,
+            ProjectionKind::Cassini => 7,
+            ProjectionKind::TransverseMercator => 8,
+            ProjectionKind::LambertAzimuthalEqualArea => 9,
+            ProjectionKind::PeirceQuincuncial => 10,
         }
     }
 
@@ -340,8 +667,10 @@ impl ProjectionKind {
             ProjectionKind::AzimuthalEquidistant => "Azimuthal Equidistant",
             ProjectionKind::Hammer => "Hammer",
             ProjectionKind::HEALPix => "HEALPix",
-            ProjectionKind::SpaceObliqueMercator => "SOM (53°)",
+            ProjectionKind::Cassini => "Cassini",
             ProjectionKind::TransverseMercator => "UTM",
+            ProjectionKind::LambertAzimuthalEqualArea => "Lambert Azimuthal",
+            ProjectionKind::PeirceQuincuncial => "Peirce Quincuncial",
         }
     }
 }

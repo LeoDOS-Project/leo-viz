@@ -10,7 +10,7 @@ use crate::config::{
 };
 use crate::geo::CityLabel;
 use crate::math::{rotate_point_matrix, rotation_from_drag};
-use crate::renderer::SphereRenderer;
+use crate::renderer::{SphereRenderer, MapRenderer};
 use crate::texture::EarthTexture;
 use crate::tile::{DetailBounds, DetailTexture};
 use crate::walker::{WalkerType, WalkerConstellation, SatelliteState};
@@ -495,7 +495,7 @@ pub fn draw_3d_view(
         show_manhattan_path, show_shortest_path, show_radiation_path, radiation_weight,
         show_asc_desc_colors,
         show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
-        show_equator, show_terminator, earth_fixed_camera, use_gpu_rendering,
+        show_equator, show_graticule, show_terminator, earth_fixed_camera, use_gpu_rendering,
         show_clouds, show_day_night, show_stars, show_borders, show_cities,
         trackpad_rotate,
         north_up,
@@ -1184,6 +1184,96 @@ pub fn draw_3d_view(
             if !back_seg.is_empty() && !hide_behind_earth {
                 plot_ui.line(Line::new("", PlotPoints::new(back_seg))
                     .color(dim_eq).width(1.0));
+            }
+        }
+
+        if show_graticule {
+            let grat_color = egui::Color32::from_rgb(100, 100, 100);
+            let grat_dim = egui::Color32::from_rgba_unmultiplied(100, 100, 100, 30);
+            let n_pts = 200;
+
+            for lat_deg in (-60..=60).step_by(30) {
+                if lat_deg == 0 && show_equator { continue; }
+                let phi = (lat_deg as f64).to_radians();
+                let cos_phi = phi.cos();
+                let sin_phi = phi.sin();
+                let mut front_seg: Vec<[f64; 2]> = Vec::new();
+                let mut back_seg: Vec<[f64; 2]> = Vec::new();
+                for i in 0..=n_pts {
+                    let theta = 2.0 * PI * i as f64 / n_pts as f64;
+                    let x = planet_radius * cos_phi * theta.cos();
+                    let y = planet_radius * sin_phi;
+                    let z = planet_radius * cos_phi * theta.sin();
+                    let (rx, ry, rz) = rotate_point_matrix(x, y, z, &surface_rotation);
+                    let occluded = rz < 0.0 && (rx * rx + ry * ry) < earth_r_sq;
+                    if occluded {
+                        if !front_seg.is_empty() {
+                            plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut front_seg)))
+                                .color(grat_color).width(0.5));
+                        }
+                        back_seg.push([rx, ry]);
+                    } else {
+                        if !back_seg.is_empty() {
+                            if !hide_behind_earth {
+                                plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut back_seg)))
+                                    .color(grat_dim).width(0.5));
+                            } else {
+                                back_seg.clear();
+                            }
+                        }
+                        front_seg.push([rx, ry]);
+                    }
+                }
+                if !front_seg.is_empty() {
+                    plot_ui.line(Line::new("", PlotPoints::new(front_seg))
+                        .color(grat_color).width(0.5));
+                }
+                if !back_seg.is_empty() && !hide_behind_earth {
+                    plot_ui.line(Line::new("", PlotPoints::new(back_seg))
+                        .color(grat_dim).width(0.5));
+                }
+            }
+
+            for lon_deg in (-150..=180).step_by(30) {
+                let lambda = (lon_deg as f64).to_radians();
+                let cos_l = lambda.cos();
+                let sin_l = lambda.sin();
+                let mut front_seg: Vec<[f64; 2]> = Vec::new();
+                let mut back_seg: Vec<[f64; 2]> = Vec::new();
+                for i in 0..=n_pts {
+                    let phi = -PI / 2.0 + PI * i as f64 / n_pts as f64;
+                    let cos_phi = phi.cos();
+                    let x = planet_radius * cos_phi * cos_l;
+                    let y = planet_radius * phi.sin();
+                    let z = planet_radius * cos_phi * sin_l;
+                    let (rx, ry, rz) = rotate_point_matrix(x, y, z, &surface_rotation);
+                    let occluded = rz < 0.0 && (rx * rx + ry * ry) < earth_r_sq;
+                    if occluded {
+                        if !front_seg.is_empty() {
+                            plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut front_seg)))
+                                .color(grat_color).width(0.5));
+                        }
+                        back_seg.push([rx, ry]);
+                    } else {
+                        if !back_seg.is_empty() {
+                            if !hide_behind_earth {
+                                plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut back_seg)))
+                                    .color(grat_dim).width(0.5));
+                            } else {
+                                back_seg.clear();
+                            }
+                        }
+                        front_seg.push([rx, ry]);
+                    }
+                }
+                if !front_seg.is_empty() {
+                    plot_ui.line(Line::new("", PlotPoints::new(front_seg))
+                        .color(grat_color).width(0.5));
+                }
+                if !back_seg.is_empty() && !hide_behind_earth {
+                    plot_ui.line(Line::new("", PlotPoints::new(back_seg))
+                        .color(grat_dim).width(0.5));
+                }
             }
         }
 
@@ -2903,6 +2993,7 @@ pub fn draw_map_view(
     show_shortest_path: bool,
     show_radiation_path: bool,
     radiation_weight: f64,
+    show_graticule: bool,
     satellite_cameras: &[SatelliteCamera],
     planet_radius: f64,
     geo_borders: &[Vec<(f64, f64)>],
@@ -2911,10 +3002,33 @@ pub fn draw_map_view(
     radiation: Option<&RadiationConfig>,
     body_rotation: &Matrix3<f64>,
     time: f64,
-    map_texture: Option<&egui::TextureHandle>,
+    map_renderer: Option<&Arc<Mutex<MapRenderer>>>,
+    proj_shader_id: i32,
 ) {
     let (xmin, xmax) = proj.x_range();
     let (ymin, ymax) = proj.y_range();
+
+    let use_gpu = map_renderer.is_some();
+
+    let shared_bounds = Arc::new(Mutex::new([xmin, xmax, ymin, ymax]));
+
+    if let Some(renderer) = map_renderer {
+        let rect = egui::Rect::from_min_size(
+            ui.cursor().min,
+            egui::Vec2::new(width, height),
+        );
+        let renderer = renderer.clone();
+        let bounds_ref = shared_bounds.clone();
+        let callback = egui::PaintCallback {
+            rect,
+            callback: Arc::new(egui_glow::CallbackFn::new(move |_info, painter| {
+                let gl = painter.gl();
+                let [bx0, bx1, by0, by1] = *bounds_ref.lock();
+                renderer.lock().paint(gl, proj_shader_id, bx0, bx1, by0, by1);
+            })),
+        };
+        ui.painter().add(callback);
+    }
 
     let plot = Plot::new(id)
         .width(width)
@@ -2924,41 +3038,42 @@ pub fn draw_map_view(
         .include_y(ymin)
         .include_y(ymax)
         .data_aspect(1.0)
-        .show_axes([true, true]);
+        .show_axes([!use_gpu, !use_gpu])
+        .show_grid(!use_gpu)
+        .show_background(!use_gpu);
 
     plot.show(ui, |plot_ui| {
-        if let Some(handle) = map_texture {
-            let cx = (xmin + xmax) / 2.0;
-            let cy = (ymin + ymax) / 2.0;
-            let size = egui::Vec2::new((xmax - xmin) as f32, (ymax - ymin) as f32);
-            plot_ui.image(PlotImage::new("", handle.id(), PlotPoint::new(cx, cy), size));
-        }
+        let pb = plot_ui.plot_bounds();
+        *shared_bounds.lock() = [pb.min()[0], pb.max()[0], pb.min()[1], pb.max()[1]];
 
-        let grid_color = egui::Color32::from_rgba_unmultiplied(80, 80, 80, 60);
-        for lat in (-60..=60).step_by(30) {
-            let pts: Vec<[f64; 2]> = (-180..=180).step_by(2)
-                .filter_map(|lon| proj.project(lat as f64, lon as f64).map(|(x, y)| [x, y]))
-                .collect();
-            if pts.len() >= 2 {
-                plot_ui.line(Line::new("", PlotPoints::new(pts)).color(grid_color).width(0.5));
+
+        if show_graticule {
+            let grid_color = egui::Color32::from_rgba_unmultiplied(120, 120, 120, 120);
+            for lat in (-60..=60).step_by(30) {
+                let latlon: Vec<(f64, f64)> = (-180..=180).step_by(2)
+                    .map(|lon| (lat as f64, lon as f64))
+                    .collect();
+                for seg in project_segments(proj, &latlon) {
+                    plot_ui.line(Line::new("", PlotPoints::new(seg)).color(grid_color).width(0.5));
+                }
             }
-        }
-        for lon in (-150..=150).step_by(30) {
-            let pts: Vec<[f64; 2]> = (-90..=90).step_by(2)
-                .filter_map(|lat| proj.project(lat as f64, lon as f64).map(|(x, y)| [x, y]))
-                .collect();
-            if pts.len() >= 2 {
-                plot_ui.line(Line::new("", PlotPoints::new(pts)).color(grid_color).width(0.5));
+            for lon in (-180..=180).step_by(30) {
+                let latlon: Vec<(f64, f64)> = (-90..=90).step_by(2)
+                    .map(|lat| (lat as f64, lon as f64))
+                    .collect();
+                for seg in project_segments(proj, &latlon) {
+                    plot_ui.line(Line::new("", PlotPoints::new(seg)).color(grid_color).width(0.5));
+                }
             }
-        }
-        if let Some((x0, y0)) = proj.project(0.0, -180.0) {
-            if let Some((x1, y1)) = proj.project(0.0, 180.0) {
-                plot_ui.line(Line::new("", PlotPoints::new(vec![[x0, y0], [x1, y1]])).color(egui::Color32::DARK_GRAY).width(0.8));
+            let equator: Vec<(f64, f64)> = (-180..=180).step_by(2)
+                .map(|lon| (0.0, lon as f64)).collect();
+            for seg in project_segments(proj, &equator) {
+                plot_ui.line(Line::new("", PlotPoints::new(seg)).color(grid_color).width(0.5));
             }
-        }
-        if let Some((x0, y0)) = proj.project(-90.0, 0.0) {
-            if let Some((x1, y1)) = proj.project(90.0, 0.0) {
-                plot_ui.line(Line::new("", PlotPoints::new(vec![[x0, y0], [x1, y1]])).color(egui::Color32::DARK_GRAY).width(0.8));
+            let prime: Vec<(f64, f64)> = (-90..=90).step_by(2)
+                .map(|lat| (lat as f64, 0.0)).collect();
+            for seg in project_segments(proj, &prime) {
+                plot_ui.line(Line::new("", PlotPoints::new(seg)).color(grid_color).width(0.5));
             }
         }
 

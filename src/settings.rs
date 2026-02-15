@@ -278,8 +278,10 @@ impl ViewerState {
                                 ui.selectable_value(&mut s.planet_projection, ProjectionKind::AzimuthalEquidistant, "Azimuthal Equidistant");
                                 ui.selectable_value(&mut s.planet_projection, ProjectionKind::Hammer, "Hammer");
                                 ui.selectable_value(&mut s.planet_projection, ProjectionKind::HEALPix, "HEALPix");
-                                ui.selectable_value(&mut s.planet_projection, ProjectionKind::SpaceObliqueMercator, "SOM (53°)");
+                                ui.selectable_value(&mut s.planet_projection, ProjectionKind::Cassini, "Cassini");
                                 ui.selectable_value(&mut s.planet_projection, ProjectionKind::TransverseMercator, "UTM");
+                                ui.selectable_value(&mut s.planet_projection, ProjectionKind::LambertAzimuthalEqualArea, "Lambert Azimuthal");
+                                ui.selectable_value(&mut s.planet_projection, ProjectionKind::PeirceQuincuncial, "Peirce Quincuncial");
                             });
                     });
                 });
@@ -307,6 +309,7 @@ impl ViewerState {
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_axes, "Show axes"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_polar_circle, "Show polar circle"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_equator, "Show equator"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_graticule, "Show graticule"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_borders, "Country borders"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_cities, "City labels"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_devices, "Show devices"));

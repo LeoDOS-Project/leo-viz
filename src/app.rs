@@ -9,7 +9,7 @@ use crate::config::TabConfig;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::geo::{GeoLoadState, dirs_cache, load_geo_overlay};
 use crate::drawing::draw_satellite_camera;
-use crate::renderer::SphereRenderer;
+use crate::renderer::{SphereRenderer, MapRenderer};
 use crate::texture::TextureLoadState;
 use crate::tile::{
     TileCoord, DetailBounds, DetailTexture, TileCacheEntry,
@@ -49,6 +49,7 @@ impl App {
     pub(crate) fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let gl = cc.gl.as_ref().expect("glow backend required");
         let sphere_renderer = Arc::new(Mutex::new(SphereRenderer::new(gl)));
+        let map_renderer = Arc::new(Mutex::new(MapRenderer::new(gl)));
 
         let torus_initial = Matrix3::new(
             1.0, 0.0, 0.0,
@@ -126,6 +127,7 @@ impl App {
                 milky_way_texture_loading: false,
                 cloud_texture_loading: false,
                 sphere_renderer: Some(sphere_renderer),
+                map_renderer: Some(map_renderer),
                 #[cfg(not(target_arch = "wasm32"))]
                 tle_fetch_tx,
                 #[cfg(not(target_arch = "wasm32"))]
@@ -271,7 +273,6 @@ impl App {
                 last_url_hash: String::new(),
                 last_frame_instant: None,
                 fps_smooth: 0.0,
-                map_texture_cache: None,
             },
             first_frame: true,
         };
@@ -397,6 +398,14 @@ impl eframe::App for App {
                     renderer.upload_ring_texture(gl, *body, ring_tex);
                 }
                 renderer.evict_unused_textures(gl, &bodies_needed);
+            }
+            if let Some(ref map_renderer) = v.map_renderer {
+                let mut mr = map_renderer.lock();
+                for (body, skin, res) in &bodies_needed {
+                    if let Some(tex) = v.planet_textures.get(&(*body, *skin, *res)) {
+                        mr.upload_earth_texture(gl, (*body, *skin, *res), tex);
+                    }
+                }
             }
         }
 
@@ -1615,6 +1624,9 @@ impl eframe::App for App {
     fn on_exit(&mut self, gl: Option<&glow::Context>) {
         if let Some(gl) = gl {
             if let Some(ref renderer) = self.viewer.sphere_renderer {
+                renderer.lock().destroy(gl);
+            }
+            if let Some(ref renderer) = self.viewer.map_renderer {
                 renderer.lock().destroy(gl);
             }
         }
