@@ -6,7 +6,7 @@
 
 use crate::celestial::{CelestialBody, Skin, TextureResolution};
 use crate::config::{
-    AreaOfInterest, DeviceLayer, GroundStation, Preset, TabConfig, View3DFlags,
+    AreaOfInterest, ConstellationConfig, DeviceLayer, GroundStation, Preset, TabConfig, View3DFlags,
 };
 use crate::drawing::{
     draw_3d_view, draw_map_view, draw_torus, plane_color,
@@ -140,6 +140,7 @@ pub(crate) struct ViewerState {
     pub(crate) last_url_hash: String,
     pub(crate) last_frame_instant: Option<std::time::Instant>,
     pub(crate) fps_smooth: f64,
+    pub(crate) moon_image_handles: HashMap<CelestialBody, egui::TextureHandle>,
 }
 
 
@@ -625,6 +626,13 @@ impl ViewerState {
             let show_rad = self.tabs[tab_idx].planets[planet_idx].show_radiation_window;
             if ui.selectable_label(show_rad, "Rad").clicked() {
                 self.tabs[tab_idx].planets[planet_idx].show_radiation_window = !show_rad;
+            }
+            {
+                let has_moons = !self.tabs[tab_idx].planets[planet_idx].celestial_body.moons().is_empty();
+                let show_m = self.tabs[tab_idx].planets[planet_idx].show_moons_window;
+                if ui.add_enabled(has_moons, egui::Button::new("Moons").selected(show_m)).clicked() {
+                    self.tabs[tab_idx].planets[planet_idx].show_moons_window = !show_m;
+                }
             }
             let show_fps = self.tabs[tab_idx].show_fps;
             if ui.selectable_label(show_fps, "FPS").clicked() {
@@ -1536,6 +1544,20 @@ impl ViewerState {
                         if sats_resp.changed() || planes_resp.changed() {
                             cons.preset = Preset::None;
                         }
+                        let orbit_radius = planet.celestial_body.radius_km() + cons.altitude_km;
+                        let default_sat_spacing = 2.0 * std::f64::consts::PI * orbit_radius / cons.sats_per_plane as f64;
+                        let mut custom_sat_spacing = cons.sat_spacing_km.is_some();
+                        if ui.checkbox(&mut custom_sat_spacing, "d:").changed() {
+                            cons.sat_spacing_km = if custom_sat_spacing { Some(default_sat_spacing) } else { None };
+                            cons.preset = Preset::None;
+                        }
+                        if let Some(ref mut spacing) = cons.sat_spacing_km {
+                            if ui.add(egui::DragValue::new(spacing).range(0.001..=100000.0).suffix(" km").speed(0.1).max_decimals(3)).changed() {
+                                cons.preset = Preset::None;
+                            }
+                        } else {
+                            ui.weak(format!("{:.1} km", default_sat_spacing));
+                        }
                     });
 
                     ui.horizontal(|ui| {
@@ -1572,8 +1594,20 @@ impl ViewerState {
                     });
 
                     ui.horizontal(|ui| {
+                        let cb = planet.celestial_body;
+                        let sso_possible = cb.j2() > 0.0 && cb.orbital_period_days().is_some();
+                        if sso_possible && cons.sso {
+                            if let Some(inc) = ConstellationConfig::sso_inclination(
+                                cons.altitude_km, cons.eccentricity,
+                                cb.mu(), cb.j2(), cb.equatorial_radius_km(),
+                                cb.orbital_period_days().unwrap(),
+                            ) {
+                                cons.inclination = inc;
+                            }
+                        }
+                        ui.add_enabled(sso_possible, egui::Checkbox::new(&mut cons.sso, "SSO"));
                         ui.label("Inc:");
-                        let inc_resp = ui.add(egui::DragValue::new(&mut cons.inclination).range(0.0..=180.0).suffix("°"));
+                        let inc_resp = ui.add_enabled(!cons.sso, egui::DragValue::new(&mut cons.inclination).range(0.0..=180.0).suffix("°"));
                         if inc_resp.changed() {
                             cons.preset = Preset::None;
                         }
@@ -1616,6 +1650,19 @@ impl ViewerState {
                         ui.label("ω:");
                         if ui.add(egui::DragValue::new(&mut cons.arg_periapsis).range(0.0..=360.0).suffix("°").speed(1.0)).changed() {
                             cons.preset = Preset::None;
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("ISL planes:");
+                        let mut p = cons.isl_plane_count as i32;
+                        if ui.add(egui::DragValue::new(&mut p).range(0..=10)).changed() {
+                            cons.isl_plane_count = p as usize;
+                        }
+                        ui.label("sats:");
+                        let mut s = cons.isl_intra_count as i32;
+                        if ui.add(egui::DragValue::new(&mut s).range(0..=10)).changed() {
+                            cons.isl_intra_count = s as usize;
                         }
                     });
 
@@ -1767,7 +1814,7 @@ impl ViewerState {
                         x, y, z,
                         lat, lon,
                         ascending,
-                        neighbor_idx: None,
+                        neighbors: Vec::new(),
                         name: Some(sat.name.clone()),
                         tle_inclination_deg: Some(sat.inclination_deg),
                         tle_mean_motion: Some(sat.mean_motion),
@@ -1788,7 +1835,7 @@ impl ViewerState {
                                 x: p.x, y: p.y, z: p.z,
                                 lat: p.lat, lon: p.lon,
                                 ascending: p.ascending,
-                                neighbor_idx: p.neighbor_idx,
+                                neighbors: p.neighbors.clone(),
                                 name: p.name.clone(),
                                 tle_inclination_deg: p.tle_inclination_deg,
                                 tle_mean_motion: p.tle_mean_motion,
@@ -1804,6 +1851,9 @@ impl ViewerState {
                             phasing: 0.0,
                             raan_offset_deg: 0.0,
                             raan_spacing_deg: None,
+                            sat_spacing_km: None,
+                            isl_plane_count: 0,
+                            isl_intra_count: 0,
                             eccentricity: 0.0,
                             arg_periapsis_deg: 0.0,
                             planet_radius,
@@ -1825,6 +1875,9 @@ impl ViewerState {
                         phasing: 0.0,
                         raan_offset_deg: 0.0,
                         raan_spacing_deg: None,
+                        sat_spacing_km: None,
+                        isl_plane_count: 0,
+                        isl_intra_count: 0,
                         eccentricity: 0.0,
                         arg_periapsis_deg: 0.0,
                         planet_radius,
@@ -1889,7 +1942,7 @@ impl ViewerState {
                         lat: (y / r).asin().to_degrees(),
                         lon: -z.atan2(x).to_degrees(),
                         ascending: false,
-                        neighbor_idx: None,
+                        neighbors: Vec::new(),
                         name: Some(format!("Debris-{}", idx)),
                         tle_inclination_deg: None,
                         tle_mean_motion: None,
@@ -1905,6 +1958,9 @@ impl ViewerState {
                         phasing: 0.0,
                         raan_offset_deg: 0.0,
                         raan_spacing_deg: None,
+                        sat_spacing_km: None,
+                        isl_plane_count: 0,
+                        isl_intra_count: 0,
                         eccentricity: 0.0,
                         arg_periapsis_deg: 0.0,
                         planet_radius,
@@ -2390,6 +2446,76 @@ impl ViewerState {
             planet.show_radiation_window = show_rad_window;
         }
 
+        {
+            let tab = &mut self.tabs[tab_idx];
+            let planet = &mut tab.planets[planet_idx];
+            let body = planet.celestial_body;
+            let moons_list = body.moons();
+            let mut show_moons_window = planet.show_moons_window;
+            if !moons_list.is_empty() && show_moons_window {
+                let settings = &mut tab.settings;
+                egui::Window::new(format!("Moons - {}", planet_name))
+                    .open(&mut show_moons_window)
+                    .default_width(200.0)
+                    .show(ui.ctx(), |ui| {
+                        ui.horizontal(|ui| {
+                            if ui.button("All").clicked() {
+                                for &(moon_body, _, _, _) in moons_list {
+                                    planet.enabled_moons.insert(moon_body);
+                                }
+                            }
+                            if ui.button("None").clicked() {
+                                planet.enabled_moons.clear();
+                            }
+                        });
+                        ui.separator();
+                        for &(moon_body, orbit_km, period_days, incl_rad) in moons_list {
+                            let mut on = planet.enabled_moons.contains(&moon_body);
+                            ui.horizontal(|ui| {
+                                if ui.checkbox(&mut on, moon_body.label()).changed() {
+                                    if on {
+                                        planet.enabled_moons.insert(moon_body);
+                                    } else {
+                                        planet.enabled_moons.remove(&moon_body);
+                                    }
+                                }
+                                if ui.button("View Orbit").clicked() {
+                                    settings.zoom = 10000.0 / (orbit_km * 1.3);
+                                    let ci = incl_rad.cos();
+                                    let si = incl_rad.sin();
+                                    settings.rotation = nalgebra::Matrix3::new(
+                                        1.0, 0.0, 0.0,
+                                        0.0, ci, si,
+                                        0.0, -si, ci,
+                                    );
+                                    planet.enabled_moons.insert(moon_body);
+                                }
+                                if ui.button("View Moon").clicked() {
+                                    let time = settings.time;
+                                    let angle = 2.0 * PI * time / (period_days * 86400.0);
+                                    let x = orbit_km * angle.cos();
+                                    let y_orbit = orbit_km * angle.sin();
+                                    let y = y_orbit * incl_rad.cos();
+                                    let z = y_orbit * incl_rad.sin();
+                                    let dist = (x * x + y * y + z * z).sqrt();
+                                    let moon_r = moon_body.radius_km();
+                                    settings.zoom = 10000.0 / (dist + moon_r * 5.0);
+                                    let lat = (y / dist).asin();
+                                    let lon = z.atan2(x);
+                                    settings.rotation = crate::math::lat_lon_to_matrix(lat, lon);
+                                    planet.enabled_moons.insert(moon_body);
+                                }
+                            });
+                        }
+                        ui.separator();
+                        ui.checkbox(&mut settings.show_moon_orbits, "Show orbits");
+                        ui.checkbox(&mut settings.show_moon_lines, "Show lines to planet");
+                        ui.checkbox(&mut settings.show_moon_labels, "Show labels");
+                    });
+            }
+            planet.show_moons_window = show_moons_window;
+        }
+
         let mut available = ui.available_size();
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -2452,6 +2578,7 @@ impl ViewerState {
         let show_crosshairs = settings.show_crosshairs;
         let show_day_night = settings.show_day_night;
         let show_terminator = settings.show_terminator;
+        let show_eclipse = settings.show_eclipse;
         let show_clouds = settings.show_clouds;
         let show_stars = settings.show_stars;
         let show_devices = settings.show_devices;
@@ -2460,6 +2587,11 @@ impl ViewerState {
         let show_radiation_belts = settings.show_radiation_belts;
         let trackpad_rotate = settings.trackpad_rotate;
         let north_up = settings.north_up;
+        let enabled_moons = self.tabs[tab_idx].planets[planet_idx].enabled_moons.clone();
+        let show_moon_orbits = settings.show_moon_orbits;
+        let show_moon_lines = settings.show_moon_lines;
+        let show_moon_labels = settings.show_moon_labels;
+
         let is_2d_projection = planet_projection != crate::projection::ProjectionKind::Orthographic;
         let log_power = settings.solar_system_log_power;
         let detail_gl_info = self.tile_overlay_detail_gl_info(celestial_body);
@@ -2488,11 +2620,15 @@ impl ViewerState {
                             show_manhattan_path, show_shortest_path, show_radiation_path, radiation_weight,
                             show_asc_desc_colors,
                             show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
-                            show_equator, show_graticule, show_crosshairs, show_terminator, earth_fixed_camera,
+                            show_equator, show_graticule, show_crosshairs, show_terminator, show_eclipse, earth_fixed_camera,
                             use_gpu_rendering: self.use_gpu_rendering, show_clouds, show_day_night,
                             show_stars, show_borders, show_cities,
                             trackpad_rotate,
                             north_up,
+                            enabled_moons: enabled_moons.clone(),
+                            show_moon_orbits,
+                            show_moon_lines,
+                            show_moon_labels,
                         };
                         let sun_dir = {
                             use chrono::Datelike;
@@ -2605,6 +2741,7 @@ impl ViewerState {
                             } else {
                                 None
                             },
+                            &self.moon_image_handles,
                             &mut ctx_menu_req,
                             &mut label_click_req,
                         );

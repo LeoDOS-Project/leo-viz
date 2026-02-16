@@ -20,6 +20,9 @@ pub struct WalkerConstellation {
     pub phasing: f64,
     pub raan_offset_deg: f64,
     pub raan_spacing_deg: Option<f64>,
+    pub sat_spacing_km: Option<f64>,
+    pub isl_plane_count: usize,
+    pub isl_intra_count: usize,
     pub eccentricity: f64,
     pub arg_periapsis_deg: f64,
     pub planet_radius: f64,
@@ -37,7 +40,7 @@ pub struct SatelliteState {
     pub lat: f64,
     pub lon: f64,
     pub ascending: bool,
-    pub neighbor_idx: Option<usize>,
+    pub neighbors: Vec<usize>,
     pub name: Option<String>,
     pub tle_inclination_deg: Option<f64>,
     pub tle_mean_motion: Option<f64>,
@@ -67,6 +70,33 @@ impl WalkerConstellation {
         }
     }
 
+    fn sat_step(&self) -> f64 {
+        if let Some(spacing_km) = self.sat_spacing_km {
+            let orbit_radius = self.planet_radius + self.altitude_km;
+            spacing_km / orbit_radius
+        } else {
+            2.0 * PI / self.sats_per_plane() as f64
+        }
+    }
+
+    fn partial_sat_coverage(&self) -> bool {
+        if self.sat_spacing_km.is_none() {
+            return false;
+        }
+        (self.sat_step() * self.sats_per_plane() as f64) < 2.0 * PI - 1e-9
+    }
+
+    fn partial_coverage(&self) -> bool {
+        if self.raan_spacing_deg.is_none() {
+            return false;
+        }
+        let max_spread = match self.walker_type {
+            WalkerType::Delta => 2.0 * PI,
+            WalkerType::Star => PI,
+        };
+        (self.raan_step() * self.num_planes as f64) < max_spread - 1e-9
+    }
+
     pub fn single_satellite_lat_lon(&self, plane: usize, sat: usize, time: f64) -> (f64, f64, [f64; 3]) {
         let sats_per_plane = self.sats_per_plane();
         let perigee_radius = self.planet_radius + self.altitude_km;
@@ -79,13 +109,18 @@ impl WalkerConstellation {
         let inc_sin = inc.sin();
         let raan_step = self.raan_step();
         let raan_offset = -self.raan_offset_deg.to_radians();
-        let sat_step = 2.0 * PI / sats_per_plane as f64;
+        let sat_step = self.sat_step();
         let omega = self.arg_periapsis_deg.to_radians();
         let phase_step = self.phasing * 2.0 * PI / self.total_sats as f64;
         let r_ratio = self.planet_equatorial_radius / semi_major;
         let raan_drift_rate = -1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion * inc_cos;
-        let center_offset = if self.raan_spacing_deg.is_some() {
+        let center_offset = if self.partial_coverage() {
             raan_step * (self.num_planes - 1) as f64 / 2.0
+        } else {
+            0.0
+        };
+        let sat_center_offset = if self.partial_sat_coverage() {
+            sat_step * (sats_per_plane - 1) as f64 / 2.0
         } else {
             0.0
         };
@@ -97,7 +132,7 @@ impl WalkerConstellation {
         let raan_sin = raan.sin();
         let phase_offset = phase_step * plane as f64;
 
-        let mean_anomaly = sat_step * sat as f64 + if dead { 0.0 } else { mean_motion * time } + phase_offset;
+        let mean_anomaly = sat_step * sat as f64 - sat_center_offset + if dead { 0.0 } else { mean_motion * time } + phase_offset;
         let true_anomaly = if ecc < 1e-8 {
             mean_anomaly
         } else {
@@ -135,7 +170,7 @@ impl WalkerConstellation {
         let inc_sin = inc.sin();
         let raan_step = self.raan_step();
         let raan_offset = -self.raan_offset_deg.to_radians();
-        let sat_step = 2.0 * PI / sats_per_plane as f64;
+        let sat_step = self.sat_step();
         let is_star = self.walker_type == WalkerType::Star;
         let omega = self.arg_periapsis_deg.to_radians();
 
@@ -144,8 +179,13 @@ impl WalkerConstellation {
         let r_ratio = self.planet_equatorial_radius / semi_major;
         let raan_drift_rate = -1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion * inc_cos;
 
-        let center_offset = if self.raan_spacing_deg.is_some() {
+        let center_offset = if self.partial_coverage() {
             raan_step * (self.num_planes - 1) as f64 / 2.0
+        } else {
+            0.0
+        };
+        let sat_center_offset = if self.partial_sat_coverage() {
+            sat_step * (sats_per_plane - 1) as f64 / 2.0
         } else {
             0.0
         };
@@ -158,7 +198,7 @@ impl WalkerConstellation {
             let phase_offset = phase_step * plane as f64;
 
             for sat in 0..sats_per_plane {
-                let mean_anomaly = sat_step * sat as f64 + if dead { 0.0 } else { mean_motion * time } + phase_offset;
+                let mean_anomaly = sat_step * sat as f64 - sat_center_offset + if dead { 0.0 } else { mean_motion * time } + phase_offset;
 
                 let true_anomaly = if ecc < 1e-8 {
                     mean_anomaly
@@ -194,7 +234,7 @@ impl WalkerConstellation {
                     lat,
                     lon,
                     ascending,
-                    neighbor_idx: None,
+                    neighbors: Vec::new(),
                     name: None,
                     tle_inclination_deg: None,
                     tle_mean_motion: None,
@@ -202,23 +242,32 @@ impl WalkerConstellation {
             }
         }
 
-        let no_wrap = is_star || self.raan_spacing_deg.is_some();
+        let no_wrap = is_star || self.partial_coverage();
+        let no_sat_wrap = self.partial_sat_coverage();
         for i in 0..positions.len() {
-            let sat = &positions[i];
-            if no_wrap && sat.plane == self.num_planes - 1 {
-                continue;
-            }
-            let next_plane = (sat.plane + 1) % self.num_planes;
-            let next_plane_start = next_plane * sats_per_plane;
-            let next_plane_end = next_plane_start + sats_per_plane;
-            let target_idx = sat.sat_index;
-            for j in next_plane_start..next_plane_end {
-                let other = &positions[j];
-                if other.sat_index == target_idx {
-                    positions[i].neighbor_idx = Some(j);
+            let plane = positions[i].plane;
+            let sat_idx = positions[i].sat_index;
+            let mut nbrs = Vec::new();
+            for d in 1..=self.isl_plane_count {
+                if no_wrap && plane + d >= self.num_planes {
                     break;
                 }
+                let target_plane = (plane + d) % self.num_planes;
+                let start = target_plane * sats_per_plane;
+                let j = start + sat_idx;
+                if j < positions.len() {
+                    nbrs.push(j);
+                }
             }
+            for d in 1..=self.isl_intra_count {
+                if no_sat_wrap && sat_idx + d >= sats_per_plane {
+                    break;
+                }
+                let target_sat = (sat_idx + d) % sats_per_plane;
+                let j = plane * sats_per_plane + target_sat;
+                nbrs.push(j);
+            }
+            positions[i].neighbors = nbrs;
         }
 
         positions
@@ -235,7 +284,7 @@ impl WalkerConstellation {
         let omega = self.arg_periapsis_deg.to_radians();
 
         let raan_step = self.raan_step();
-        let center_offset = if self.raan_spacing_deg.is_some() {
+        let center_offset = if self.partial_coverage() {
             raan_step * (self.num_planes - 1) as f64 / 2.0
         } else {
             0.0

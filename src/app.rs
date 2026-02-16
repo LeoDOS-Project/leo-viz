@@ -275,6 +275,7 @@ impl App {
                 last_url_hash: String::new(),
                 last_frame_instant: None,
                 fps_smooth: 0.0,
+                moon_image_handles: HashMap::new(),
             },
             first_frame: true,
         };
@@ -357,6 +358,50 @@ impl eframe::App for App {
                         let tex = tex.downscale((tex.width / 512).max(1));
                         v.planet_textures.insert(key, std::sync::Arc::new(tex));
                     }
+                }
+            }
+        }
+
+        {
+            let mut needed_moons: std::collections::HashSet<CelestialBody> = std::collections::HashSet::new();
+            if let Some(tab) = v.tabs.get(active_tab_idx) {
+                for planet in &tab.planets {
+                    for &moon_body in &planet.enabled_moons {
+                        needed_moons.insert(moon_body);
+                    }
+                }
+            }
+            v.moon_image_handles.retain(|b, _| needed_moons.contains(b));
+            let gpu_ok = frame.gl().is_some() && v.sphere_renderer.is_some();
+            for &moon_body in &needed_moons {
+                if v.moon_image_handles.contains_key(&moon_body) {
+                    continue;
+                }
+                let key = (moon_body, Skin::Default, TextureResolution::R512);
+                if gpu_ok {
+                    let gl = frame.gl().unwrap();
+                    let sr = v.sphere_renderer.as_ref().unwrap();
+                    let mut renderer = sr.lock();
+                    if let Some(tex) = v.planet_textures.get(&key) {
+                        renderer.upload_texture(gl, key, tex);
+                    }
+                    let rot = Matrix3::identity();
+                    let image = renderer.render_to_image(gl, key, &rot, moon_body.flattening(), 64);
+                    let handle = ctx.load_texture(
+                        format!("moon_{:?}", moon_body),
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    v.moon_image_handles.insert(moon_body, handle);
+                } else if let Some(texture) = v.planet_textures.get(&key) {
+                    let rot = Matrix3::identity();
+                    let image = texture.render_sphere(64, &rot, moon_body.flattening());
+                    let handle = ctx.load_texture(
+                        format!("moon_{:?}", moon_body),
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    v.moon_image_handles.insert(moon_body, handle);
                 }
             }
         }

@@ -613,6 +613,36 @@ impl CelestialBody {
         }
     }
 
+    pub fn moons(&self) -> &'static [(CelestialBody, f64, f64, f64)] {
+        match self {
+            CelestialBody::Earth => &[
+                (CelestialBody::Moon, 384_400.0, 27.322, 0.0897),
+            ],
+            CelestialBody::Mars => &[
+                (CelestialBody::Phobos, 9_376.0, 0.3189, 0.0192),
+            ],
+            CelestialBody::Jupiter => &[
+                (CelestialBody::Io, 421_700.0, 1.769, 0.0006),
+                (CelestialBody::Europa, 671_034.0, 3.551, 0.0082),
+                (CelestialBody::Ganymede, 1_070_412.0, 7.155, 0.0033),
+                (CelestialBody::Callisto, 1_882_709.0, 16.689, 0.0035),
+            ],
+            CelestialBody::Saturn => &[
+                (CelestialBody::Mimas, 185_539.0, 0.942, 0.0281),
+                (CelestialBody::Enceladus, 238_042.0, 1.370, 0.0001),
+                (CelestialBody::Titan, 1_221_870.0, 15.945, 0.0055),
+                (CelestialBody::Iapetus, 3_560_820.0, 79.322, 0.1396),
+            ],
+            CelestialBody::Neptune => &[
+                (CelestialBody::Triton, 354_759.0, 5.877, 2.7437),
+            ],
+            CelestialBody::Pluto => &[
+                (CelestialBody::Charon, 19_591.0, 6.387, 0.0),
+            ],
+            _ => &[],
+        }
+    }
+
     pub fn display_color(&self) -> egui::Color32 {
         match self {
             CelestialBody::Mercury => egui::Color32::from_rgb(180, 160, 140),

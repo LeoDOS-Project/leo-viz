@@ -18,7 +18,7 @@ use eframe::{egui, egui_glow, glow};
 use egui::mutex::Mutex;
 use egui_plot::{Line, Plot, PlotImage, PlotPoint, PlotPoints, Points, Polygon, Text};
 use nalgebra::{Matrix3, Vector3};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
 use std::sync::Arc;
 
@@ -488,6 +488,7 @@ pub fn draw_3d_view(
     conjunction_heatmap: &[(ConjunctionInfo, f64)],
     correcting_sats: &HashSet<String>,
     radiation: Option<&RadiationConfig>,
+    moon_handles: &HashMap<CelestialBody, egui::TextureHandle>,
     context_menu_request: &mut Option<(egui::Pos2, f64, f64)>,
     label_click_request: &mut Option<(bool, usize, egui::Pos2)>,
 ) -> (Matrix3<f64>, f64) {
@@ -497,10 +498,14 @@ pub fn draw_3d_view(
         show_manhattan_path, show_shortest_path, show_radiation_path, radiation_weight,
         show_asc_desc_colors,
         show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
-        show_equator, show_graticule, show_crosshairs, show_terminator, earth_fixed_camera, use_gpu_rendering,
+        show_equator, show_graticule, show_crosshairs, show_terminator, show_eclipse, earth_fixed_camera, use_gpu_rendering,
         show_clouds, show_day_night, show_stars, show_borders, show_cities,
         trackpad_rotate,
         north_up,
+        ref enabled_moons,
+        show_moon_orbits,
+        show_moon_lines,
+        show_moon_labels,
     } = flags;
     let max_altitude = constellations.iter()
         .map(|(c, _, _, _, _, _)| c.altitude_km)
@@ -1706,7 +1711,7 @@ pub fn draw_3d_view(
             let link_dim = egui::Color32::from_rgba_unmultiplied(50, 50, 60, 80);
             for (_, positions, _, _, _, _) in constellations {
                 for sat in positions {
-                    if let Some(neighbor_idx) = sat.neighbor_idx {
+                    for &neighbor_idx in &sat.neighbors {
                         let neighbor = &positions[neighbor_idx];
                         let (rx1, ry1, rz1) = rotate_point_matrix(sat.x, sat.y, sat.z, &satellite_rotation);
                         let (rx2, ry2, rz2) = rotate_point_matrix(neighbor.x, neighbor.y, neighbor.z, &satellite_rotation);
@@ -2200,6 +2205,13 @@ pub fn draw_3d_view(
             }
         }
 
+        let sun_inertial = if show_eclipse {
+            let sd = Vector3::new(sun_dir[0] as f64, sun_dir[1] as f64, sun_dir[2] as f64).normalize();
+            Some((body_rotation * sd).normalize())
+        } else {
+            None
+        };
+
         for (constellation, positions, color_offset, tle_kind, orig_idx, cons_label) in constellations {
             if *tle_kind != 0 {
                 let is_tle_debris = *tle_kind == 2;
@@ -2277,6 +2289,13 @@ pub fn draw_3d_view(
                             }
                         }
                     }
+                    let color = if let Some(ref sun) = sun_inertial {
+                        let sp = Vector3::new(sat.x, sat.y, sat.z);
+                        let proj = sp.dot(sun);
+                        if proj < 0.0 && (sp.dot(&sp) - proj * proj) < planet_radius * planet_radius {
+                            egui::Color32::from_rgba_unmultiplied(color.r() / 3, color.g() / 3, color.b() / 3, color.a())
+                        } else { color }
+                    } else { color };
                     let dim_col = egui::Color32::from_rgba_unmultiplied(
                         color.r() / 2, color.g() / 2, color.b() / 2, 80,
                     );
@@ -2410,6 +2429,13 @@ pub fn draw_3d_view(
                     } else {
                         color
                     };
+                    let color = if let Some(ref sun) = sun_inertial {
+                        let sp = Vector3::new(sat.x, sat.y, sat.z);
+                        let proj = sp.dot(sun);
+                        if proj < 0.0 && (sp.dot(&sp) - proj * proj) < planet_radius * planet_radius {
+                            egui::Color32::from_rgba_unmultiplied(color.r() / 3, color.g() / 3, color.b() / 3, color.a())
+                        } else { color }
+                    } else { color };
                     let dim_col = egui::Color32::from_rgba_unmultiplied(
                         color.r() / 2, color.g() / 2, color.b() / 2, 80,
                     );
@@ -2528,6 +2554,141 @@ pub fn draw_3d_view(
                 ui.painter().line_segment([sp1, sp2], egui::Stroke::new(1.5, c));
                 if visible1 { ui.painter().circle_filled(sp1, dot_radius, color); }
                 if visible2 { ui.painter().circle_filled(sp2, dot_radius, c); }
+            }
+        }
+    }
+
+    if !enabled_moons.is_empty() {
+        let plot_rect = response.response.rect;
+        let px_per_km = width as f64 * 0.5 / margin;
+        let camera_alt = 1_000_000.0;
+        let earth_r_sq = planet_radius * planet_radius;
+        for &(moon_body, orbit_km, period_days, incl_rad) in body_key.0.moons() {
+            if !enabled_moons.contains(&moon_body) {
+                continue;
+            }
+            let color = moon_body.display_color();
+
+            let moon_r_km = moon_body.radius_km();
+            let angle = 2.0 * PI * time / (period_days * 86400.0);
+            let x = orbit_km * angle.cos();
+            let y_orbit = orbit_km * angle.sin();
+            let y = y_orbit * incl_rad.cos();
+            let z = y_orbit * incl_rad.sin();
+            let (rx, ry, rz) = rotate_point_matrix(x, y, z, &satellite_rotation);
+
+            let dist = camera_alt - rz;
+            let moon_behind = dist <= 0.0;
+
+            let altitude = 10000.0 / zoom;
+            let fade = if rz > 0.0 && altitude < 30000.0 {
+                ((altitude - 10000.0) / 20000.0).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            if fade <= 0.0 {
+                continue;
+            }
+            let faded_color = egui::Color32::from_rgba_unmultiplied(
+                color.r(), color.g(), color.b(), (color.a() as f64 * fade) as u8,
+            );
+
+            if show_moon_orbits {
+                let steps = 512;
+                let mut prev: Option<([f64; 2], bool, f64, f64)> = None;
+                for i in 0..=steps {
+                    let a = 2.0 * PI * i as f64 / steps as f64;
+                    let ox = orbit_km * a.cos();
+                    let oy_orbit = orbit_km * a.sin();
+                    let oy = oy_orbit * incl_rad.cos();
+                    let oz = oy_orbit * incl_rad.sin();
+                    let (orx, ory, orz) = rotate_point_matrix(ox, oy, oz, &satellite_rotation);
+                    let d = camera_alt - orz;
+                    if d <= 0.0 {
+                        prev = None;
+                        continue;
+                    }
+                    let pt_fade = if orz > 0.0 && altitude < 30000.0 {
+                        ((altitude - 10000.0) / 20000.0).clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    };
+                    let behind_planet = orz < 0.0 && (orx * orx + ory * ory) < earth_r_sq;
+                    let scale = camera_alt / d;
+                    let px = orx * scale;
+                    let py = ory * scale;
+                    if let Some((p, p_planet, pd, pf)) = prev {
+                        let seg_fade = (pf + pt_fade) * 0.5;
+                        if seg_fade > 0.0 {
+                            let s1 = response.transform.position_from_point(&egui_plot::PlotPoint::new(p[0], p[1]));
+                            let s2 = response.transform.position_from_point(&egui_plot::PlotPoint::new(px, py));
+                            if let Some((c1, c2)) = clip_line_to_rect(s1, s2, plot_rect) {
+                                let avg_d = (pd + d) * 0.5;
+                                let w = (camera_alt / avg_d).max(0.5) as f32;
+                                if behind_planet || p_planet {
+                                    let a = (60.0 * seg_fade) as u8;
+                                    let c = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), a);
+                                    ui.painter().line_segment([c1, c2], egui::Stroke::new((w * 0.5).max(0.3), c));
+                                } else {
+                                    let a = (color.a() as f64 * seg_fade) as u8;
+                                    let c = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), a);
+                                    ui.painter().line_segment([c1, c2], egui::Stroke::new(w, c));
+                                }
+                            }
+                        }
+                    }
+                    prev = Some(([px, py], behind_planet, d, pt_fade));
+                }
+            }
+
+            if moon_behind {
+                continue;
+            }
+            let proj_r_sq = rx * rx + ry * ry;
+            if rz < 0.0 && proj_r_sq < earth_r_sq {
+                continue;
+            }
+            let moon_scale = camera_alt / dist;
+            let mrx = rx * moon_scale;
+            let mry = ry * moon_scale;
+            let sp = response.transform.position_from_point(
+                &egui_plot::PlotPoint::new(mrx, mry),
+            );
+            if !plot_rect.contains(sp) {
+                continue;
+            }
+
+            if show_moon_lines {
+                let d = (rx * rx + ry * ry + rz * rz).sqrt();
+                if d > planet_radius {
+                    let t = planet_radius / d;
+                    let sx = rx * t;
+                    let sy = ry * t;
+                    let surface = response.transform.position_from_point(&egui_plot::PlotPoint::new(sx, sy));
+                    let line_a = (120.0 * fade) as u8;
+                    let line_color = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), line_a);
+                    ui.painter().line_segment([surface, sp], egui::Stroke::new(0.5, line_color));
+                }
+            }
+
+            let dot_r = (moon_r_km * camera_alt / dist * px_per_km) as f32;
+            if let Some(handle) = moon_handles.get(&moon_body) {
+                let rect = egui::Rect::from_center_size(sp, egui::Vec2::splat(dot_r * 2.0));
+                let tint = egui::Color32::from_rgba_unmultiplied(255, 255, 255, (255.0 * fade) as u8);
+                ui.painter().image(handle.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), tint);
+            } else {
+                ui.painter().circle_filled(sp, dot_r, faded_color);
+            }
+            if show_moon_labels {
+                let label_a = (255.0 * fade) as u8;
+                let label_color = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), label_a);
+                let font = egui::FontId::proportional(11.0);
+                let galley = ui.painter().layout_no_wrap(moon_body.label().to_string(), font, label_color);
+                let text_pos = sp + egui::Vec2::new(dot_r + 4.0, -galley.size().y * 0.5);
+                let bg_a = (160.0 * fade) as u8;
+                let bg = egui::Rect::from_min_size(text_pos, galley.size()).expand(2.0);
+                ui.painter().rect_filled(bg, 2.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, bg_a));
+                ui.painter().galley(text_pos, galley, label_color);
             }
         }
     }
@@ -3462,7 +3623,7 @@ pub fn draw_map_view(
 
             if show_links {
                 for sat in positions.iter() {
-                    if let Some(ni) = sat.neighbor_idx {
+                    for &ni in &sat.neighbors {
                         if let Some(neigh) = positions.get(ni) {
                             let link_color = egui::Color32::from_rgba_unmultiplied(120, 120, 120, 60);
                             if let (Some((x1, y1)), Some((x2, y2))) = (
@@ -3871,7 +4032,7 @@ pub fn draw_torus(
                 };
                 let link_dim = egui::Color32::from_rgba_unmultiplied(50, 50, 60, 100);
                 for sat in positions {
-                    if let Some(neighbor_idx) = sat.neighbor_idx {
+                    for &neighbor_idx in &sat.neighbors {
                         let neighbor = &positions[neighbor_idx];
                         let angle1 = plane_theta(sat.plane);
                         let angle2 = plane_theta(neighbor.plane);
@@ -4147,6 +4308,43 @@ pub fn draw_torus(
     }
 
     (user_rotation, zoom)
+}
+
+fn clip_line_to_rect(
+    mut p0: egui::Pos2,
+    mut p1: egui::Pos2,
+    r: egui::Rect,
+) -> Option<(egui::Pos2, egui::Pos2)> {
+    const LEFT: u8 = 1;
+    const RIGHT: u8 = 2;
+    const BOT: u8 = 4;
+    const TOP: u8 = 8;
+    let outcode = |p: egui::Pos2| -> u8 {
+        let mut c = 0u8;
+        if p.x < r.min.x { c |= LEFT; } else if p.x > r.max.x { c |= RIGHT; }
+        if p.y < r.min.y { c |= TOP; } else if p.y > r.max.y { c |= BOT; }
+        c
+    };
+    let mut c0 = outcode(p0);
+    let mut c1 = outcode(p1);
+    loop {
+        if (c0 | c1) == 0 { return Some((p0, p1)); }
+        if (c0 & c1) != 0 { return None; }
+        let co = if c0 != 0 { c0 } else { c1 };
+        let dx = p1.x - p0.x;
+        let dy = p1.y - p0.y;
+        let p = if co & TOP != 0 {
+            egui::pos2(p0.x + dx * (r.min.y - p0.y) / dy, r.min.y)
+        } else if co & BOT != 0 {
+            egui::pos2(p0.x + dx * (r.max.y - p0.y) / dy, r.max.y)
+        } else if co & RIGHT != 0 {
+            egui::pos2(r.max.x, p0.y + dy * (r.max.x - p0.x) / dx)
+        } else {
+            egui::pos2(r.min.x, p0.y + dy * (r.min.x - p0.x) / dx)
+        };
+        if co == c0 { p0 = p; c0 = outcode(p0); }
+        else { p1 = p; c1 = outcode(p1); }
+    }
 }
 
 pub fn plane_color(plane: usize) -> egui::Color32 {

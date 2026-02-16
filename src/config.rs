@@ -29,12 +29,16 @@ pub struct ConstellationConfig {
     pub num_planes: usize,
     pub altitude_km: f64,
     pub inclination: f64,
+    pub sso: bool,
     pub walker_type: WalkerType,
     pub phasing: f64,
     pub raan_offset: f64,
     pub raan_spacing: Option<f64>,
+    pub sat_spacing_km: Option<f64>,
     pub eccentricity: f64,
     pub arg_periapsis: f64,
+    pub isl_plane_count: usize,
+    pub isl_intra_count: usize,
     pub drag_enabled: bool,
     pub ballistic_coeff: f64,
     pub preset: Preset,
@@ -49,12 +53,16 @@ impl ConstellationConfig {
             num_planes: 30,
             altitude_km: 200.0,
             inclination: 90.0,
+            sso: false,
             walker_type: WalkerType::Delta,
             phasing: 0.0,
             raan_offset: 0.0,
             raan_spacing: None,
+            sat_spacing_km: None,
             eccentricity: 0.0,
             arg_periapsis: 0.0,
+            isl_plane_count: 1,
+            isl_intra_count: 1,
             drag_enabled: false,
             ballistic_coeff: 100.0,
             preset: Preset::None,
@@ -67,6 +75,19 @@ impl ConstellationConfig {
         self.sats_per_plane * self.num_planes
     }
 
+    pub fn sso_inclination(altitude_km: f64, eccentricity: f64, planet_mu: f64, planet_j2: f64, planet_eq_radius: f64, planet_year_days: f64) -> Option<f64> {
+        let a = planet_eq_radius + altitude_km;
+        let n = (planet_mu / (a * a * a)).sqrt();
+        let rate_required = 2.0 * std::f64::consts::PI / (planet_year_days * 86400.0);
+        let e2 = 1.0 - eccentricity * eccentricity;
+        let cos_i = -rate_required * e2 * e2 * a * a / (1.5 * n * planet_j2 * planet_eq_radius * planet_eq_radius);
+        if cos_i.abs() <= 1.0 {
+            Some(cos_i.acos().to_degrees())
+        } else {
+            None
+        }
+    }
+
     pub fn constellation(&self, planet_radius: f64, planet_mu: f64, planet_j2: f64, planet_equatorial_radius: f64) -> WalkerConstellation {
         WalkerConstellation {
             walker_type: self.walker_type,
@@ -77,6 +98,9 @@ impl ConstellationConfig {
             phasing: self.phasing,
             raan_offset_deg: self.raan_offset,
             raan_spacing_deg: self.raan_spacing,
+            sat_spacing_km: self.sat_spacing_km,
+            isl_plane_count: self.isl_plane_count,
+            isl_intra_count: self.isl_intra_count,
             eccentricity: self.eccentricity,
             arg_periapsis_deg: self.arg_periapsis,
             planet_radius,
@@ -160,6 +184,8 @@ pub struct PlanetConfig {
     pub kessler: KesslerSimulation,
     pub radiation: RadiationConfig,
     pub show_radiation_window: bool,
+    pub show_moons_window: bool,
+    pub enabled_moons: HashSet<CelestialBody>,
 }
 
 impl PlanetConfig {
@@ -196,6 +222,8 @@ impl PlanetConfig {
             kessler: KesslerSimulation::default(),
             radiation: RadiationConfig::default(),
             show_radiation_window: false,
+            show_moons_window: false,
+            enabled_moons: HashSet::new(),
         }
     }
 
@@ -205,10 +233,11 @@ impl PlanetConfig {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct View3DFlags {
     pub show_orbits: bool,
     pub show_axes: bool,
+    pub show_magnetic_axis: bool,
     pub show_coverage: bool,
     pub show_links: bool,
     pub show_intra_links: bool,
@@ -229,6 +258,7 @@ pub struct View3DFlags {
     pub show_graticule: bool,
     pub show_crosshairs: bool,
     pub show_terminator: bool,
+    pub show_eclipse: bool,
     pub earth_fixed_camera: bool,
     pub use_gpu_rendering: bool,
     pub show_clouds: bool,
@@ -238,6 +268,10 @@ pub struct View3DFlags {
     pub show_cities: bool,
     pub trackpad_rotate: bool,
     pub north_up: bool,
+    pub enabled_moons: HashSet<CelestialBody>,
+    pub show_moon_orbits: bool,
+    pub show_moon_lines: bool,
+    pub show_moon_labels: bool,
 }
 
 #[derive(Clone)]
@@ -265,6 +299,7 @@ pub struct TabSettings {
     pub show_torus: bool,
     pub planet_projection: crate::projection::ProjectionKind,
     pub show_axes: bool,
+    pub show_magnetic_axis: bool,
     pub hide_behind_earth: bool,
     pub render_planet: bool,
     pub show_altitude_lines: bool,
@@ -277,6 +312,7 @@ pub struct TabSettings {
     pub show_cities: bool,
     pub show_day_night: bool,
     pub show_terminator: bool,
+    pub show_eclipse: bool,
     pub show_clouds: bool,
     pub show_stars: bool,
     pub show_radiation_belts: bool,
@@ -288,6 +324,9 @@ pub struct TabSettings {
     pub fixed_sizes: bool,
     pub trackpad_rotate: bool,
     pub north_up: bool,
+    pub show_moon_orbits: bool,
+    pub show_moon_lines: bool,
+    pub show_moon_labels: bool,
 }
 
 impl Default for TabSettings {
@@ -316,6 +355,7 @@ impl Default for TabSettings {
             show_torus: false,
             planet_projection: crate::projection::ProjectionKind::Orthographic,
             show_axes: false,
+            show_magnetic_axis: false,
             hide_behind_earth: true,
             render_planet: true,
             show_altitude_lines: false,
@@ -328,6 +368,7 @@ impl Default for TabSettings {
             show_cities: false,
             show_day_night: false,
             show_terminator: false,
+            show_eclipse: false,
             show_clouds: false,
             show_stars: false,
             show_radiation_belts: false,
@@ -339,6 +380,9 @@ impl Default for TabSettings {
             fixed_sizes: false,
             trackpad_rotate: true,
             north_up: true,
+            show_moon_orbits: true,
+            show_moon_lines: false,
+            show_moon_labels: true,
         }
     }
 }
@@ -633,6 +677,8 @@ mod shareable {
         pub ro: f64,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub rs: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub ss: Option<f64>,
         #[serde(default)]
         pub e: f64,
         #[serde(default)]
@@ -658,6 +704,7 @@ mod shareable {
                     ph: c.phasing,
                     ro: c.raan_offset,
                     rs: c.raan_spacing,
+                    ss: c.sat_spacing_km,
                     e: c.eccentricity,
                     ap: c.arg_periapsis,
                 }).collect(),
@@ -679,6 +726,7 @@ mod shareable {
                 c.phasing = shell.ph;
                 c.raan_offset = shell.ro;
                 c.raan_spacing = shell.rs;
+                c.sat_spacing_km = shell.ss;
                 c.eccentricity = shell.e;
                 c.arg_periapsis = shell.ap;
                 planet.constellations.push(c);
