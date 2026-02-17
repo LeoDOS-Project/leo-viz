@@ -3308,6 +3308,7 @@ pub fn draw_3d_view(
     }
 
     if response.response.hovered() {
+        let north_up = north_up && (10000.0 / zoom) <= 30000.0;
         let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
         let zd = ui.input(|i| i.zoom_delta());
         let rot_delta = ui.input(|i| i.rotation_delta()) as f64;
@@ -3373,6 +3374,8 @@ pub fn draw_3d_view(
                 let factor = 1.0 + scroll as f64 * 0.001;
                 zoom = (zoom * factor).clamp(0.01, 20000.0);
 
+                let alt_km = 10000.0 / zoom;
+                if alt_km <= 30000.0 {
                 if let Some(hover_pos) = response.response.hover_pos() {
                     let plot_pos = response.transform.value_from_position(hover_pos);
                     let cx = plot_pos.x;
@@ -3452,6 +3455,7 @@ pub fn draw_3d_view(
                             }
                         }
                     }
+                }
                 }
             }
         }
