@@ -498,8 +498,8 @@ pub fn draw_3d_view(
         show_manhattan_path, show_shortest_path, show_radiation_path, radiation_weight,
         show_asc_desc_colors,
         show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
-        show_equator, show_graticule, show_crosshairs, show_terminator, show_eclipse, earth_fixed_camera, use_gpu_rendering,
-        show_clouds, show_day_night, show_stars, show_borders, show_cities,
+        show_equator, show_graticule, show_crosshairs, show_terminator, show_eclipse, show_sun, earth_fixed_camera, use_gpu_rendering,
+        show_clouds, show_day_night, show_city_lights, show_stars, show_borders, show_cities,
         trackpad_rotate,
         north_up,
         ref enabled_moons,
@@ -530,6 +530,11 @@ pub fn draw_3d_view(
             rotation * body_rotation
         };
         let inv_rotation = combined_rotation.transpose();
+        let star_inv_rotation = if earth_fixed_camera {
+            body_rotation * rotation.transpose()
+        } else {
+            rotation.transpose()
+        };
         let flat = flattening as f32;
         let key = body_key;
         let scale = (planet_radius / margin) as f32;
@@ -565,13 +570,45 @@ pub fn draw_3d_view(
                         },
                         gl_texture: Some(detail_tex),
                     };
-                    r.paint(gl, key, &inv_rotation, flat as f64, logical_aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, Some(&dt), show_stars, show_stars, bg_color, uv_scale);
+                    r.paint(gl, key, &inv_rotation, &star_inv_rotation, flat as f64, logical_aspect, scale, atmosphere, show_clouds, show_day_night, show_city_lights, sun_dir, Some(&dt), show_stars, show_stars, bg_color, uv_scale);
                 } else {
-                    r.paint(gl, key, &inv_rotation, flat as f64, logical_aspect, scale, atmosphere, show_clouds, show_day_night, sun_dir, None, show_stars, show_stars, bg_color, uv_scale);
+                    r.paint(gl, key, &inv_rotation, &star_inv_rotation, flat as f64, logical_aspect, scale, atmosphere, show_clouds, show_day_night, show_city_lights, sun_dir, None, show_stars, show_stars, bg_color, uv_scale);
                 }
             })),
         };
         ui.painter().add(callback);
+
+        if show_sun {
+            let sun_v = Vector3::new(sun_dir[0] as f64, sun_dir[1] as f64, sun_dir[2] as f64).normalize();
+            let sun_rot = if earth_fixed_camera {
+                rotation
+            } else {
+                rotation * *body_rotation
+            };
+            let (sx, sy, sz) = rotate_point_matrix(sun_v.x, sun_v.y, sun_v.z, &sun_rot);
+            if sz <= 0.0 {
+                let sun_pos_uv = [(sx * 1.3) as f32, (sy * 1.3) as f32];
+                let sun_dist_au = body_key.0.semi_major_axis_au().unwrap_or(1.0) as f32;
+                let sun_intensity = (1.0 / (sun_dist_au * sun_dist_au)).min(2.0);
+                let zoom_dil = (1.0 / zoom as f32).sqrt();
+                let sun_renderer = sphere_renderer.unwrap().clone();
+                let sun_callback = egui::PaintCallback {
+                    rect,
+                    callback: Arc::new(egui_glow::CallbackFn::new(move |info, painter| {
+                        let gl = painter.gl();
+                        let vp = info.viewport_in_pixels();
+                        let ppp = info.pixels_per_point;
+                        let uv_s = [
+                            vp.width_px as f32 / (width * ppp).max(1.0),
+                            vp.height_px as f32 / (height * ppp).max(1.0),
+                        ];
+                        let r = sun_renderer.lock();
+                        r.paint_sun(gl, sun_pos_uv, scale, sun_intensity, zoom_dil, logical_aspect, uv_s);
+                    })),
+                };
+                ui.painter().add(sun_callback);
+            }
+        }
     }
 
     let plot = Plot::new(id)
@@ -660,6 +697,87 @@ pub fn draw_3d_view(
                             .radius(scaled_sat_radius * 0.8)
                             .filled(true),
                     );
+                }
+            }
+        }
+
+        if show_sun && !use_gpu {
+            let sun = Vector3::new(sun_dir[0] as f64, sun_dir[1] as f64, sun_dir[2] as f64).normalize();
+            let sun_rot = if earth_fixed_camera {
+                rotation
+            } else {
+                rotation * *body_rotation
+            };
+            let dist = margin * 1.3;
+            let (sx, sy, sz) = rotate_point_matrix(sun.x * dist, sun.y * dist, sun.z * dist, &sun_rot);
+            if sz <= 0.0 {
+                let clip_r = visual_earth_r * 1.01;
+                let pr_sq = clip_r * clip_r;
+                let sun_dist_au = body_key.0.semi_major_axis_au().unwrap_or(1.0);
+                let max_glow = planet_radius * 0.2 / sun_dist_au;
+                let intensity = 1.0 / (sun_dist_au * sun_dist_au);
+                let zoom_dilution = (1.0 / zoom).sqrt();
+                let num_rings = 40usize;
+                let ring_width = (max_glow / num_rings as f64 * 1.8) as f32 * zoom_factor;
+                let n = 72;
+                for ring in 0..num_rings {
+                    let t = ring as f64 / (num_rings - 1) as f64;
+                    let r = max_glow * (1.0 - t * t);
+                    let brightness = t * t * t;
+                    let base_alpha = 8.0 + 247.0 * brightness;
+                    let outer_fade = if brightness < 0.5 { zoom_dilution } else { 1.0 };
+                    let alpha = (base_alpha * intensity.min(1.0) * outer_fade).clamp(1.0, 255.0) as u8;
+                    let g = (200.0 + 55.0 * brightness) as u8;
+                    let b = (80.0 + 170.0 * brightness) as u8;
+                    let color = egui::Color32::from_rgba_unmultiplied(255, g, b, alpha);
+                    let mut seg: Vec<[f64; 2]> = Vec::new();
+                    for i in 0..=n {
+                        let theta = 2.0 * PI * i as f64 / n as f64;
+                        let px = sx + r * theta.cos();
+                        let py = sy + r * theta.sin();
+                        if px * px + py * py >= pr_sq {
+                            seg.push([px, py]);
+                        } else {
+                            if seg.len() >= 2 {
+                                plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut seg)))
+                                    .color(color).width(ring_width));
+                            }
+                            seg.clear();
+                        }
+                    }
+                    if seg.len() >= 2 {
+                        plot_ui.line(Line::new("", PlotPoints::new(seg))
+                            .color(color).width(ring_width));
+                    }
+                }
+                let ray_len = max_glow * 2.5;
+                let ray_alpha = (40.0 * intensity.min(1.0) * zoom_dilution).clamp(1.0, 255.0) as u8;
+                let ray_color = egui::Color32::from_rgba_unmultiplied(255, 240, 200, ray_alpha);
+                let spike_w = 2.0_f32;
+                for spike in 0..4 {
+                    let angle = PI / 4.0 * spike as f64;
+                    for &dir in &[1.0_f64, -1.0] {
+                        let mut pts = Vec::new();
+                        let steps = 30;
+                        for i in 0..=steps {
+                            let frac = i as f64 / steps as f64;
+                            let px = sx + dir * ray_len * frac * angle.cos();
+                            let py = sy + dir * ray_len * frac * angle.sin();
+                            if px * px + py * py >= pr_sq {
+                                pts.push([px, py]);
+                            } else {
+                                if pts.len() >= 2 {
+                                    plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut pts)))
+                                        .color(ray_color).width(spike_w));
+                                }
+                                pts.clear();
+                            }
+                        }
+                        if pts.len() >= 2 {
+                            plot_ui.line(Line::new("", PlotPoints::new(pts))
+                                .color(ray_color).width(spike_w));
+                        }
+                    }
                 }
             }
         }

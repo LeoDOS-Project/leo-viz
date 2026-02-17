@@ -406,15 +406,15 @@ impl eframe::App for App {
             }
         }
 
-        let (show_clouds, show_day_night, show_stars) = v.tabs.get(active_tab_idx)
-            .map(|t| (t.settings.show_clouds, t.settings.show_day_night, t.settings.show_stars))
+        let (show_clouds, show_city_lights, show_stars) = v.tabs.get(active_tab_idx)
+            .map(|t| (t.settings.show_clouds, t.settings.show_city_lights, t.settings.show_stars))
             .unwrap_or((false, false, false));
 
         if show_clouds {
             v.load_cloud_texture(ctx);
         }
 
-        if show_day_night {
+        if show_city_lights {
             v.load_night_texture(ctx);
         }
 
@@ -435,7 +435,7 @@ impl eframe::App for App {
                         renderer.upload_cloud_texture(gl, tex_res, cloud_tex);
                     }
                 }
-                if show_day_night {
+                if show_city_lights {
                     if let Some(night_tex) = &v.night_texture {
                         renderer.upload_night_texture(gl, night_tex);
                     }
@@ -934,52 +934,57 @@ impl eframe::App for App {
         v.current_gmst = gmst;
 
         let new_follow_rotation: Option<Matrix3<f64>> = 'follow: {
+            use crate::config::CameraMode;
             let Some(tab) = v.tabs.get(active_tab_idx) else { break 'follow None };
-            if !tab.settings.follow_satellite { break 'follow None; }
-            let Some(planet) = tab.planets.first() else { break 'follow None };
-            let Some(cam) = planet.satellite_cameras.last() else { break 'follow None };
+            match tab.settings.camera_mode {
+                CameraMode::Unlocked => break 'follow None,
+                CameraMode::TrackSatellite => {
+                    let Some(planet) = tab.planets.first() else { break 'follow None };
+                    let Some(cam) = planet.satellite_cameras.last() else { break 'follow None };
 
-            let set_follow_rotation = |radial: Vector3<f64>, velocity_dir: Vector3<f64>| {
-                let z_axis = radial;
-                let vel_proj = velocity_dir - radial * velocity_dir.dot(&radial);
-                let y_axis = vel_proj.normalize();
-                let x_axis = y_axis.cross(&z_axis).normalize();
-                Matrix3::new(
-                    x_axis.x, x_axis.y, x_axis.z,
-                    y_axis.x, y_axis.y, y_axis.z,
-                    z_axis.x, z_axis.y, z_axis.z,
-                )
-            };
+                    let set_follow_rotation = |radial: Vector3<f64>, velocity_dir: Vector3<f64>| {
+                        let z_axis = radial;
+                        let vel_proj = velocity_dir - radial * velocity_dir.dot(&radial);
+                        let y_axis = vel_proj.normalize();
+                        let x_axis = y_axis.cross(&z_axis).normalize();
+                        Matrix3::new(
+                            x_axis.x, x_axis.y, x_axis.z,
+                            y_axis.x, y_axis.y, y_axis.z,
+                            z_axis.x, z_axis.y, z_axis.z,
+                        )
+                    };
 
-            if cam.constellation_idx == usize::MAX {
-                let propagation_minutes = v.start_timestamp.timestamp() as f64 / 60.0 + tab_time / 60.0;
-                for preset in TlePreset::ALL.iter() {
-                    let Some((selected, state, _)) = planet.tle_selections.get(preset) else { continue };
-                    if !*selected { continue; }
-                    let TleLoadState::Loaded { satellites, .. } = state else { continue };
-                    let Some(sat) = satellites.get(cam.sat_index) else { continue };
-                    let minutes_since_epoch = propagation_minutes - sat.epoch_minutes;
-                    let Ok(prediction) = sat.constants.propagate(sgp4::MinutesSinceEpoch(minutes_since_epoch)) else { continue };
-                    let radial = Vector3::new(prediction.position[0], prediction.position[2], -prediction.position[1]).normalize();
-                    let velocity_dir = Vector3::new(prediction.velocity[0], prediction.velocity[2], -prediction.velocity[1]).normalize();
-                    break 'follow Some(set_follow_rotation(radial, velocity_dir));
+                    if cam.constellation_idx == usize::MAX {
+                        let propagation_minutes = v.start_timestamp.timestamp() as f64 / 60.0 + tab_time / 60.0;
+                        for preset in TlePreset::ALL.iter() {
+                            let Some((selected, state, _)) = planet.tle_selections.get(preset) else { continue };
+                            if !*selected { continue; }
+                            let TleLoadState::Loaded { satellites, .. } = state else { continue };
+                            let Some(sat) = satellites.get(cam.sat_index) else { continue };
+                            let minutes_since_epoch = propagation_minutes - sat.epoch_minutes;
+                            let Ok(prediction) = sat.constants.propagate(sgp4::MinutesSinceEpoch(minutes_since_epoch)) else { continue };
+                            let radial = Vector3::new(prediction.position[0], prediction.position[2], -prediction.position[1]).normalize();
+                            let velocity_dir = Vector3::new(prediction.velocity[0], prediction.velocity[2], -prediction.velocity[1]).normalize();
+                            break 'follow Some(set_follow_rotation(radial, velocity_dir));
+                        }
+                        None
+                    } else {
+                        let Some(cons) = planet.constellations.get(cam.constellation_idx) else { break 'follow None };
+                        let wc = cons.constellation(
+                            planet.celestial_body.radius_km(),
+                            planet.celestial_body.mu(),
+                            planet.celestial_body.j2(),
+                            planet.celestial_body.equatorial_radius_km(),
+                        );
+                        let pos_now = wc.satellite_positions(tab_time);
+                        let pos_next = wc.satellite_positions(tab_time + 0.1);
+                        let Some(sat) = pos_now.iter().find(|s| s.plane == cam.plane && s.sat_index == cam.sat_index) else { break 'follow None };
+                        let Some(sat2) = pos_next.iter().find(|s| s.plane == cam.plane && s.sat_index == cam.sat_index) else { break 'follow None };
+                        let radial = Vector3::new(sat.x, sat.y, sat.z).normalize();
+                        let velocity_dir = Vector3::new(sat2.x - sat.x, sat2.y - sat.y, sat2.z - sat.z).normalize();
+                        Some(set_follow_rotation(radial, velocity_dir))
+                    }
                 }
-                None
-            } else {
-                let Some(cons) = planet.constellations.get(cam.constellation_idx) else { break 'follow None };
-                let wc = cons.constellation(
-                    planet.celestial_body.radius_km(),
-                    planet.celestial_body.mu(),
-                    planet.celestial_body.j2(),
-                    planet.celestial_body.equatorial_radius_km(),
-                );
-                let pos_now = wc.satellite_positions(tab_time);
-                let pos_next = wc.satellite_positions(tab_time + 0.1);
-                let Some(sat) = pos_now.iter().find(|s| s.plane == cam.plane && s.sat_index == cam.sat_index) else { break 'follow None };
-                let Some(sat2) = pos_next.iter().find(|s| s.plane == cam.plane && s.sat_index == cam.sat_index) else { break 'follow None };
-                let radial = Vector3::new(sat.x, sat.y, sat.z).normalize();
-                let velocity_dir = Vector3::new(sat2.x - sat.x, sat2.y - sat.y, sat2.z - sat.z).normalize();
-                Some(set_follow_rotation(radial, velocity_dir))
             }
         };
         if let Some(new_rot) = new_follow_rotation {

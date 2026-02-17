@@ -259,10 +259,12 @@ pub struct View3DFlags {
     pub show_crosshairs: bool,
     pub show_terminator: bool,
     pub show_eclipse: bool,
+    pub show_sun: bool,
     pub earth_fixed_camera: bool,
     pub use_gpu_rendering: bool,
     pub show_clouds: bool,
     pub show_day_night: bool,
+    pub show_city_lights: bool,
     pub show_stars: bool,
     pub show_borders: bool,
     pub show_cities: bool,
@@ -274,6 +276,13 @@ pub struct View3DFlags {
     pub show_moon_labels: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum CameraMode {
+    #[default]
+    Unlocked,
+    TrackSatellite,
+}
+
 #[derive(Clone)]
 pub struct TabSettings {
     pub time: f64,
@@ -282,7 +291,7 @@ pub struct TabSettings {
     pub zoom: f64,
     pub rotation: Matrix3<f64>,
     pub earth_fixed_camera: bool,
-    pub follow_satellite: bool,
+    pub camera_mode: CameraMode,
     pub show_camera_windows: bool,
     pub show_orbits: bool,
     pub show_links: bool,
@@ -311,8 +320,10 @@ pub struct TabSettings {
     pub show_borders: bool,
     pub show_cities: bool,
     pub show_day_night: bool,
+    pub show_city_lights: bool,
     pub show_terminator: bool,
     pub show_eclipse: bool,
+    pub show_sun: bool,
     pub show_clouds: bool,
     pub show_stars: bool,
     pub show_radiation_belts: bool,
@@ -338,7 +349,7 @@ impl Default for TabSettings {
             zoom: 1.0,
             rotation: lat_lon_to_matrix(0.0, 0.0),
             earth_fixed_camera: false,
-            follow_satellite: false,
+            camera_mode: CameraMode::Unlocked,
             show_camera_windows: false,
             show_orbits: true,
             show_links: true,
@@ -367,8 +378,10 @@ impl Default for TabSettings {
             show_borders: false,
             show_cities: false,
             show_day_night: false,
+            show_city_lights: false,
             show_terminator: false,
             show_eclipse: false,
+            show_sun: false,
             show_clouds: false,
             show_stars: false,
             show_radiation_belts: false,

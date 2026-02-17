@@ -21,6 +21,8 @@ pub struct SphereRenderer {
     star_texture: Option<glow::Texture>,
     milky_way_texture: Option<glow::Texture>,
     ring_textures: HashMap<CelestialBody, glow::Texture>,
+    sun_program: glow::Program,
+    sun_vertex_array: glow::VertexArray,
 }
 
 impl SphereRenderer {
@@ -59,12 +61,14 @@ impl SphereRenderer {
                 uniform sampler2D u_detail;
                 uniform sampler2D u_stars;
                 uniform mat3 u_inv_rotation;
+                uniform mat3 u_star_rotation;
                 uniform float u_flattening;
                 uniform float u_aspect;
                 uniform float u_scale;
                 uniform float u_atmosphere;
                 uniform float u_show_clouds;
                 uniform float u_show_day_night;
+                uniform float u_show_city_lights;
                 uniform vec3 u_sun_dir;
                 uniform vec4 u_detail_bounds;
                 uniform float u_use_detail;
@@ -174,7 +178,7 @@ impl SphereRenderer {
                             float vp_aspect = u_aspect * u_uv_scale.x / u_uv_scale.y;
                             vec2 sp = (v_uv - 0.5) * 2.0;
                             sp.x *= vp_aspect;
-                            vec3 dir = u_inv_rotation * normalize(vec3(sp, -2.0));
+                            vec3 dir = u_star_rotation * normalize(vec3(sp, -2.0));
                             float slat = asin(clamp(dir.y, -1.0, 1.0));
                             float slon = atan(-dir.z, dir.x);
                             float su = (slon + PI) / (2.0 * PI);
@@ -209,7 +213,7 @@ impl SphereRenderer {
                             float vp_aspect = u_aspect * u_uv_scale.x / u_uv_scale.y;
                             vec2 sp = (v_uv - 0.5) * 2.0;
                             sp.x *= vp_aspect;
-                            vec3 dir = u_inv_rotation * normalize(vec3(sp, -2.0));
+                            vec3 dir = u_star_rotation * normalize(vec3(sp, -2.0));
                             float slat = asin(clamp(dir.y, -1.0, 1.0));
                             float slon = atan(-dir.z, dir.x);
                             float su = (slon + PI) / (2.0 * PI);
@@ -260,7 +264,7 @@ impl SphereRenderer {
                         float day_factor = smoothstep(-0.1, 0.1, sun_dot);
                         float shade = 0.2 + 0.8 * max(sun_dot, 0.0);
                         vec3 lit_day = day_color * shade;
-                        vec3 night_lights = texture(u_night, vec2(tex_u, tex_v)).rgb;
+                        vec3 night_lights = u_show_city_lights > 0.5 ? texture(u_night, vec2(tex_u, tex_v)).rgb : vec3(0.0);
                         color = mix(night_lights, lit_day, day_factor);
                     } else {
                         float shade = 0.3 + 0.7 * max(dot(normal, -D), 0.0);
@@ -322,6 +326,116 @@ impl SphereRenderer {
 
             let vertex_array = gl.create_vertex_array().expect("Cannot create vertex array");
 
+            let sun_program = gl.create_program().expect("Cannot create sun program");
+            let sun_vs = r#"
+                const vec2 verts[4] = vec2[4](
+                    vec2(-1.0, -1.0),
+                    vec2( 1.0, -1.0),
+                    vec2(-1.0,  1.0),
+                    vec2( 1.0,  1.0)
+                );
+                out vec2 v_uv;
+                void main() {
+                    v_uv = verts[gl_VertexID];
+                    gl_Position = vec4(verts[gl_VertexID], 0.0, 1.0);
+                }
+            "#;
+            let sun_fs = r#"
+                precision highp float;
+                in vec2 v_uv;
+                out vec4 out_color;
+                uniform vec2 u_uv_scale;
+                uniform float u_aspect;
+                uniform vec2 u_sun_pos;
+                uniform float u_planet_scale;
+                uniform float u_intensity;
+                uniform float u_zoom_dilution;
+                void main() {
+                    vec2 uv = v_uv * u_uv_scale;
+                    vec2 av = vec2(u_aspect, 1.0);
+                    vec2 pos = uv * av;
+                    vec2 sun = u_sun_pos * av;
+
+                    vec2 rel = pos - sun;
+                    float d = length(rel);
+                    float planet_d = length(pos);
+                    float ps = u_planet_scale;
+
+                    float sun_r = ps * 0.72;
+                    float facing_sun = max(dot(normalize(pos + 0.001), normalize(sun + 0.001)), 0.0);
+                    float limb_shift = facing_sun * ps * 0.015;
+                    float core_mask = smoothstep(sun_r * 1.02, sun_r * 0.98, d);
+                    float core_vis = smoothstep(ps - limb_shift - ps * 0.01, ps - limb_shift + ps * 0.01, planet_d);
+                    float final_core = core_mask * core_vis * 3.0;
+
+                    float glow_ext = ps * 5.0;
+                    float nd = d / max(glow_ext, 0.001);
+                    float glow = exp(-nd * 3.5) * 0.8;
+                    float veil = pow(1.0 - clamp(nd, 0.0, 1.0), 4.0) * 0.1;
+                    float planet_mask = smoothstep(ps * 0.95, ps * 1.0, planet_d);
+                    float final_glow = (glow + veil) * planet_mask * u_intensity * u_zoom_dilution;
+
+                    float spike_angle = atan(rel.y, rel.x);
+                    float spike_nd = d / max(glow_ext, 0.001);
+                    float spike_accum = 0.0;
+                    for (int i = 0; i < 8; i++) {
+                        float ray_a = float(i) * 0.7854;
+                        float diff = abs(mod(spike_angle - ray_a + 3.14159, 6.28318) - 3.14159);
+                        float needle = exp(-diff * 500.0) * exp(-spike_nd * 1.5);
+                        float halo = exp(-diff * 20.0) * 0.1 * exp(-spike_nd * 0.5);
+                        spike_accum += needle + halo;
+                    }
+                    float sun_dist = length(sun);
+                    float occ_factor = smoothstep(ps - sun_r, ps + sun_r, sun_dist);
+                    float final_spikes = spike_accum * 0.5 * occ_factor * u_intensity * u_zoom_dilution;
+
+                    vec3 color = vec3(final_core)
+                        + vec3(1.0, 0.78, 0.3) * final_glow
+                        + vec3(1.0, 0.85, 0.5) * final_spikes;
+
+                    vec2 sun_n = normalize(sun + 0.001);
+                    vec2 pos_n = normalize(pos + 0.001);
+                    float facing = max(dot(pos_n, sun_n), 0.0);
+                    float limb_d = abs(planet_d - ps) / (ps * 0.012);
+                    float ring_band = exp(-limb_d * limb_d);
+                    float on_outside = smoothstep(ps * 0.99, ps * 1.003, planet_d);
+                    float near_limb = smoothstep(ps * 1.03, ps * 1.003, planet_d);
+                    float eclipse_f = smoothstep(ps * 3.0, ps * 0.5, sun_dist);
+                    float ring_t = smoothstep(ps, ps * 1.02, planet_d);
+                    vec3 ring_col = mix(vec3(1.0, 0.3, 0.05), vec3(0.2, 0.4, 1.0), ring_t);
+                    float ring = ring_band * on_outside * near_limb * facing * eclipse_f * 1.5 * u_intensity;
+                    color += ring_col * ring;
+
+                    out_color = vec4(max(color, vec3(0.0)), 0.0);
+                }
+            "#;
+            let sun_shaders: Vec<_> = [
+                (glow::VERTEX_SHADER, sun_vs),
+                (glow::FRAGMENT_SHADER, sun_fs),
+            ].iter().map(|(shader_type, source)| {
+                let shader = gl.create_shader(*shader_type).expect("Cannot create shader");
+                gl.shader_source(shader, &format!("{shader_version}\n{source}"));
+                gl.compile_shader(shader);
+                assert!(
+                    gl.get_shader_compile_status(shader),
+                    "Failed to compile sun shader: {}",
+                    gl.get_shader_info_log(shader)
+                );
+                gl.attach_shader(sun_program, shader);
+                shader
+            }).collect();
+            gl.link_program(sun_program);
+            assert!(
+                gl.get_program_link_status(sun_program),
+                "Failed to link sun program: {}",
+                gl.get_program_info_log(sun_program)
+            );
+            for shader in sun_shaders {
+                gl.detach_shader(sun_program, shader);
+                gl.delete_shader(shader);
+            }
+            let sun_vertex_array = gl.create_vertex_array().expect("Cannot create sun VAO");
+
             Self {
                 program,
                 vertex_array,
@@ -331,6 +445,8 @@ impl SphereRenderer {
                 star_texture: None,
                 milky_way_texture: None,
                 ring_textures: HashMap::new(),
+                sun_program,
+                sun_vertex_array,
             }
         }
     }
@@ -529,12 +645,14 @@ impl SphereRenderer {
         gl: &glow::Context,
         key: (CelestialBody, Skin, TextureResolution),
         inv_rotation: &Matrix3<f64>,
+        star_inv_rotation: &Matrix3<f64>,
         flattening: f64,
         aspect: f32,
         scale: f32,
         atmosphere: f32,
         show_clouds: bool,
         show_day_night: bool,
+        show_city_lights: bool,
         sun_dir: [f32; 3],
         detail_texture: Option<&DetailTexture>,
         show_stars: bool,
@@ -632,6 +750,17 @@ impl SphereRenderer {
                 &rot_data,
             );
 
+            let star_rot_data: [f32; 9] = [
+                star_inv_rotation[(0, 0)] as f32, star_inv_rotation[(1, 0)] as f32, star_inv_rotation[(2, 0)] as f32,
+                star_inv_rotation[(0, 1)] as f32, star_inv_rotation[(1, 1)] as f32, star_inv_rotation[(2, 1)] as f32,
+                star_inv_rotation[(0, 2)] as f32, star_inv_rotation[(1, 2)] as f32, star_inv_rotation[(2, 2)] as f32,
+            ];
+            gl.uniform_matrix_3_f32_slice(
+                gl.get_uniform_location(self.program, "u_star_rotation").as_ref(),
+                false,
+                &star_rot_data,
+            );
+
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_flattening").as_ref(), flattening as f32);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_aspect").as_ref(), aspect);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_scale").as_ref(), scale);
@@ -640,8 +769,9 @@ impl SphereRenderer {
             let clouds_enabled = show_clouds && cloud_tex.is_some() && key.0 == CelestialBody::Earth;
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_show_clouds").as_ref(), if clouds_enabled { 1.0 } else { 0.0 });
 
-            let day_night_enabled = show_day_night && self.night_texture.is_some() && key.0 == CelestialBody::Earth;
+            let day_night_enabled = show_day_night && key.0 == CelestialBody::Earth;
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_show_day_night").as_ref(), if day_night_enabled { 1.0 } else { 0.0 });
+            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_show_city_lights").as_ref(), if show_city_lights { 1.0 } else { 0.0 });
             gl.uniform_3_f32(gl.get_uniform_location(self.program, "u_sun_dir").as_ref(), sun_dir[0], sun_dir[1], sun_dir[2]);
             gl.uniform_3_f32(gl.get_uniform_location(self.program, "u_bg_color").as_ref(), bg_color[0], bg_color[1], bg_color[2]);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_transparent_bg").as_ref(), 0.0);
@@ -751,6 +881,10 @@ impl SphereRenderer {
                 gl.get_uniform_location(self.program, "u_inv_rotation").as_ref(),
                 false, &rot_data,
             );
+            gl.uniform_matrix_3_f32_slice(
+                gl.get_uniform_location(self.program, "u_star_rotation").as_ref(),
+                false, &rot_data,
+            );
 
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_flattening").as_ref(), flattening as f32);
             gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_aspect").as_ref(), 1.0);
@@ -802,10 +936,37 @@ impl SphereRenderer {
         }
     }
 
+    pub fn paint_sun(
+        &self,
+        gl: &glow::Context,
+        sun_pos: [f32; 2],
+        planet_scale: f32,
+        intensity: f32,
+        zoom_dilution: f32,
+        aspect: f32,
+        uv_scale: [f32; 2],
+    ) {
+        unsafe {
+            gl.blend_func(glow::ONE, glow::ONE);
+            gl.use_program(Some(self.sun_program));
+            gl.bind_vertex_array(Some(self.sun_vertex_array));
+            gl.uniform_2_f32(gl.get_uniform_location(self.sun_program, "u_uv_scale").as_ref(), uv_scale[0], uv_scale[1]);
+            gl.uniform_1_f32(gl.get_uniform_location(self.sun_program, "u_aspect").as_ref(), aspect);
+            gl.uniform_2_f32(gl.get_uniform_location(self.sun_program, "u_sun_pos").as_ref(), sun_pos[0], sun_pos[1]);
+            gl.uniform_1_f32(gl.get_uniform_location(self.sun_program, "u_planet_scale").as_ref(), planet_scale);
+            gl.uniform_1_f32(gl.get_uniform_location(self.sun_program, "u_intensity").as_ref(), intensity);
+            gl.uniform_1_f32(gl.get_uniform_location(self.sun_program, "u_zoom_dilution").as_ref(), zoom_dilution);
+            gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+            gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+        }
+    }
+
     pub fn destroy(&self, gl: &glow::Context) {
         unsafe {
             gl.delete_program(self.program);
             gl.delete_vertex_array(self.vertex_array);
+            gl.delete_program(self.sun_program);
+            gl.delete_vertex_array(self.sun_vertex_array);
             for texture in self.textures.values() {
                 gl.delete_texture(*texture);
             }

@@ -2577,8 +2577,10 @@ impl ViewerState {
         let show_graticule = settings.show_graticule;
         let show_crosshairs = settings.show_crosshairs;
         let show_day_night = settings.show_day_night;
+        let show_city_lights = settings.show_city_lights;
         let show_terminator = settings.show_terminator;
         let show_eclipse = settings.show_eclipse;
+        let show_sun = settings.show_sun;
         let show_clouds = settings.show_clouds;
         let show_stars = settings.show_stars;
         let show_devices = settings.show_devices;
@@ -2620,8 +2622,8 @@ impl ViewerState {
                             show_manhattan_path, show_shortest_path, show_radiation_path, radiation_weight,
                             show_asc_desc_colors,
                             show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
-                            show_equator, show_graticule, show_crosshairs, show_terminator, show_eclipse, earth_fixed_camera,
-                            use_gpu_rendering: self.use_gpu_rendering, show_clouds, show_day_night,
+                            show_equator, show_graticule, show_crosshairs, show_terminator, show_eclipse, show_sun, earth_fixed_camera,
+                            use_gpu_rendering: self.use_gpu_rendering, show_clouds, show_day_night, show_city_lights,
                             show_stars, show_borders, show_cities,
                             trackpad_rotate,
                             north_up,

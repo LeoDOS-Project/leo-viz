@@ -220,71 +220,102 @@ impl ViewerState {
 
             ui.label(egui::RichText::new("Camera").strong());
             ui.indent("camera_opts", |ui| {
+                use crate::config::CameraMode;
                 let body_rotation = body_rotation_angle(current_body, s.time, current_gmst);
-                let (lat, base_lon) = matrix_to_lat_lon(&s.rotation);
-                let geo_lon = if s.earth_fixed_camera {
-                    base_lon
-                } else {
-                    let mut l = base_lon - body_rotation;
-                    while l > std::f64::consts::PI { l -= 2.0 * std::f64::consts::PI; }
-                    while l < -std::f64::consts::PI { l += 2.0 * std::f64::consts::PI; }
-                    l
-                };
-                let mut lat_deg = lat.to_degrees();
-                let mut lon_deg = geo_lon.to_degrees();
-                ui.horizontal(|ui| {
-                    ui.label("Lat:");
-                    let lat_changed = ui.add(egui::DragValue::new(&mut lat_deg).speed(0.5).max_decimals(1).suffix("°")).changed();
-                    ui.label("Lon:");
-                    let lon_changed = ui.add(egui::DragValue::new(&mut lon_deg).speed(0.5).max_decimals(1).suffix("°")).changed();
-                    ui.label("Alt:").on_hover_text("Controls the visible range of the plot.\nMoon perspective uses a fixed camera at 1,000,000 km.");
-                    let mut alt_km = 10000.0 / s.zoom;
-                    if ui.add(egui::DragValue::new(&mut alt_km).range(0.5..=1000000.0).speed(100.0).suffix(" km")).changed() {
-                        s.zoom = (10000.0 / alt_km).clamp(0.01, 20000.0);
-                    }
-                    lat_deg = lat_deg.clamp(-90.0, 90.0);
-                    while lon_deg > 180.0 { lon_deg -= 360.0; }
-                    while lon_deg < -180.0 { lon_deg += 360.0; }
-                    if lat_changed || lon_changed {
-                        let target_lon = if s.earth_fixed_camera {
-                            lon_deg.to_radians()
+
+                ui.radio_value(&mut s.camera_mode, CameraMode::Unlocked, "Unlocked");
+                {
+                    let unlocked = s.camera_mode == CameraMode::Unlocked;
+                    ui.indent("unlocked_opts", |ui| {
+                    ui.add_enabled_ui(unlocked, |ui| {
+                        let (lat, base_lon) = matrix_to_lat_lon(&s.rotation);
+                        let geo_lon = if s.earth_fixed_camera {
+                            base_lon
                         } else {
-                            lon_deg.to_radians() + body_rotation
+                            let mut l = base_lon - body_rotation;
+                            while l > std::f64::consts::PI { l -= 2.0 * std::f64::consts::PI; }
+                            while l < -std::f64::consts::PI { l += 2.0 * std::f64::consts::PI; }
+                            l
                         };
-                        s.rotation = lat_lon_to_matrix(lat_deg.to_radians(), target_lon);
-                    }
-                });
-                let was_earth_fixed = s.earth_fixed_camera;
-                ui.checkbox(&mut s.earth_fixed_camera, "Fixed Lat/Lon");
-                if s.earth_fixed_camera != was_earth_fixed {
-                    let cos_a = body_rotation.cos();
-                    let sin_a = body_rotation.sin();
-                    let body_y_rot = Matrix3::new(
-                        cos_a, 0.0, sin_a,
-                        0.0, 1.0, 0.0,
-                        -sin_a, 0.0, cos_a,
-                    );
-                    if s.earth_fixed_camera {
-                        s.rotation *= body_y_rot;
-                    } else {
-                        s.rotation *= body_y_rot.transpose();
-                    }
-                }
-                ui.checkbox(&mut s.trackpad_rotate, "Trackpad rotate");
-                ui.checkbox(&mut s.north_up, "North up");
-                ui.horizontal(|ui| {
-                    for (label, lat, lon) in [("N", 90.0_f64, 0.0_f64), ("S", -90.0, 0.0), ("E", 0.0, 90.0), ("W", 0.0, -90.0), ("C", 0.0, 0.0)] {
-                        if ui.button(label).clicked() {
-                            let target_lon = if s.earth_fixed_camera {
-                                lon.to_radians()
+                        let mut lat_deg = lat.to_degrees();
+                        let mut lon_deg = geo_lon.to_degrees();
+                        ui.horizontal(|ui| {
+                            ui.label("Lat:");
+                            let lat_changed = ui.add(egui::DragValue::new(&mut lat_deg).speed(0.5).max_decimals(1).suffix("°")).changed();
+                            ui.label("Lon:");
+                            let lon_changed = ui.add(egui::DragValue::new(&mut lon_deg).speed(0.5).max_decimals(1).suffix("°")).changed();
+                            ui.label("Alt:").on_hover_text("Controls the visible range of the plot.\nMoon perspective uses a fixed camera at 1,000,000 km.");
+                            let mut alt_km = 10000.0 / s.zoom;
+                            if ui.add(egui::DragValue::new(&mut alt_km).range(0.5..=1000000.0).speed(100.0).suffix(" km")).changed() {
+                                s.zoom = (10000.0 / alt_km).clamp(0.01, 20000.0);
+                            }
+                            lat_deg = lat_deg.clamp(-90.0, 90.0);
+                            while lon_deg > 180.0 { lon_deg -= 360.0; }
+                            while lon_deg < -180.0 { lon_deg += 360.0; }
+                            if lat_changed || lon_changed {
+                                let target_lon = if s.earth_fixed_camera {
+                                    lon_deg.to_radians()
+                                } else {
+                                    lon_deg.to_radians() + body_rotation
+                                };
+                                s.rotation = lat_lon_to_matrix(lat_deg.to_radians(), target_lon);
+                            }
+                        });
+                        let was_earth_fixed = s.earth_fixed_camera;
+                        ui.checkbox(&mut s.earth_fixed_camera, "Fixed Lat/Lon");
+                        if s.earth_fixed_camera != was_earth_fixed {
+                            let cos_a = body_rotation.cos();
+                            let sin_a = body_rotation.sin();
+                            let body_y_rot = Matrix3::new(
+                                cos_a, 0.0, sin_a,
+                                0.0, 1.0, 0.0,
+                                -sin_a, 0.0, cos_a,
+                            );
+                            if s.earth_fixed_camera {
+                                s.rotation *= body_y_rot;
                             } else {
-                                lon.to_radians() + body_rotation
-                            };
-                            s.rotation = lat_lon_to_matrix(lat.to_radians(), target_lon);
+                                s.rotation *= body_y_rot.transpose();
+                            }
                         }
-                    }
-                });
-                ui.checkbox(&mut s.follow_satellite, "Follow satellite");
+                        ui.checkbox(&mut s.trackpad_rotate, "Trackpad rotate");
+                        ui.checkbox(&mut s.north_up, "North up");
+                        ui.horizontal(|ui| {
+                            for (label, lat, lon) in [("N", 90.0_f64, 0.0_f64), ("S", -90.0, 0.0), ("E", 0.0, 90.0), ("W", 0.0, -90.0), ("C", 0.0, 0.0)] {
+                                if ui.button(label).clicked() {
+                                    s.camera_mode = CameraMode::Unlocked;
+                                    let target_lon = if s.earth_fixed_camera {
+                                        lon.to_radians()
+                                    } else {
+                                        lon.to_radians() + body_rotation
+                                    };
+                                    s.rotation = lat_lon_to_matrix(lat.to_radians(), target_lon);
+                                }
+                            }
+                            ui.separator();
+                            use crate::time::{DAYS_PER_YEAR, SOLAR_DECLINATION_MAX};
+                            let ts = self.start_timestamp + Duration::seconds(s.time as i64);
+                            use chrono::Datelike;
+                            let doy = ts.ordinal() as f64;
+                            let decl = SOLAR_DECLINATION_MAX * ((360.0 / DAYS_PER_YEAR) * (doy + 10.0)).to_radians().cos();
+                            let sun_geo_lon = ((doy - 80.0) * 360.0 / DAYS_PER_YEAR).to_radians() - body_rotation;
+                            for (label, lat_deg, lon_rad) in [
+                                ("Day", decl, sun_geo_lon),
+                                ("Night", -decl, sun_geo_lon + std::f64::consts::PI),
+                            ] {
+                                if ui.button(label).clicked() {
+                                    let target_lon = if s.earth_fixed_camera {
+                                        lon_rad
+                                    } else {
+                                        lon_rad + body_rotation
+                                    };
+                                    s.rotation = lat_lon_to_matrix(lat_deg.to_radians(), target_lon);
+                                }
+                            }
+                        });
+                    });
+                    });
+                }
+                ui.radio_value(&mut s.camera_mode, CameraMode::TrackSatellite, "Track Satellite");
                 ui.checkbox(&mut s.show_camera_windows, "Show camera windows");
             });
 
@@ -339,11 +370,13 @@ impl ViewerState {
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_magnetic_axis, "Show magnetic axis"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_terminator, "Show sunrise/sunset circle"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_eclipse, "Show eclipsed satellites"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_sun, "Show sun"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_polar_circle, "Show polar circle"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_equator, "Show equator"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_radiation_belts, "Radiation belts"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_graticule, "Show graticule"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_crosshairs, "Show crosshairs"));
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_day_night, "Show day/night"));
             });
 
             ui.label(egui::RichText::new("Ground").strong());
@@ -354,7 +387,8 @@ impl ViewerState {
             ui.label(egui::RichText::new("Aesthetics").strong());
             ui.indent("aesthetics_opts", |ui| {
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_clouds, "Show clouds"));
-                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_day_night, "Show day/night"));
+                ui.add_enabled(on && s.show_day_night, egui::Checkbox::new(&mut s.show_city_lights, "Show city lights"))
+                    .on_disabled_hover_text("Requires Show day/night");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_stars, "Show stars and milky way"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_cities, "City labels"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_borders, "Country borders"));
