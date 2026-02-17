@@ -244,7 +244,7 @@ impl ViewerState {
                             let lat_changed = ui.add(egui::DragValue::new(&mut lat_deg).speed(0.5).max_decimals(1).suffix("°")).changed();
                             ui.label("Lon:");
                             let lon_changed = ui.add(egui::DragValue::new(&mut lon_deg).speed(0.5).max_decimals(1).suffix("°")).changed();
-                            ui.label("Alt:").on_hover_text("Controls the visible range of the plot.\nMoon perspective uses a fixed camera at 1,000,000 km.");
+                            ui.label("Alt:").on_hover_text("Controls the visible range of the plot");
                             let mut alt_km = 10000.0 / s.zoom;
                             if ui.add(egui::DragValue::new(&mut alt_km).range(0.5..=1000000.0).speed(100.0).suffix(" km")).changed() {
                                 s.zoom = (10000.0 / alt_km).clamp(0.01, 20000.0);
@@ -259,6 +259,14 @@ impl ViewerState {
                                     lon_deg.to_radians() + body_rotation
                                 };
                                 s.rotation = lat_lon_to_matrix(lat_deg.to_radians(), target_lon);
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Cam:").on_hover_text("Camera distance for moon/sun perspective");
+                            let mut dist_m = s.moon_camera_distance_km / 1_000_000.0;
+                            if ui.add(egui::DragValue::new(&mut dist_m)
+                                .range(0.1..=10.0).speed(0.1).max_decimals(1).suffix(" M km")).changed() {
+                                s.moon_camera_distance_km = dist_m * 1_000_000.0;
                             }
                         });
                         let was_earth_fixed = s.earth_fixed_camera;

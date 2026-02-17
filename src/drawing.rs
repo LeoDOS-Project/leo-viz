@@ -506,6 +506,7 @@ pub fn draw_3d_view(
         show_moon_orbits,
         show_moon_lines,
         show_moon_labels,
+        moon_camera_distance_km,
     } = flags;
     let max_altitude = constellations.iter()
         .map(|(c, _, _, _, _, _)| c.altitude_km)
@@ -591,6 +592,7 @@ pub fn draw_3d_view(
                 let sun_dist_au = body_key.0.semi_major_axis_au().unwrap_or(1.0) as f32;
                 let sun_intensity = (1.0 / (sun_dist_au * sun_dist_au)).min(2.0);
                 let zoom_dil = (1.0 / zoom as f32).sqrt();
+                let cam_ratio = (moon_camera_distance_km / 1_000_000.0) as f32;
                 let sun_renderer = sphere_renderer.unwrap().clone();
                 let sun_callback = egui::PaintCallback {
                     rect,
@@ -603,7 +605,7 @@ pub fn draw_3d_view(
                             vp.height_px as f32 / (height * ppp).max(1.0),
                         ];
                         let r = sun_renderer.lock();
-                        r.paint_sun(gl, sun_pos_uv, scale, sun_intensity, zoom_dil, logical_aspect, uv_s);
+                        r.paint_sun(gl, sun_pos_uv, scale, cam_ratio, sun_intensity, zoom_dil, logical_aspect, uv_s);
                     })),
                 };
                 ui.painter().add(sun_callback);
@@ -2679,7 +2681,7 @@ pub fn draw_3d_view(
     if !enabled_moons.is_empty() {
         let plot_rect = response.response.rect;
         let px_per_km = width as f64 * 0.5 / margin;
-        let camera_alt = 1_000_000.0;
+        let camera_alt = moon_camera_distance_km;
         let earth_r_sq = planet_radius * planet_radius;
         for &(moon_body, orbit_km, period_days, incl_rad) in body_key.0.moons() {
             if !enabled_moons.contains(&moon_body) {

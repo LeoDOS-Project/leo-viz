@@ -348,6 +348,7 @@ impl SphereRenderer {
                 uniform float u_aspect;
                 uniform vec2 u_sun_pos;
                 uniform float u_planet_scale;
+                uniform float u_cam_ratio;
                 uniform float u_intensity;
                 uniform float u_zoom_dilution;
                 void main() {
@@ -361,14 +362,14 @@ impl SphereRenderer {
                     float planet_d = length(pos);
                     float ps = u_planet_scale;
 
-                    float sun_r = ps * 0.72;
+                    float sun_r = ps * 0.72 * u_cam_ratio;
                     float facing_sun = max(dot(normalize(pos + 0.001), normalize(sun + 0.001)), 0.0);
                     float limb_shift = facing_sun * ps * 0.015;
                     float core_mask = smoothstep(sun_r * 1.02, sun_r * 0.98, d);
                     float core_vis = smoothstep(ps - limb_shift - ps * 0.01, ps - limb_shift + ps * 0.01, planet_d);
                     float final_core = core_mask * core_vis * 3.0;
 
-                    float glow_ext = ps * 5.0;
+                    float glow_ext = ps * 5.0 * u_cam_ratio;
                     float nd = d / max(glow_ext, 0.001);
                     float glow = exp(-nd * 3.5) * 0.8;
                     float veil = pow(1.0 - clamp(nd, 0.0, 1.0), 4.0) * 0.1;
@@ -941,6 +942,7 @@ impl SphereRenderer {
         gl: &glow::Context,
         sun_pos: [f32; 2],
         planet_scale: f32,
+        cam_ratio: f32,
         intensity: f32,
         zoom_dilution: f32,
         aspect: f32,
@@ -954,6 +956,7 @@ impl SphereRenderer {
             gl.uniform_1_f32(gl.get_uniform_location(self.sun_program, "u_aspect").as_ref(), aspect);
             gl.uniform_2_f32(gl.get_uniform_location(self.sun_program, "u_sun_pos").as_ref(), sun_pos[0], sun_pos[1]);
             gl.uniform_1_f32(gl.get_uniform_location(self.sun_program, "u_planet_scale").as_ref(), planet_scale);
+            gl.uniform_1_f32(gl.get_uniform_location(self.sun_program, "u_cam_ratio").as_ref(), cam_ratio);
             gl.uniform_1_f32(gl.get_uniform_location(self.sun_program, "u_intensity").as_ref(), intensity);
             gl.uniform_1_f32(gl.get_uniform_location(self.sun_program, "u_zoom_dilution").as_ref(), zoom_dilution);
             gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);

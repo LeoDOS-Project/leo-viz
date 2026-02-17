@@ -2593,6 +2593,7 @@ impl ViewerState {
         let show_moon_orbits = settings.show_moon_orbits;
         let show_moon_lines = settings.show_moon_lines;
         let show_moon_labels = settings.show_moon_labels;
+        let moon_camera_distance_km = settings.moon_camera_distance_km;
 
         let is_2d_projection = planet_projection != crate::projection::ProjectionKind::Orthographic;
         let log_power = settings.solar_system_log_power;
@@ -2631,6 +2632,7 @@ impl ViewerState {
                             show_moon_orbits,
                             show_moon_lines,
                             show_moon_labels,
+                            moon_camera_distance_km,
                         };
                         let sun_dir = {
                             use chrono::Datelike;

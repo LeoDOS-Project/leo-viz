@@ -274,6 +274,7 @@ pub struct View3DFlags {
     pub show_moon_orbits: bool,
     pub show_moon_lines: bool,
     pub show_moon_labels: bool,
+    pub moon_camera_distance_km: f64,
 }
 
 #[derive(Clone, Copy, PartialEq, Default)]
@@ -338,6 +339,7 @@ pub struct TabSettings {
     pub show_moon_orbits: bool,
     pub show_moon_lines: bool,
     pub show_moon_labels: bool,
+    pub moon_camera_distance_km: f64,
 }
 
 impl Default for TabSettings {
@@ -396,6 +398,7 @@ impl Default for TabSettings {
             show_moon_orbits: true,
             show_moon_lines: false,
             show_moon_labels: true,
+            moon_camera_distance_km: 1_000_000.0,
         }
     }
 }
