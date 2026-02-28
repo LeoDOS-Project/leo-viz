@@ -80,7 +80,7 @@ impl App {
         {
             let mut renderer = sphere_renderer.lock();
             let builtin_key = if cfg!(target_arch = "wasm32") {
-                (CelestialBody::Earth, Skin::Default, TextureResolution::R512)
+                (CelestialBody::Earth, Skin::Default, TextureResolution::R2048)
             } else {
                 (CelestialBody::Earth, Skin::Default, TextureResolution::R8192)
             };
@@ -108,7 +108,7 @@ impl App {
                 ring_textures: HashMap::new(),
                 cloud_textures: HashMap::new(),
                 planet_image_handles: HashMap::new(),
-                texture_resolution: if cfg!(target_arch = "wasm32") { TextureResolution::R512 } else { TextureResolution::R8192 },
+                texture_resolution: if cfg!(target_arch = "wasm32") { TextureResolution::R2048 } else { TextureResolution::R8192 },
                 last_rotation: None,
                 earth_resolution: 512,
                 last_resolution: 0,
@@ -126,7 +126,7 @@ impl App {
                 ui_visible: true,
                 cycle_interval: 5.0,
                 last_cycle_time: 0.0,
-                use_gpu_rendering: !cfg!(target_arch = "wasm32"),
+                use_gpu_rendering: true,
                 show_borders: false,
                 show_cities: false,
                 active_tab_idx: 0,
