@@ -98,12 +98,11 @@ impl App {
                 torus_rotation: torus_initial,
                 planet_textures: {
                     let mut map = HashMap::new();
-                    let builtin_key = if cfg!(target_arch = "wasm32") {
-                        (CelestialBody::Earth, Skin::Default, TextureResolution::R512)
-                    } else {
-                        (CelestialBody::Earth, Skin::Default, TextureResolution::R8192)
-                    };
-                    map.insert(builtin_key, builtin_texture.clone());
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let builtin_key = (CelestialBody::Earth, Skin::Default, TextureResolution::R8192);
+                        map.insert(builtin_key, builtin_texture.clone());
+                    }
                     map
                 },
                 ring_textures: HashMap::new(),
