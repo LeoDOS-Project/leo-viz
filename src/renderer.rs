@@ -1044,6 +1044,8 @@ impl MapRenderer {
                 const float CASS_S = 57.29577951;
                 const float UTM_S = 57.29577951;
                 const float LAEA_S = 90.0;
+                const float GP_COS_STD = 0.7071067811865476;
+                const float GP_SCALE_Y = 90.0;
 
                 vec3 ej(float u, float m) {
                     if (m < 1e-15) return vec3(sin(u), cos(u), 1.0);
@@ -1231,6 +1233,13 @@ impl MapRenderer {
                         return vec2(degrees(asin(yn*sin(c)/rho)),
                                     degrees(atan(xn*sin(c),
                                                  rho*cos(c))));
+                    }
+                    if (p == 11) {
+                        float lon = x / GP_COS_STD;
+                        if(abs(lon)>180.0) return vec2(-999.0);
+                        float sl = y / GP_SCALE_Y * GP_COS_STD;
+                        if(abs(sl)>1.0) return vec2(-999.0);
+                        return vec2(degrees(asin(sl)), lon);
                     }
                     if (p == 10) {
                         float s12 = sqrt(0.5);

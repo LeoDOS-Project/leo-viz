@@ -318,6 +318,33 @@ impl Projection for LambertAzimuthalEqualArea {
     }
 }
 
+pub(crate) struct GallPeters;
+
+const GP_COS_STD: f64 = std::f64::consts::FRAC_1_SQRT_2;
+const GP_SCALE_Y: f64 = 90.0;
+
+impl Projection for GallPeters {
+    fn project(&self, lat_deg: f64, lon_deg: f64) -> Option<(f64, f64)> {
+        let lat_rad = lat_deg.to_radians();
+        let x = lon_deg * GP_COS_STD;
+        let y = lat_rad.sin() / GP_COS_STD * GP_SCALE_Y;
+        Some((x, y))
+    }
+    fn inverse(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        let lon_deg = x / GP_COS_STD;
+        if lon_deg.abs() > 180.0 { return None; }
+        let sin_lat = y / GP_SCALE_Y * GP_COS_STD;
+        if sin_lat.abs() > 1.0 { return None; }
+        Some((sin_lat.asin().to_degrees(), lon_deg))
+    }
+    fn x_range(&self) -> (f64, f64) {
+        (-180.0 * GP_COS_STD, 180.0 * GP_COS_STD)
+    }
+    fn y_range(&self) -> (f64, f64) {
+        (-GP_SCALE_Y / GP_COS_STD, GP_SCALE_Y / GP_COS_STD)
+    }
+}
+
 pub(crate) struct PeirceQuincuncial;
 
 const PEIRCE_SCALE: f64 = 90.0;
@@ -620,6 +647,7 @@ pub(crate) enum ProjectionKind {
     Cassini,
     TransverseMercator,
     LambertAzimuthalEqualArea,
+    GallPeters,
     PeirceQuincuncial,
 }
 
@@ -637,6 +665,7 @@ impl ProjectionKind {
             ProjectionKind::Cassini => &Cassini,
             ProjectionKind::TransverseMercator => &TransverseMercator,
             ProjectionKind::LambertAzimuthalEqualArea => &LambertAzimuthalEqualArea,
+            ProjectionKind::GallPeters => &GallPeters,
             ProjectionKind::PeirceQuincuncial => &PeirceQuincuncial,
         }
     }
@@ -653,6 +682,7 @@ impl ProjectionKind {
             ProjectionKind::Cassini => 7,
             ProjectionKind::TransverseMercator => 8,
             ProjectionKind::LambertAzimuthalEqualArea => 9,
+            ProjectionKind::GallPeters => 11,
             ProjectionKind::PeirceQuincuncial => 10,
         }
     }
@@ -670,6 +700,7 @@ impl ProjectionKind {
             ProjectionKind::Cassini => "Cassini",
             ProjectionKind::TransverseMercator => "UTM",
             ProjectionKind::LambertAzimuthalEqualArea => "Lambert Azimuthal",
+            ProjectionKind::GallPeters => "Gall-Peters",
             ProjectionKind::PeirceQuincuncial => "Peirce Quincuncial",
         }
     }

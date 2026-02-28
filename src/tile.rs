@@ -194,7 +194,7 @@ pub struct TileOverlayState {
     pub fetch_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub generation: u64,
     pub tile_x_origin: u32,
-    pub last_compose: std::time::Instant,
+    pub last_compose: web_time::Instant,
     pub base_fetched: bool,
     pub compose_buffer: Vec<[u8; 4]>,
 }

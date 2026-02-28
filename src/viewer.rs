@@ -120,7 +120,7 @@ pub(crate) struct ViewerState {
     pub(crate) view_width: f32,
     pub(crate) view_height: f32,
     pub(crate) solar_system_handles: HashMap<CelestialBody, egui::TextureHandle>,
-    pub(crate) ss_last_render_instant: Option<std::time::Instant>,
+    pub(crate) ss_last_render_instant: Option<web_time::Instant>,
     pub(crate) show_planet_sizes: bool,
     pub(crate) planet_sizes_t: f64,
     pub(crate) planet_sizes_auto_zoom: bool,
@@ -138,9 +138,10 @@ pub(crate) struct ViewerState {
     pub(crate) hohmann: crate::solar_system::HohmannState,
     #[cfg(target_arch = "wasm32")]
     pub(crate) last_url_hash: String,
-    pub(crate) last_frame_instant: Option<std::time::Instant>,
+    pub(crate) last_frame_instant: Option<web_time::Instant>,
     pub(crate) fps_smooth: f64,
     pub(crate) moon_image_handles: HashMap<CelestialBody, egui::TextureHandle>,
+    pub(crate) editing_tab: Option<usize>,
 }
 
 
@@ -186,7 +187,11 @@ impl TabViewer for ViewerState {
         self.pending_add_tab = Some(new_idx);
     }
 
-    fn context_menu(&mut self, _ui: &mut egui::Ui, _tab: &mut Self::Tab, _surface: SurfaceIndex, _node: NodeIndex) {
+    fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab, _surface: SurfaceIndex, _node: NodeIndex) {
+        if ui.button("Edit tab info...").clicked() {
+            self.editing_tab = Some(*tab);
+            ui.close();
+        }
     }
 }
 
@@ -213,7 +218,7 @@ impl ViewerState {
     }
 
     fn render_tab_ui(&mut self, ui: &mut egui::Ui, tab_idx: usize) {
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
         if let Some(prev) = self.last_frame_instant {
             let dt = now.duration_since(prev).as_secs_f64();
             if dt > 0.0 {
@@ -234,6 +239,41 @@ impl ViewerState {
                 egui::FontId::monospace(14.0),
                 egui::Color32::from_rgb(200, 200, 200),
             );
+        }
+
+        if self.auto_cycle_tabs {
+            let tab = &self.tabs[tab_idx];
+            let has_title = !tab.title.is_empty();
+            let has_desc = !tab.description.is_empty();
+            if has_title || has_desc {
+                let rect = ui.available_rect_before_wrap();
+                let painter = ui.painter();
+                let mut y = rect.bottom() - 20.0;
+                if has_desc {
+                    y -= painter.layout_no_wrap(
+                        tab.description.clone(),
+                        egui::FontId::proportional(18.0),
+                        egui::Color32::WHITE,
+                    ).rect.height();
+                    painter.text(
+                        egui::pos2(rect.center().x, y),
+                        egui::Align2::CENTER_BOTTOM,
+                        &tab.description,
+                        egui::FontId::proportional(18.0),
+                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 200),
+                    );
+                    y -= 8.0;
+                }
+                if has_title {
+                    painter.text(
+                        egui::pos2(rect.center().x, y),
+                        egui::Align2::CENTER_BOTTOM,
+                        &tab.title,
+                        egui::FontId::proportional(28.0),
+                        egui::Color32::WHITE,
+                    );
+                }
+            }
         }
 
         for planet in &mut self.tabs[tab_idx].planets {

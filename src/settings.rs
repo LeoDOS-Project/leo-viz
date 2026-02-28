@@ -213,6 +213,7 @@ impl ViewerState {
                             ui.selectable_value(&mut s.planet_projection, ProjectionKind::Cassini, "Cassini");
                             ui.selectable_value(&mut s.planet_projection, ProjectionKind::TransverseMercator, "UTM");
                             ui.selectable_value(&mut s.planet_projection, ProjectionKind::LambertAzimuthalEqualArea, "Lambert Azimuthal");
+                            ui.selectable_value(&mut s.planet_projection, ProjectionKind::GallPeters, "Gall-Peters");
                             ui.selectable_value(&mut s.planet_projection, ProjectionKind::PeirceQuincuncial, "Peirce Quincuncial");
                         });
                 });

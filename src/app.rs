@@ -247,7 +247,7 @@ impl App {
                         pending_tiles: HashSet::new(),
                         needed_tiles: Vec::new(),
                         dirty: false,
-                        last_compose: std::time::Instant::now(),
+                        last_compose: web_time::Instant::now(),
                         base_fetched: false,
                         compose_buffer: Vec::new(),
                     }
@@ -276,6 +276,7 @@ impl App {
                 last_frame_instant: None,
                 fps_smooth: 0.0,
                 moon_image_handles: HashMap::new(),
+                editing_tab: None,
             },
             first_frame: true,
         };
@@ -734,7 +735,7 @@ impl eframe::App for App {
                 let compose_elapsed = v.tile_overlay.last_compose.elapsed().as_millis() >= 200;
                 if v.tile_overlay.dirty && !v.tile_overlay.needed_tiles.is_empty() && (bounds_changed || all_loaded || compose_elapsed) {
                     v.tile_overlay.dirty = false;
-                    v.tile_overlay.last_compose = std::time::Instant::now();
+                    v.tile_overlay.last_compose = web_time::Instant::now();
                     let needed = v.tile_overlay.needed_tiles.clone();
                     let y_min = needed.iter().map(|c| c.y).min().unwrap();
                     let y_max = needed.iter().map(|c| c.y).max().unwrap();
@@ -1183,7 +1184,7 @@ impl eframe::App for App {
                 let needs_render = v.solar_system_handles.is_empty()
                     || v.ss_last_render_instant.map_or(true, |t| t.elapsed().as_millis() > render_interval);
                 if needs_render {
-                    v.ss_last_render_instant = Some(std::time::Instant::now());
+                    v.ss_last_render_instant = Some(web_time::Instant::now());
                     let tilt = 30.0_f64.to_radians();
                     let cos_t = tilt.cos();
                     let sin_t = tilt.sin();
@@ -1585,6 +1586,36 @@ impl eframe::App for App {
 
         if let Some(new_idx) = self.viewer.pending_add_tab.take() {
             self.dock_state.push_to_focused_leaf(new_idx);
+        }
+
+        if let Some(idx) = self.viewer.editing_tab {
+            if idx < self.viewer.tabs.len() {
+                let mut open = true;
+                egui::Window::new("Edit Tab")
+                    .id(egui::Id::new("edit_tab_window"))
+                    .open(&mut open)
+                    .collapsible(false)
+                    .resizable(true)
+                    .default_width(300.0)
+                    .show(ctx, |ui| {
+                        let t = &mut self.viewer.tabs[idx];
+                        ui.horizontal(|ui| {
+                            ui.label("Name:");
+                            ui.text_edit_singleline(&mut t.name);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Title:");
+                            ui.text_edit_singleline(&mut t.title);
+                        });
+                        ui.label("Description:");
+                        ui.text_edit_multiline(&mut t.description);
+                    });
+                if !open {
+                    self.viewer.editing_tab = None;
+                }
+            } else {
+                self.viewer.editing_tab = None;
+            }
         }
 
         for tab in &self.viewer.tabs {

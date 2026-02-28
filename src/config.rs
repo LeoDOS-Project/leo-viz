@@ -405,6 +405,8 @@ impl Default for TabSettings {
 
 pub struct TabConfig {
     pub name: String,
+    pub title: String,
+    pub description: String,
     pub planets: Vec<PlanetConfig>,
     pub planet_counter: usize,
     pub show_stats: bool,
@@ -423,6 +425,8 @@ impl TabConfig {
     pub fn new_empty(name: String) -> Self {
         Self {
             name,
+            title: String::new(),
+            description: String::new(),
             planets: Vec::new(),
             planet_counter: 0,
             show_stats: false,
