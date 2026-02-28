@@ -218,6 +218,8 @@ impl ViewerState {
     }
 
     fn render_tab_ui(&mut self, ui: &mut egui::Ui, tab_idx: usize) {
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::time_with_label("render_tab_ui");
         let now = web_time::Instant::now();
         if let Some(prev) = self.last_frame_instant {
             let dt = now.duration_since(prev).as_secs_f64();
@@ -553,6 +555,8 @@ impl ViewerState {
                 }
             }
         }
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::time_end_with_label("render_tab_ui");
     }
 
     fn render_planet_ui(&mut self, ui: &mut egui::Ui, tab_idx: usize, planet_idx: usize, num_planets: usize) -> (bool, bool) {

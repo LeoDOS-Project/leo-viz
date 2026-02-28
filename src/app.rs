@@ -39,6 +39,19 @@ use std::sync::{Arc, mpsc};
 use chrono::{Duration, Utc};
 use glow::HasContext as _;
 
+macro_rules! perf_start {
+    ($label:expr) => {
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::time_with_label($label);
+    };
+}
+macro_rules! perf_end {
+    ($label:expr) => {
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::time_end_with_label($label);
+    };
+}
+
 pub(crate) struct App {
     pub(crate) dock_state: DockState<usize>,
     pub(crate) viewer: ViewerState,
@@ -48,8 +61,12 @@ pub(crate) struct App {
 impl App {
     pub(crate) fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let gl = cc.gl.as_ref().expect("glow backend required");
+        perf_start!("shader_compile_sphere");
         let sphere_renderer = Arc::new(Mutex::new(SphereRenderer::new(gl)));
+        perf_end!("shader_compile_sphere");
+        perf_start!("shader_compile_map");
         let map_renderer = Arc::new(Mutex::new(MapRenderer::new(gl)));
+        perf_end!("shader_compile_map");
 
         let torus_initial = Matrix3::new(
             1.0, 0.0, 0.0,
@@ -308,10 +325,12 @@ impl App {
         app
     }
 }
+
 impl eframe::App for App {
     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        perf_start!("frame_total");
         let v = &mut self.viewer;
 
         ctx.set_visuals(if v.dark_mode {
@@ -334,6 +353,7 @@ impl eframe::App for App {
             .map(|(_, tab)| *tab)
             .unwrap_or(0);
 
+        perf_start!("texture_loading");
         let tex_res = v.texture_resolution;
         let bodies_needed: Vec<(CelestialBody, Skin, TextureResolution)> = {
             let mut seen = std::collections::HashSet::new();
@@ -463,6 +483,8 @@ impl eframe::App for App {
                 }
             }
         }
+
+        perf_end!("texture_loading");
 
         let bodies_set: std::collections::HashSet<_> = bodies_needed.iter().copied().collect();
         v.planet_textures.retain(|k, _| bodies_set.contains(k) || (k.1 == Skin::Default && k.2 == TextureResolution::R512));
@@ -1571,7 +1593,9 @@ impl eframe::App for App {
         if ui_visible {
             dock = dock.show_add_buttons(true);
         }
+        perf_start!("dock_show_render");
         dock.show(ctx, &mut self.viewer);
+        perf_end!("dock_show_render");
 
         if !self.viewer.show_side_panel && ui_visible {
             egui::Area::new(egui::Id::new("settings_btn"))
@@ -1709,6 +1733,7 @@ impl eframe::App for App {
         }
 
         self.first_frame = false;
+        perf_end!("frame_total");
     }
 
     fn on_exit(&mut self, gl: Option<&glow::Context>) {
