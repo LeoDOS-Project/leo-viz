@@ -550,6 +550,12 @@ impl SphereRenderer {
         }
     }
 
+    pub fn invalidate_texture(&mut self, gl: &glow::Context, key: (CelestialBody, Skin, TextureResolution)) {
+        if let Some(tex) = self.textures.remove(&key) {
+            unsafe { gl.delete_texture(tex); }
+        }
+    }
+
     pub fn upload_texture(&mut self, gl: &glow::Context, key: (CelestialBody, Skin, TextureResolution), earth_tex: &EarthTexture) {
         unsafe {
             if self.textures.contains_key(&key) {
@@ -1346,6 +1352,15 @@ impl MapRenderer {
                 earth_texture: None,
                 texture_key: None,
             }
+        }
+    }
+
+    pub fn invalidate_earth_texture(&mut self, gl: &glow::Context, key: (CelestialBody, Skin, TextureResolution)) {
+        if self.texture_key == Some(key) {
+            if let Some(old) = self.earth_texture.take() {
+                unsafe { gl.delete_texture(old); }
+            }
+            self.texture_key = None;
         }
     }
 

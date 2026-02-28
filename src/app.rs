@@ -997,9 +997,18 @@ impl eframe::App for App {
 
         #[cfg(target_arch = "wasm32")]
         TEXTURE_RESULT.with(|cell| {
-            for (body, result) in cell.borrow_mut().drain(..) {
+            let results: Vec<_> = cell.borrow_mut().drain(..).collect();
+            for (body, result) in results {
                 match result {
                     Ok(texture) => {
+                        if let Some(gl) = frame.gl() {
+                            if let Some(ref sr) = v.sphere_renderer {
+                                sr.lock().invalidate_texture(gl, body);
+                            }
+                            if let Some(ref mr) = v.map_renderer {
+                                mr.lock().invalidate_earth_texture(gl, body);
+                            }
+                        }
                         let texture = Arc::new(texture);
                         v.planet_textures.insert(body, texture.clone());
                         v.texture_load_state = TextureLoadState::Loaded(texture);
