@@ -9,7 +9,7 @@ use crate::config::TabConfig;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::geo::{GeoLoadState, dirs_cache, load_geo_overlay};
 use crate::drawing::draw_satellite_camera;
-use crate::renderer::{SphereRenderer, MapRenderer};
+use crate::renderer::GpuResources;
 use crate::texture::TextureLoadState;
 use crate::tile::{
     TileCoord, DetailBounds, DetailTexture, TileCacheEntry,
@@ -29,15 +29,13 @@ use crate::texture::{
 };
 #[cfg(target_arch = "wasm32")]
 use crate::tle::TLE_FETCH_RESULT;
-use eframe::{egui, glow};
-use egui::mutex::Mutex;
+use eframe::egui;
 use egui_dock::{DockArea, DockState};
 use nalgebra::{Matrix3, Vector3};
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
 use std::sync::{Arc, mpsc};
 use chrono::{Duration, Utc};
-use glow::HasContext as _;
 
 pub(crate) struct App {
     pub(crate) dock_state: DockState<usize>,
@@ -47,9 +45,12 @@ pub(crate) struct App {
 
 impl App {
     pub(crate) fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let gl = cc.gl.as_ref().expect("glow backend required");
-        let sphere_renderer = Arc::new(Mutex::new(SphereRenderer::new(gl)));
-        let map_renderer = Arc::new(Mutex::new(MapRenderer::new(gl)));
+        let render_state = cc.wgpu_render_state.clone();
+
+        if let Some(ref rs) = render_state {
+            let gpu = GpuResources::new(&rs.device, &rs.queue, rs.target_format);
+            rs.renderer.write().callback_resources.insert(gpu);
+        }
 
         let torus_initial = Matrix3::new(
             1.0, 0.0, 0.0,
@@ -60,14 +61,16 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         let (tle_fetch_tx, tle_fetch_rx) = mpsc::channel();
 
-        {
-            let mut renderer = sphere_renderer.lock();
+        if let Some(ref rs) = render_state {
             let builtin_key = if cfg!(target_arch = "wasm32") {
                 (CelestialBody::Earth, Skin::Default, TextureResolution::R2048)
             } else {
                 (CelestialBody::Earth, Skin::Default, TextureResolution::R8192)
             };
-            renderer.upload_texture(gl, builtin_key, &builtin_texture);
+            let mut wr = rs.renderer.write();
+            if let Some(gpu) = wr.callback_resources.get_mut::<GpuResources>() {
+                gpu.upload_texture(&rs.device, &rs.queue, builtin_key, &builtin_texture);
+            }
         }
 
         #[allow(unused_mut)]
@@ -127,8 +130,7 @@ impl App {
                 star_texture_loading: false,
                 milky_way_texture_loading: false,
                 cloud_texture_loading: false,
-                sphere_renderer: Some(sphere_renderer),
-                map_renderer: Some(map_renderer),
+                render_state,
                 #[cfg(not(target_arch = "wasm32"))]
                 tle_fetch_tx,
                 #[cfg(not(target_arch = "wasm32"))]
@@ -311,7 +313,7 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
 
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let v = &mut self.viewer;
 
         ctx.set_visuals(if v.dark_mode {
@@ -373,28 +375,32 @@ impl eframe::App for App {
                 }
             }
             v.moon_image_handles.retain(|b, _| needed_moons.contains(b));
-            let gpu_ok = frame.gl().is_some() && v.sphere_renderer.is_some();
+            let gpu_ok = v.render_state.is_some();
             for &moon_body in &needed_moons {
                 if v.moon_image_handles.contains_key(&moon_body) {
                     continue;
                 }
                 let key = (moon_body, Skin::Default, TextureResolution::R512);
+                #[cfg(not(target_arch = "wasm32"))]
                 if gpu_ok {
-                    let gl = frame.gl().unwrap();
-                    let sr = v.sphere_renderer.as_ref().unwrap();
-                    let mut renderer = sr.lock();
-                    if let Some(tex) = v.planet_textures.get(&key) {
-                        renderer.upload_texture(gl, key, tex);
+                    let rs = v.render_state.as_ref().unwrap();
+                    let mut wr = rs.renderer.write();
+                    if let Some(gpu) = wr.callback_resources.get_mut::<GpuResources>() {
+                        if let Some(tex) = v.planet_textures.get(&key) {
+                            gpu.upload_texture(&rs.device, &rs.queue, key, tex);
+                        }
+                        let rot = Matrix3::identity();
+                        let image = gpu.render_to_image(&rs.device, &rs.queue, key, &rot, moon_body.flattening(), 64);
+                        let handle = ctx.load_texture(
+                            format!("moon_{:?}", moon_body),
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        );
+                        v.moon_image_handles.insert(moon_body, handle);
+                        continue;
                     }
-                    let rot = Matrix3::identity();
-                    let image = renderer.render_to_image(gl, key, &rot, moon_body.flattening(), 64);
-                    let handle = ctx.load_texture(
-                        format!("moon_{:?}", moon_body),
-                        image,
-                        egui::TextureOptions::LINEAR,
-                    );
-                    v.moon_image_handles.insert(moon_body, handle);
-                } else if let Some(texture) = v.planet_textures.get(&key) {
+                }
+                if let Some(texture) = v.planet_textures.get(&key) {
                     let rot = Matrix3::identity();
                     let image = texture.render_sphere(64, &rot, moon_body.flattening());
                     let handle = ctx.load_texture(
@@ -423,42 +429,39 @@ impl eframe::App for App {
             v.load_star_textures(ctx);
         }
 
-        if let Some(gl) = frame.gl() {
-            if let Some(ref sphere_renderer) = v.sphere_renderer {
-                let mut renderer = sphere_renderer.lock();
+        if let Some(ref rs) = v.render_state {
+            let mut wr = rs.renderer.write();
+            if let Some(gpu) = wr.callback_resources.get_mut::<GpuResources>() {
                 for (body, skin, res) in &bodies_needed {
                     if let Some(tex) = v.planet_textures.get(&(*body, *skin, *res)) {
-                        renderer.upload_texture(gl, (*body, *skin, *res), tex);
+                        gpu.upload_texture(&rs.device, &rs.queue, (*body, *skin, *res), tex);
                     }
                 }
                 if show_clouds {
                     if let Some(cloud_tex) = v.cloud_textures.get(&tex_res) {
-                        renderer.upload_cloud_texture(gl, tex_res, cloud_tex);
+                        gpu.upload_cloud_texture(&rs.device, &rs.queue, tex_res, cloud_tex);
                     }
                 }
                 if show_city_lights {
                     if let Some(night_tex) = &v.night_texture {
-                        renderer.upload_night_texture(gl, night_tex);
+                        gpu.upload_night_texture(&rs.device, &rs.queue, night_tex);
                     }
                 }
                 if show_stars {
                     if let Some(star_tex) = &v.star_texture {
-                        renderer.upload_star_texture(gl, star_tex);
+                        gpu.upload_star_texture(&rs.device, &rs.queue, star_tex);
                     }
                     if let Some(mw_tex) = &v.milky_way_texture {
-                        renderer.upload_milky_way_texture(gl, mw_tex);
+                        gpu.upload_milky_way_texture(&rs.device, &rs.queue, mw_tex);
                     }
                 }
                 for (body, ring_tex) in &v.ring_textures {
-                    renderer.upload_ring_texture(gl, *body, ring_tex);
+                    gpu.upload_ring_texture(&rs.device, &rs.queue, *body, ring_tex);
                 }
-                renderer.evict_unused_textures(gl, &bodies_needed);
-            }
-            if let Some(ref map_renderer) = v.map_renderer {
-                let mut mr = map_renderer.lock();
+                gpu.evict_unused_textures(&bodies_needed);
                 for (body, skin, res) in &bodies_needed {
                     if let Some(tex) = v.planet_textures.get(&(*body, *skin, *res)) {
-                        mr.upload_earth_texture(gl, (*body, *skin, *res), tex);
+                        gpu.upload_map_texture(&rs.device, &rs.queue, (*body, *skin, *res), tex);
                     }
                 }
             }
@@ -819,63 +822,20 @@ impl eframe::App for App {
                         max_lat: top_left_lat.to_radians(),
                     };
 
-                    if let Some(gl) = frame.gl() {
-                        unsafe {
-                            let flat_pixels: &[u8] = std::slice::from_raw_parts(
+                    if let Some(ref rs) = v.render_state {
+                        let flat_pixels: &[u8] = unsafe {
+                            std::slice::from_raw_parts(
                                 v.tile_overlay.compose_buffer.as_ptr() as *const u8,
                                 v.tile_overlay.compose_buffer.len() * 4,
-                            );
-
-                            let reuse = v.tile_overlay.detail_texture.as_ref()
-                                .and_then(|dt| dt.gl_texture.filter(|_| dt.width == tex_w && dt.height == tex_h));
-
-                            if let Some(existing_tex) = reuse {
-                                gl.bind_texture(glow::TEXTURE_2D, Some(existing_tex));
-                                gl.tex_sub_image_2d(
-                                    glow::TEXTURE_2D,
-                                    0,
-                                    0, 0,
-                                    tex_w as i32, tex_h as i32,
-                                    glow::RGBA,
-                                    glow::UNSIGNED_BYTE,
-                                    glow::PixelUnpackData::Slice(Some(flat_pixels)),
-                                );
-                                v.tile_overlay.detail_texture = Some(DetailTexture {
-                                    width: tex_w,
-                                    height: tex_h,
-                                    bounds: new_bounds,
-                                    gl_texture: Some(existing_tex),
-                                });
-                            } else {
-                                if let Some(old) = &v.tile_overlay.detail_texture {
-                                    if let Some(gl_tex) = old.gl_texture {
-                                        gl.delete_texture(gl_tex);
-                                    }
-                                }
-                                let texture = gl.create_texture().expect("create detail texture");
-                                gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-                                gl.tex_image_2d(
-                                    glow::TEXTURE_2D,
-                                    0,
-                                    glow::RGBA as i32,
-                                    tex_w as i32, tex_h as i32,
-                                    0,
-                                    glow::RGBA,
-                                    glow::UNSIGNED_BYTE,
-                                    glow::PixelUnpackData::Slice(Some(flat_pixels)),
-                                );
-                                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
-                                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
-                                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-                                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
-                                v.tile_overlay.detail_texture = Some(DetailTexture {
-                                    width: tex_w,
-                                    height: tex_h,
-                                    bounds: new_bounds,
-                                    gl_texture: Some(texture),
-                                });
-                            }
+                            )
+                        };
+                        let mut wr = rs.renderer.write();
+                        if let Some(gpu) = wr.callback_resources.get_mut::<GpuResources>() {
+                            gpu.upload_detail_texture(&rs.device, &rs.queue, tex_w, tex_h, flat_pixels);
                         }
+                        v.tile_overlay.detail_texture = Some(DetailTexture {
+                            bounds: new_bounds,
+                        });
                     }
                 }
                 }
@@ -1001,12 +961,11 @@ impl eframe::App for App {
             for (body, result) in results {
                 match result {
                     Ok(texture) => {
-                        if let Some(gl) = frame.gl() {
-                            if let Some(ref sr) = v.sphere_renderer {
-                                sr.lock().invalidate_texture(gl, body);
-                            }
-                            if let Some(ref mr) = v.map_renderer {
-                                mr.lock().invalidate_earth_texture(gl, body);
+                        if let Some(ref rs) = v.render_state {
+                            let mut wr = rs.renderer.write();
+                            if let Some(gpu) = wr.callback_resources.get_mut::<GpuResources>() {
+                                gpu.invalidate_texture(body);
+                                gpu.invalidate_map_texture(body);
                             }
                         }
                         let texture = Arc::new(texture);
@@ -1210,18 +1169,18 @@ impl eframe::App for App {
                     let focus_radius = sorted_bodies[focus_idx].radius_km();
                     let max_render = if v.show_planet_sizes { 192 } else { 64 };
 
-                    let gpu_ok = frame.gl().is_some() && v.sphere_renderer.is_some();
+                    let gpu_ok = v.render_state.is_some();
                     if gpu_ok {
-                        let gl = frame.gl().unwrap();
-                        let sr = v.sphere_renderer.as_ref().unwrap();
-                        let mut renderer = sr.lock();
+                        let rs = v.render_state.as_ref().unwrap();
+                        let mut wr = rs.renderer.write();
+                        let gpu = wr.callback_resources.get_mut::<GpuResources>().unwrap();
                         for body in CelestialBody::ALL {
                             let key = (body, Skin::Default, TextureResolution::R512);
                             if let Some(tex) = v.planet_textures.get(&key) {
-                                renderer.upload_texture(gl, key, tex);
+                                gpu.upload_texture(&rs.device, &rs.queue, key, tex);
                             }
                             if let Some(ring_tex) = v.ring_textures.get(&body) {
-                                renderer.upload_ring_texture(gl, body, ring_tex);
+                                gpu.upload_ring_texture(&rs.device, &rs.queue, body, ring_tex);
                             }
                         }
                         for body in CelestialBody::ALL {
@@ -1239,7 +1198,7 @@ impl eframe::App for App {
                             );
                             let combined = tilt_mat * y_rot;
                             let inv_rotation = combined.transpose();
-                            let image = renderer.render_to_image(gl, key, &inv_rotation, body.flattening(), body_render_size);
+                            let image = gpu.render_to_image(&rs.device, &rs.queue, key, &inv_rotation, body.flattening(), body_render_size);
                             let handle = ctx.load_texture(
                                 format!("ss_{:?}", body),
                                 image,
@@ -1721,14 +1680,6 @@ impl eframe::App for App {
         self.first_frame = false;
     }
 
-    fn on_exit(&mut self, gl: Option<&glow::Context>) {
-        if let Some(gl) = gl {
-            if let Some(ref renderer) = self.viewer.sphere_renderer {
-                renderer.lock().destroy(gl);
-            }
-            if let Some(ref renderer) = self.viewer.map_renderer {
-                renderer.lock().destroy(gl);
-            }
-        }
+    fn on_exit(&mut self) {
     }
 }

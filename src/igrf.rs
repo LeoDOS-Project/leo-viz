@@ -45,6 +45,19 @@ const H: [f64; NUM_COEFFS] = [
     0.0, -0.9, 0.7, 1.2, -0.3, -1.3, -0.1, 0.2, -0.2, 0.5, 0.6, -0.6, -0.3, -0.5,
 ];
 
+pub(crate) const IGRF_GC: [f32; NUM_COEFFS] = {
+    let mut out = [0.0f32; NUM_COEFFS];
+    let mut i = 0;
+    while i < NUM_COEFFS { out[i] = G[i] as f32; i += 1; }
+    out
+};
+pub(crate) const IGRF_HC: [f32; NUM_COEFFS] = {
+    let mut out = [0.0f32; NUM_COEFFS];
+    let mut i = 0;
+    while i < NUM_COEFFS { out[i] = H[i] as f32; i += 1; }
+    out
+};
+
 struct RecursionCoeffs {
     sect: [f64; N_MAX + 1],
     sub_diag: [f64; N_MAX + 1],
@@ -284,11 +297,15 @@ pub(crate) fn igrf_field_nt(r_km: f64, colat_rad: f64, east_lon_rad: f64) -> f64
     (br * br + bt * bt + bp * bp).sqrt()
 }
 
+#[allow(dead_code)]
 const RAD_COLAT: usize = 91;
+#[allow(dead_code)]
 const RAD_LON: usize = 181;
 
+#[allow(dead_code)]
 const TRACE_N: usize = 4;
 
+#[allow(dead_code)]
 fn trace_field_line(r_km: f64, colat_rad: f64, elon_rad: f64) -> (f64, f64) {
     let step = 50.0;
     let max_steps = 2000;
@@ -362,6 +379,7 @@ pub(crate) struct IgrfRadGrid {
     pub(crate) electrons: Vec<f64>,
 }
 
+#[allow(dead_code)]
 impl IgrfRadGrid {
     pub(crate) fn new(r_km: f64, _kp: f64) -> Self {
         use crate::aep8::{Particle, SolarCycle, aep8_flux};

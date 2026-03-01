@@ -1,4 +1,4 @@
-#![allow(unused_assignments, unused_mut)]
+#![allow(unused_assignments, unused_mut, dead_code)]
 
 include!("aep8_data.rs");
 

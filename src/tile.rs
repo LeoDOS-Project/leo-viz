@@ -3,7 +3,6 @@
 //! Implements a quadtree-based tile cache for high-resolution Earth imagery
 //! with LRU eviction. Supports background tile fetching and disk caching.
 
-use eframe::glow;
 use std::collections::HashSet;
 use std::f64::consts::PI;
 use std::sync::mpsc;
@@ -24,10 +23,7 @@ pub struct DetailBounds {
 }
 
 pub struct DetailTexture {
-    pub width: u32,
-    pub height: u32,
     pub bounds: DetailBounds,
-    pub gl_texture: Option<glow::Texture>,
 }
 
 pub struct TileFetchResult {

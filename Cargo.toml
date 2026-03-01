@@ -6,10 +6,11 @@ edition = "2021"
 [dependencies]
 eframe = { version = "0.33", default-features = false, features = [
     "default_fonts",
-    "glow",
+    "wgpu",
     "persistence",
 ] }
 egui = "0.33"
+egui-wgpu = "0.33"
 egui_dock = "0.18"
 egui_plot = "0.34"
 nalgebra = "0.33"
@@ -21,11 +22,12 @@ log = "0.4"
 sgp4 = "2.3"
 chrono = { version = "0.4", features = ["wasmbind"] }
 web-time = "1.1.0"
+bytemuck = { version = "1", features = ["derive"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 eframe = { version = "0.33", default-features = false, features = [
     "default_fonts",
-    "glow",
+    "wgpu",
     "persistence",
 ] }
 ureq = "2.9"
@@ -33,7 +35,7 @@ ureq = "2.9"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 eframe = { version = "0.33", default-features = false, features = [
     "default_fonts",
-    "glow",
+    "wgpu",
     "persistence",
     "web_screen_reader",
 ] }
@@ -49,7 +51,7 @@ epaint = { git = "https://github.com/segeljakt/egui.git", branch = "fix/featheri
 epaint_default_fonts = { git = "https://github.com/segeljakt/egui.git", branch = "fix/feathering-sharp-corners" }
 egui = { git = "https://github.com/segeljakt/egui.git", branch = "fix/feathering-sharp-corners" }
 egui-winit = { git = "https://github.com/segeljakt/egui.git", branch = "fix/feathering-sharp-corners" }
-egui_glow = { git = "https://github.com/segeljakt/egui.git", branch = "fix/feathering-sharp-corners" }
+egui-wgpu = { git = "https://github.com/segeljakt/egui.git", branch = "fix/feathering-sharp-corners" }
 eframe = { git = "https://github.com/segeljakt/egui.git", branch = "fix/feathering-sharp-corners" }
 
 [profile.release]
