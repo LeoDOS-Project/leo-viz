@@ -112,6 +112,8 @@ impl App {
                 ui_visible: true,
                 cycle_interval: 5.0,
                 last_cycle_time: 0.0,
+                slideshow_mode: false,
+                slideshow_fade_alpha: 1.0,
                 use_gpu_rendering: true,
                 show_borders: false,
                 show_cities: false,
@@ -877,7 +879,29 @@ impl eframe::App for App {
 
         if v.auto_cycle_tabs && v.tabs.len() > 1 {
             v.last_cycle_time += dt;
-            if v.last_cycle_time >= v.cycle_interval {
+            if v.slideshow_mode {
+                const FADE_DUR: f64 = 0.5;
+                let t = v.last_cycle_time;
+                let interval = v.cycle_interval;
+                if t < FADE_DUR {
+                    v.slideshow_fade_alpha = (t / FADE_DUR) as f32;
+                } else if t < interval {
+                    v.slideshow_fade_alpha = 1.0;
+                } else if t < interval + FADE_DUR {
+                    v.slideshow_fade_alpha = (1.0 - (t - interval) / FADE_DUR) as f32;
+                } else {
+                    v.slideshow_fade_alpha = 0.0;
+                    v.last_cycle_time = 0.0;
+                    let tab_data: Vec<(egui_dock::SurfaceIndex, egui_dock::NodeIndex, usize)> = self.dock_state.iter_all_tabs()
+                        .map(|((s, n), &idx)| (s, n, idx))
+                        .collect();
+                    if let Some(current_pos) = tab_data.iter().position(|(_, _, idx)| *idx == active_tab_idx) {
+                        let next_pos = (current_pos + 1) % tab_data.len();
+                        let (surface, node, _) = tab_data[next_pos];
+                        self.dock_state.set_focused_node_and_surface((surface, node));
+                    }
+                }
+            } else if v.last_cycle_time >= v.cycle_interval {
                 v.last_cycle_time = 0.0;
                 let tab_data: Vec<(egui_dock::SurfaceIndex, egui_dock::NodeIndex, usize)> = self.dock_state.iter_all_tabs()
                     .map(|((s, n), &idx)| (s, n, idx))
@@ -1169,42 +1193,45 @@ impl eframe::App for App {
                     let focus_radius = sorted_bodies[focus_idx].radius_km();
                     let max_render = if v.show_planet_sizes { 192 } else { 64 };
 
-                    let gpu_ok = v.render_state.is_some();
+                    let gpu_ok = cfg!(not(target_arch = "wasm32")) && v.render_state.is_some();
                     if gpu_ok {
-                        let rs = v.render_state.as_ref().unwrap();
-                        let mut wr = rs.renderer.write();
-                        let gpu = wr.callback_resources.get_mut::<GpuResources>().unwrap();
-                        for body in CelestialBody::ALL {
-                            let key = (body, Skin::Default, TextureResolution::R512);
-                            if let Some(tex) = v.planet_textures.get(&key) {
-                                gpu.upload_texture(&rs.device, &rs.queue, key, tex);
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let rs = v.render_state.as_ref().unwrap();
+                            let mut wr = rs.renderer.write();
+                            let gpu = wr.callback_resources.get_mut::<GpuResources>().unwrap();
+                            for body in CelestialBody::ALL {
+                                let key = (body, Skin::Default, TextureResolution::R512);
+                                if let Some(tex) = v.planet_textures.get(&key) {
+                                    gpu.upload_texture(&rs.device, &rs.queue, key, tex);
+                                }
+                                if let Some(ring_tex) = v.ring_textures.get(&body) {
+                                    gpu.upload_ring_texture(&rs.device, &rs.queue, body, ring_tex);
+                                }
                             }
-                            if let Some(ring_tex) = v.ring_textures.get(&body) {
-                                gpu.upload_ring_texture(&rs.device, &rs.queue, body, ring_tex);
+                            for body in CelestialBody::ALL {
+                                let key = (body, Skin::Default, TextureResolution::R512);
+                                let ratio = (body.radius_km() / focus_radius).min(1.0);
+                                let body_render_size = if ratio > 0.1 { max_render } else { ((max_render as f64 * ratio * 10.0) as usize).clamp(32, max_render) };
+                                let body_rot = body_rotation_angle(body, tab_time, v.current_gmst)
+                                    + 30.0_f64.to_radians();
+                                let cos_a = body_rot.cos();
+                                let sin_a = body_rot.sin();
+                                let y_rot = Matrix3::new(
+                                    cos_a, 0.0, sin_a,
+                                    0.0, 1.0, 0.0,
+                                    -sin_a, 0.0, cos_a,
+                                );
+                                let combined = tilt_mat * y_rot;
+                                let inv_rotation = combined.transpose();
+                                let image = gpu.render_to_image(&rs.device, &rs.queue, key, &inv_rotation, body.flattening(), body_render_size);
+                                let handle = ctx.load_texture(
+                                    format!("ss_{:?}", body),
+                                    image,
+                                    egui::TextureOptions::LINEAR,
+                                );
+                                v.solar_system_handles.insert(body, handle);
                             }
-                        }
-                        for body in CelestialBody::ALL {
-                            let key = (body, Skin::Default, TextureResolution::R512);
-                            let ratio = (body.radius_km() / focus_radius).min(1.0);
-                            let body_render_size = if ratio > 0.1 { max_render } else { ((max_render as f64 * ratio * 10.0) as usize).clamp(32, max_render) };
-                            let body_rot = body_rotation_angle(body, tab_time, v.current_gmst)
-                                + 30.0_f64.to_radians();
-                            let cos_a = body_rot.cos();
-                            let sin_a = body_rot.sin();
-                            let y_rot = Matrix3::new(
-                                cos_a, 0.0, sin_a,
-                                0.0, 1.0, 0.0,
-                                -sin_a, 0.0, cos_a,
-                            );
-                            let combined = tilt_mat * y_rot;
-                            let inv_rotation = combined.transpose();
-                            let image = gpu.render_to_image(&rs.device, &rs.queue, key, &inv_rotation, body.flattening(), body_render_size);
-                            let handle = ctx.load_texture(
-                                format!("ss_{:?}", body),
-                                image,
-                                egui::TextureOptions::LINEAR,
-                            );
-                            v.solar_system_handles.insert(body, handle);
                         }
                     } else {
                         for body in CelestialBody::ALL {

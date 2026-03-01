@@ -85,6 +85,8 @@ pub(crate) struct ViewerState {
     pub(crate) ui_visible: bool,
     pub(crate) cycle_interval: f64,
     pub(crate) last_cycle_time: f64,
+    pub(crate) slideshow_mode: bool,
+    pub(crate) slideshow_fade_alpha: f32,
     pub(crate) use_gpu_rendering: bool,
     pub(crate) show_borders: bool,
     pub(crate) show_cities: bool,
@@ -241,9 +243,80 @@ impl ViewerState {
             let tab = &self.tabs[tab_idx];
             let has_title = !tab.title.is_empty();
             let has_desc = !tab.description.is_empty();
-            if has_title || has_desc {
-                let rect = ui.available_rect_before_wrap();
-                let painter = ui.painter();
+            let rect = ui.available_rect_before_wrap();
+            let painter = ui.painter();
+
+            if self.slideshow_mode {
+                if has_title || has_desc {
+                    let shadow_offset = egui::vec2(2.0, 2.0);
+                    let mut y = rect.top() + 30.0;
+                    if has_title {
+                        let pos = egui::pos2(rect.left() + 30.0, y);
+                        let font = egui::FontId::proportional(32.0);
+                        painter.text(
+                            pos + shadow_offset,
+                            egui::Align2::LEFT_TOP,
+                            &tab.title,
+                            font.clone(),
+                            egui::Color32::BLACK,
+                        );
+                        painter.text(
+                            pos,
+                            egui::Align2::LEFT_TOP,
+                            &tab.title,
+                            font.clone(),
+                            egui::Color32::WHITE,
+                        );
+                        let title_h = painter.layout_no_wrap(
+                            tab.title.clone(),
+                            font,
+                            egui::Color32::WHITE,
+                        ).rect.height();
+                        y += title_h + 8.0;
+                    }
+                    if has_desc {
+                        let pos = egui::pos2(rect.left() + 30.0, y);
+                        let font = egui::FontId::proportional(20.0);
+                        let desc_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 200);
+                        painter.text(
+                            pos + shadow_offset,
+                            egui::Align2::LEFT_TOP,
+                            &tab.description,
+                            font.clone(),
+                            egui::Color32::BLACK,
+                        );
+                        painter.text(
+                            pos,
+                            egui::Align2::LEFT_TOP,
+                            &tab.description,
+                            font,
+                            desc_color,
+                        );
+                    }
+                }
+
+                let elapsed = self.last_cycle_time;
+                let total = self.cycle_interval + 0.5;
+                let frac = (elapsed / total).min(1.0) as f32;
+                let bar_rect = egui::Rect::from_min_size(
+                    egui::pos2(rect.left(), rect.bottom() - 4.0),
+                    egui::vec2(rect.width() * frac, 4.0),
+                );
+                painter.rect_filled(
+                    bar_rect,
+                    0.0,
+                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, 100),
+                );
+
+                let fade_black = ((1.0 - self.slideshow_fade_alpha) * 255.0) as u8;
+                if fade_black > 0 {
+                    painter.rect_filled(
+                        rect,
+                        0.0,
+                        egui::Color32::from_rgba_unmultiplied(0, 0, 0, fade_black),
+                    );
+                }
+            } else if has_title || has_desc {
                 let mut y = rect.bottom() - 20.0;
                 if has_desc {
                     y -= painter.layout_no_wrap(

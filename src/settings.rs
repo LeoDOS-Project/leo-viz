@@ -651,6 +651,17 @@ impl ViewerState {
             });
         });
 
+        let prev_slideshow = self.slideshow_mode;
+        ui.checkbox(&mut self.slideshow_mode, "Slideshow mode")
+            .on_hover_text("Full-screen presentation with fade transitions");
+        if self.slideshow_mode && !prev_slideshow {
+            self.auto_cycle_tabs = true;
+            self.auto_hide_tab_bar = true;
+        } else if !self.slideshow_mode && prev_slideshow {
+            self.auto_cycle_tabs = false;
+            self.auto_hide_tab_bar = false;
+        }
+
         ui.separator();
         ui.label(egui::RichText::new("Rendering").strong());
         ui.checkbox(&mut self.dark_mode, "Dark mode")
