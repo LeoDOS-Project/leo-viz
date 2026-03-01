@@ -13,7 +13,6 @@ use crate::drawing::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::geo::{GeoLoadState, GeoOverlayData};
-use crate::renderer::{SphereRenderer, MapRenderer};
 use crate::texture::{TextureLoadState, EarthTexture, RingTexture};
 use crate::tile::TileOverlayState;
 use crate::time::{body_rotation_angle, DAYS_PER_YEAR, SOLAR_DECLINATION_MAX};
@@ -32,8 +31,7 @@ use crate::texture::{
 use crate::tle::{
     fetch_tle_text, parse_tle_data_async, TLE_FETCH_RESULT,
 };
-use eframe::{egui, glow};
-use egui::mutex::Mutex;
+use eframe::egui;
 use egui_dock::{TabViewer, NodeIndex, SurfaceIndex};
 use egui_dock::tab_viewer::OnCloseResponse;
 use nalgebra::{Matrix3, Vector3};
@@ -109,8 +107,7 @@ pub(crate) struct ViewerState {
     pub(crate) milky_way_texture_loading: bool,
     #[allow(dead_code)]
     pub(crate) cloud_texture_loading: bool,
-    pub(crate) sphere_renderer: Option<Arc<Mutex<SphereRenderer>>>,
-    pub(crate) map_renderer: Option<Arc<Mutex<MapRenderer>>>,
+    pub(crate) render_state: Option<egui_wgpu::RenderState>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) tle_fetch_tx: mpsc::Sender<(TlePreset, Result<Vec<TleSatellite>, String>)>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -198,22 +195,21 @@ impl TabViewer for ViewerState {
 
 impl ViewerState {
     #[cfg(not(target_arch = "wasm32"))]
-    fn tile_overlay_detail_gl_info(&self, body: CelestialBody) -> Option<(glow::Texture, [f32; 4])> {
+    fn tile_overlay_detail_bounds(&self, body: CelestialBody) -> Option<[f32; 4]> {
         if !self.tile_overlay.enabled || body != CelestialBody::Earth {
             return None;
         }
         let dt = self.tile_overlay.detail_texture.as_ref()?;
-        let gl_tex = dt.gl_texture?;
-        Some((gl_tex, [
+        Some([
             dt.bounds.min_lon as f32,
             dt.bounds.max_lon as f32,
             dt.bounds.min_lat as f32,
             dt.bounds.max_lat as f32,
-        ]))
+        ])
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn tile_overlay_detail_gl_info(&self, _body: CelestialBody) -> Option<(glow::Texture, [f32; 4])> {
+    fn tile_overlay_detail_bounds(&self, _body: CelestialBody) -> Option<[f32; 4]> {
         None
     }
 
@@ -344,8 +340,8 @@ impl ViewerState {
                                 cm_lat, cm_lon,
                             ));
                             ui.separator();
-                            let add_gs = ui.button("Add Ground Station").clicked();
-                            let add_aoi = ui.button("Add Area of Interest").clicked();
+                            let add_gs = ui.button("Add Ground Station").on_hover_text("Place a ground station at this location").clicked();
+                            let add_aoi = ui.button("Add Area of Interest").on_hover_text("Define an area of interest at this location").clicked();
                             (add_gs, add_aoi)
                         }).inner
                     });
@@ -789,7 +785,7 @@ impl ViewerState {
                                 if ui.small_button("×").clicked() {
                                     gs_to_remove = Some(idx);
                                 }
-                                if ui.checkbox(&mut gs.selected, "Track").changed() {
+                                if ui.checkbox(&mut gs.selected, "Track").on_hover_text("Show satellite passes over this station").changed() {
                                     gs_changed = true;
                                     if gs.selected {
                                         gs_pass_clicked = Some(idx);
@@ -810,7 +806,7 @@ impl ViewerState {
                             ground_stations.remove(idx);
                             gs_changed = true;
                         }
-                        if left.button("+ Add ground station").clicked() {
+                        if left.button("+ Add ground station").on_hover_text("Add a new ground station").clicked() {
                             ground_stations.push(GroundStation {
                                 name: format!("GS{}", ground_stations.len() + 1),
                                 lat: 0.0,
@@ -846,7 +842,7 @@ impl ViewerState {
                                 if ui.small_button("×").clicked() {
                                     aoi_to_remove = Some(idx);
                                 }
-                                if ui.checkbox(&mut aoi.selected, "Track").changed() {
+                                if ui.checkbox(&mut aoi.selected, "Track").on_hover_text("Show satellite passes over this area").changed() {
                                     aoi_changed = true;
                                     if aoi.selected {
                                         aoi_pass_clicked = Some(idx);
@@ -1223,7 +1219,7 @@ impl ViewerState {
                         if total_debris > 0 { ui.label(format!("  Debris: {}", total_debris)); }
                     }
                     ui.separator();
-                    if ui.button("Satellite List").clicked() {
+                    if ui.button("Satellite List").on_hover_text("Open the satellite list window").clicked() {
                         open_sat_list = true;
                     }
                 });
@@ -1574,9 +1570,9 @@ impl ViewerState {
                         let mut sats = cons.sats_per_plane as i32;
                         let mut planes = cons.num_planes as i32;
                         ui.label("Sats:");
-                        let sats_resp = ui.add(egui::DragValue::new(&mut sats).range(1..=100));
+                        let sats_resp = ui.add(egui::DragValue::new(&mut sats).range(1..=100)).on_hover_text("Satellites per orbital plane");
                         ui.label("Orbits:");
-                        let planes_resp = ui.add(egui::DragValue::new(&mut planes).range(1..=100));
+                        let planes_resp = ui.add(egui::DragValue::new(&mut planes).range(1..=100)).on_hover_text("Number of orbital planes");
                         if sats > 0 && planes > 0 {
                             cons.sats_per_plane = sats as usize;
                             cons.num_planes = planes as usize;
@@ -1587,7 +1583,7 @@ impl ViewerState {
                         let orbit_radius = planet.celestial_body.radius_km() + cons.altitude_km;
                         let default_sat_spacing = 2.0 * std::f64::consts::PI * orbit_radius / cons.sats_per_plane as f64;
                         let mut custom_sat_spacing = cons.sat_spacing_km.is_some();
-                        if ui.checkbox(&mut custom_sat_spacing, "d:").changed() {
+                        if ui.checkbox(&mut custom_sat_spacing, "d:").on_hover_text("Custom satellite spacing within each plane").changed() {
                             cons.sat_spacing_km = if custom_sat_spacing { Some(default_sat_spacing) } else { None };
                             cons.preset = Preset::None;
                         }
@@ -1602,7 +1598,7 @@ impl ViewerState {
 
                     ui.horizontal(|ui| {
                         ui.label("Alt:");
-                        let alt_resp = ui.add(egui::DragValue::new(&mut cons.altitude_km).range(0.0..=50000.0).suffix(" km"));
+                        let alt_resp = ui.add(egui::DragValue::new(&mut cons.altitude_km).range(0.0..=50000.0).suffix(" km")).on_hover_text("Orbit altitude above surface");
                         let orbit_label = if cons.altitude_km < 450.0 { "VLEO" }
                             else if cons.altitude_km < 2000.0 { "LEO" }
                             else if cons.altitude_km < 35000.0 { "MEO" }
@@ -1645,15 +1641,16 @@ impl ViewerState {
                                 cons.inclination = inc;
                             }
                         }
-                        ui.add_enabled(sso_possible, egui::Checkbox::new(&mut cons.sso, "SSO"));
+                        ui.add_enabled(sso_possible, egui::Checkbox::new(&mut cons.sso, "SSO"))
+                            .on_hover_text("Sun-synchronous orbit (auto-compute inclination)");
                         ui.label("Inc:");
-                        let inc_resp = ui.add_enabled(!cons.sso, egui::DragValue::new(&mut cons.inclination).range(0.0..=180.0).suffix("°"));
+                        let inc_resp = ui.add_enabled(!cons.sso, egui::DragValue::new(&mut cons.inclination).range(0.0..=180.0).suffix("°")).on_hover_text("Orbital inclination angle");
                         if inc_resp.changed() {
                             cons.preset = Preset::None;
                         }
                         ui.label("F:");
                         let max_f = (cons.num_planes - 1).max(1) as f64;
-                        let phase_resp = ui.add(egui::DragValue::new(&mut cons.phasing).range(0.0..=max_f).speed(0.1));
+                        let phase_resp = ui.add(egui::DragValue::new(&mut cons.phasing).range(0.0..=max_f).speed(0.1)).on_hover_text("Walker phasing parameter F");
                         if phase_resp.changed() {
                             cons.preset = Preset::None;
                         }
@@ -1661,7 +1658,7 @@ impl ViewerState {
 
                     ui.horizontal(|ui| {
                         ui.label("RAAN₀:");
-                        if ui.add(egui::DragValue::new(&mut cons.raan_offset).range(-180.0..=180.0).suffix("°").speed(1.0)).changed() {
+                        if ui.add(egui::DragValue::new(&mut cons.raan_offset).range(-180.0..=180.0).suffix("°").speed(1.0)).on_hover_text("RAAN offset of the first plane").changed() {
                             cons.preset = Preset::None;
                         }
                         let default_spacing = match cons.walker_type {
@@ -1669,7 +1666,7 @@ impl ViewerState {
                             WalkerType::Star => 180.0 / cons.num_planes as f64,
                         };
                         let mut custom_spacing = cons.raan_spacing.is_some();
-                        if ui.checkbox(&mut custom_spacing, "Δ:").changed() {
+                        if ui.checkbox(&mut custom_spacing, "Δ:").on_hover_text("Custom RAAN spacing between planes").changed() {
                             cons.raan_spacing = if custom_spacing { Some(default_spacing) } else { None };
                             cons.preset = Preset::None;
                         }
@@ -1684,11 +1681,11 @@ impl ViewerState {
 
                     ui.horizontal(|ui| {
                         ui.label("Ecc:");
-                        if ui.add(egui::DragValue::new(&mut cons.eccentricity).range(0.0..=0.99).speed(0.001).max_decimals(4)).changed() {
+                        if ui.add(egui::DragValue::new(&mut cons.eccentricity).range(0.0..=0.99).speed(0.001).max_decimals(4)).on_hover_text("Orbital eccentricity").changed() {
                             cons.preset = Preset::None;
                         }
                         ui.label("ω:");
-                        if ui.add(egui::DragValue::new(&mut cons.arg_periapsis).range(0.0..=360.0).suffix("°").speed(1.0)).changed() {
+                        if ui.add(egui::DragValue::new(&mut cons.arg_periapsis).range(0.0..=360.0).suffix("°").speed(1.0)).on_hover_text("Argument of periapsis").changed() {
                             cons.preset = Preset::None;
                         }
                     });
@@ -1696,25 +1693,27 @@ impl ViewerState {
                     ui.horizontal(|ui| {
                         ui.label("ISL planes:");
                         let mut p = cons.isl_plane_count as i32;
-                        if ui.add(egui::DragValue::new(&mut p).range(0..=10)).changed() {
+                        if ui.add(egui::DragValue::new(&mut p).range(0..=10)).on_hover_text("Inter-plane ISL connections per satellite").changed() {
                             cons.isl_plane_count = p as usize;
                         }
                         ui.label("sats:");
                         let mut s = cons.isl_intra_count as i32;
-                        if ui.add(egui::DragValue::new(&mut s).range(0..=10)).changed() {
+                        if ui.add(egui::DragValue::new(&mut s).range(0..=10)).on_hover_text("Intra-plane ISL connections per satellite").changed() {
                             cons.isl_intra_count = s as usize;
                         }
                     });
 
                     ui.horizontal(|ui| {
                         let old_type = cons.walker_type;
-                        ui.selectable_value(&mut cons.walker_type, WalkerType::Delta, "Delta");
-                        ui.selectable_value(&mut cons.walker_type, WalkerType::Star, "Star");
-                        if ui.checkbox(&mut cons.drag_enabled, "Drag:").changed() {
+                        ui.selectable_value(&mut cons.walker_type, WalkerType::Delta, "Delta")
+                            .on_hover_text("Walker-Delta: planes span 360° RAAN");
+                        ui.selectable_value(&mut cons.walker_type, WalkerType::Star, "Star")
+                            .on_hover_text("Walker-Star: planes span 180° RAAN");
+                        if ui.checkbox(&mut cons.drag_enabled, "Drag:").on_hover_text("Enable atmospheric drag decay simulation").changed() {
                             cons.preset = Preset::None;
                         }
                         if cons.drag_enabled {
-                            if ui.add(egui::DragValue::new(&mut cons.ballistic_coeff).range(0.1..=500.0).suffix(" kg/m²").speed(1.0).max_decimals(1)).changed() {
+                            if ui.add(egui::DragValue::new(&mut cons.ballistic_coeff).range(0.1..=500.0).suffix(" kg/m²").speed(1.0).max_decimals(1)).on_hover_text("Ballistic coefficient (mass/drag area)").changed() {
                                 cons.preset = Preset::None;
                             }
                         } else {
@@ -1774,7 +1773,7 @@ impl ViewerState {
             }
 
             let add_btn_text = if num_constellations == 0 { "[+] Add constellation" } else { "[+]" };
-            if ui.button(add_btn_text).clicked() {
+            if ui.button(add_btn_text).on_hover_text("Add a new constellation to this planet").clicked() {
                 const_to_remove = Some(usize::MAX);
             }
         }); });
@@ -2173,9 +2172,11 @@ impl ViewerState {
                                 .range(1.0..=500.0)
                                 .speed(1.0)
                                 .suffix(" km"),
-                        );
-                        ui.checkbox(&mut show_lines, "Lines");
-                        ui.checkbox(&mut conj_cache.show_heatmap, "Heatmap");
+                        ).on_hover_text("Distance threshold for conjunction alerts");
+                        ui.checkbox(&mut show_lines, "Lines")
+                            .on_hover_text("Draw lines between conjuncting objects");
+                        ui.checkbox(&mut conj_cache.show_heatmap, "Heatmap")
+                            .on_hover_text("Show conjunction risk as a heatmap");
                     });
                     ui.separator();
                     egui::ScrollArea::vertical()
@@ -2228,7 +2229,7 @@ impl ViewerState {
                                         .range(1.0..=60.0)
                                         .speed(1.0)
                                         .suffix(" min"),
-                                );
+                                ).on_hover_text("Look-ahead window for conjunction predictions");
                             });
                             if conj_cache.predictions.is_empty() {
                                 ui.weak("No upcoming conjunctions predicted");
@@ -2261,8 +2262,9 @@ impl ViewerState {
                             ui.separator();
                             ui.strong("Kessler Simulation");
                             ui.horizontal(|ui| {
-                                ui.checkbox(&mut kessler.enabled, "Enable");
-                                if ui.button("Clear").clicked() {
+                                ui.checkbox(&mut kessler.enabled, "Enable")
+                                    .on_hover_text("Simulate cascading debris collisions");
+                                if ui.button("Clear").on_hover_text("Remove all debris and reset counters").clicked() {
                                     kessler.debris.clear();
                                     kessler.collision_count = 0;
                                     kessler.collision_id_counter = 0;
@@ -2277,7 +2279,7 @@ impl ViewerState {
                                             .range(0.1..=50.0)
                                             .speed(0.1)
                                             .suffix(" km"),
-                                    );
+                                    ).on_hover_text("Minimum distance to trigger a collision");
                                 });
                                 ui.horizontal(|ui| {
                                     ui.label("Fragments/collision:");
@@ -2285,7 +2287,7 @@ impl ViewerState {
                                         egui::DragValue::new(&mut kessler.fragments_per_collision)
                                             .range(2..=50)
                                             .speed(1),
-                                    );
+                                    ).on_hover_text("Debris fragments created per collision");
                                 });
                                 ui.horizontal(|ui| {
                                     ui.label("Max debris:");
@@ -2293,7 +2295,7 @@ impl ViewerState {
                                         egui::DragValue::new(&mut kessler.max_debris)
                                             .range(100..=50000)
                                             .speed(100),
-                                    );
+                                    ).on_hover_text("Maximum debris objects to simulate");
                                 });
                                 ui.label(format!(
                                     "Collisions: {}  Debris: {}",
@@ -2303,7 +2305,8 @@ impl ViewerState {
 
                                 ui.separator();
                                 ui.strong("Course Correction");
-                                ui.checkbox(&mut kessler.course_correction_enabled, "Enable");
+                                ui.checkbox(&mut kessler.course_correction_enabled, "Enable")
+                                    .on_hover_text("Allow satellites to maneuver to avoid debris");
                                 if kessler.course_correction_enabled {
                                     ui.horizontal(|ui| {
                                         ui.label("Maneuver altitude:");
@@ -2312,7 +2315,7 @@ impl ViewerState {
                                                 .range(0.5..=50.0)
                                                 .speed(0.1)
                                                 .suffix(" km"),
-                                        );
+                                        ).on_hover_text("Altitude change for collision avoidance maneuver");
                                     });
                                     ui.label(format!(
                                         "Corrections: {}  Active: {}",
@@ -2342,7 +2345,7 @@ impl ViewerState {
                                 .range(0.0..=9.0)
                                 .speed(0.1)
                                 .max_decimals(1),
-                        );
+                        ).on_hover_text("Geomagnetic activity index (0=quiet, 9=storm)");
                         let kp_label = if rad.kp_index < 4.0 {
                             "Quiet"
                         } else if rad.kp_index < 6.0 {
@@ -2359,71 +2362,96 @@ impl ViewerState {
                         };
                         ui.colored_label(kp_color, kp_label);
                     });
-                    ui.checkbox(&mut rad.show_belts, "Show belt bands");
-                    ui.checkbox(&mut rad.show_lines, "Show lines");
-                    ui.checkbox(&mut rad.show_dots, "Show dots");
-                    ui.checkbox(&mut rad.connect_along_shell, "Connect along shell");
-                    ui.checkbox(&mut rad.connect_across_shells, "Connect across shells");
-                    ui.checkbox(&mut rad.show_fill, "Show fill");
+                    ui.checkbox(&mut rad.show_belts, "Show belt bands")
+                        .on_hover_text("Draw Van Allen belt band outlines");
+                    ui.checkbox(&mut rad.show_lines, "Show lines")
+                        .on_hover_text("Draw field lines through the belts");
+                    ui.checkbox(&mut rad.show_dots, "Show dots")
+                        .on_hover_text("Show sample points along field lines");
+                    ui.checkbox(&mut rad.connect_along_shell, "Connect along shell")
+                        .on_hover_text("Connect points within the same drift shell");
+                    ui.checkbox(&mut rad.connect_across_shells, "Connect across shells")
+                        .on_hover_text("Connect points between adjacent drift shells");
+                    ui.checkbox(&mut rad.show_fill, "Show fill")
+                        .on_hover_text("Fill the belt regions with color");
                     ui.horizontal(|ui| {
                         ui.label("Dots per line:");
-                        ui.add(egui::DragValue::new(&mut rad.dots_per_line).range(2..=100).speed(0.5));
+                        ui.add(egui::DragValue::new(&mut rad.dots_per_line).range(2..=100).speed(0.5))
+                            .on_hover_text("Sample points per field line");
                     });
-                    ui.checkbox(&mut rad.show_magnetopause, "Show magnetopause");
-                    ui.checkbox(&mut rad.show_sat_exposure, "Satellite exposure coloring");
+                    ui.checkbox(&mut rad.show_magnetopause, "Show magnetopause")
+                        .on_hover_text("Draw the magnetopause boundary");
+                    ui.checkbox(&mut rad.show_sat_exposure, "Satellite exposure coloring")
+                        .on_hover_text("Color satellites by radiation dose");
 
                     ui.separator();
                     ui.strong("Heatmap Sphere");
-                    ui.checkbox(&mut rad.show_heatmap_sphere, "Show heatmap sphere");
+                    ui.checkbox(&mut rad.show_heatmap_sphere, "Show heatmap sphere")
+                        .on_hover_text("Render radiation data on a spherical surface");
                     ui.horizontal(|ui| {
                         ui.label("Altitude (km):");
-                        ui.add(egui::DragValue::new(&mut rad.heatmap_altitude_km).range(0.0..=50000.0).speed(50.0).max_decimals(0));
+                        ui.add(egui::DragValue::new(&mut rad.heatmap_altitude_km).range(0.0..=50000.0).speed(50.0).max_decimals(0))
+                            .on_hover_text("Altitude of the heatmap sphere");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Resolution:");
-                        ui.add(egui::DragValue::new(&mut rad.heatmap_resolution).range(12..=120).speed(0.5));
+                        ui.add(egui::DragValue::new(&mut rad.heatmap_resolution).range(12..=120).speed(0.5))
+                            .on_hover_text("Grid resolution for heatmap rendering");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Mode:");
                         use crate::config::HeatmapMode;
-                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::Radiation, "Radiation");
-                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::IgrfRadiation, "IGRF Rad");
-                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::FieldStrength, "Dipole (nT)");
-                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::IgrfField, "IGRF-14 (nT)");
+                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::Radiation, "Radiation")
+                            .on_hover_text("Simple dipole radiation model");
+                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::IgrfRadiation, "IGRF Rad")
+                            .on_hover_text("AE-8/AP-8 trapped particle model with IGRF field");
+                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::FieldStrength, "Dipole (nT)")
+                            .on_hover_text("Magnetic field strength from tilted dipole");
+                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::IgrfField, "IGRF-14 (nT)")
+                            .on_hover_text("Magnetic field strength from IGRF-14 model");
                     });
                     if rad.heatmap_mode == crate::config::HeatmapMode::IgrfRadiation {
                         ui.horizontal(|ui| {
-                            ui.checkbox(&mut rad.show_protons, "Protons");
-                            ui.checkbox(&mut rad.show_electrons, "Electrons");
+                            ui.checkbox(&mut rad.show_protons, "Protons")
+                                .on_hover_text("Show trapped proton flux");
+                            ui.checkbox(&mut rad.show_electrons, "Electrons")
+                                .on_hover_text("Show trapped electron flux");
                         });
                     }
-                    ui.checkbox(&mut rad.smooth_colors, "Smooth colors");
+                    ui.checkbox(&mut rad.smooth_colors, "Smooth colors")
+                        .on_hover_text("Interpolate colors smoothly across the heatmap");
 
                     ui.separator();
                     ui.strong("Belt Rendering");
                     ui.horizontal(|ui| {
                         ui.label("Drift shells:");
-                        ui.add(egui::DragValue::new(&mut rad.num_shells).range(2..=100).speed(0.5));
+                        ui.add(egui::DragValue::new(&mut rad.num_shells).range(2..=100).speed(0.5))
+                            .on_hover_text("Number of L-shells to render");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Meridians:");
-                        ui.add(egui::DragValue::new(&mut rad.num_meridians).range(2..=64).speed(0.5));
+                        ui.add(egui::DragValue::new(&mut rad.num_meridians).range(2..=64).speed(0.5))
+                            .on_hover_text("Number of meridian slices per shell");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Shell phasing:");
-                        ui.add(egui::DragValue::new(&mut rad.shell_phasing).range(0.0..=2.0).speed(0.05).max_decimals(2));
+                        ui.add(egui::DragValue::new(&mut rad.shell_phasing).range(0.0..=2.0).speed(0.05).max_decimals(2))
+                            .on_hover_text("Rotational offset between adjacent shells");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Links:");
-                        ui.add(egui::DragValue::new(&mut rad.num_links).range(0..=20).speed(0.5));
+                        ui.add(egui::DragValue::new(&mut rad.num_links).range(0..=20).speed(0.5))
+                            .on_hover_text("Cross-shell connection lines to draw");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Dipole offset (km):");
-                        ui.add(egui::DragValue::new(&mut rad.dipole_offset_km).range(0.0..=2000.0).speed(10.0).max_decimals(0));
+                        ui.add(egui::DragValue::new(&mut rad.dipole_offset_km).range(0.0..=2000.0).speed(10.0).max_decimals(0))
+                            .on_hover_text("Offset of magnetic dipole from planet center");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Dipole tilt (°):");
-                        ui.add(egui::DragValue::new(&mut rad.dipole_tilt).range(0.0..=90.0).speed(0.5).max_decimals(1));
+                        ui.add(egui::DragValue::new(&mut rad.dipole_tilt).range(0.0..=90.0).speed(0.5).max_decimals(1))
+                            .on_hover_text("Tilt angle of the magnetic dipole axis");
                     });
 
                     ui.separator();
@@ -2499,12 +2527,12 @@ impl ViewerState {
                     .default_width(200.0)
                     .show(ui.ctx(), |ui| {
                         ui.horizontal(|ui| {
-                            if ui.button("All").clicked() {
+                            if ui.button("All").on_hover_text("Enable all moons").clicked() {
                                 for &(moon_body, _, _, _) in moons_list {
                                     planet.enabled_moons.insert(moon_body);
                                 }
                             }
-                            if ui.button("None").clicked() {
+                            if ui.button("None").on_hover_text("Disable all moons").clicked() {
                                 planet.enabled_moons.clear();
                             }
                         });
@@ -2519,7 +2547,7 @@ impl ViewerState {
                                         planet.enabled_moons.remove(&moon_body);
                                     }
                                 }
-                                if ui.button("View Orbit").clicked() {
+                                if ui.button("View Orbit").on_hover_text("Zoom to show this moon's orbit").clicked() {
                                     settings.zoom = 10000.0 / (orbit_km * 1.3);
                                     let ci = incl_rad.cos();
                                     let si = incl_rad.sin();
@@ -2530,7 +2558,7 @@ impl ViewerState {
                                     );
                                     planet.enabled_moons.insert(moon_body);
                                 }
-                                if ui.button("View Moon").clicked() {
+                                if ui.button("View Moon").on_hover_text("Zoom to the moon's current position").clicked() {
                                     let time = settings.time;
                                     let angle = 2.0 * PI * time / (period_days * 86400.0);
                                     let x = orbit_km * angle.cos();
@@ -2548,9 +2576,12 @@ impl ViewerState {
                             });
                         }
                         ui.separator();
-                        ui.checkbox(&mut settings.show_moon_orbits, "Show orbits");
-                        ui.checkbox(&mut settings.show_moon_lines, "Show lines to planet");
-                        ui.checkbox(&mut settings.show_moon_labels, "Show labels");
+                        ui.checkbox(&mut settings.show_moon_orbits, "Show orbits")
+                            .on_hover_text("Draw orbital paths for moons");
+                        ui.checkbox(&mut settings.show_moon_lines, "Show lines to planet")
+                            .on_hover_text("Draw lines from moons to the planet center");
+                        ui.checkbox(&mut settings.show_moon_labels, "Show labels")
+                            .on_hover_text("Display moon names");
                     });
             }
             planet.show_moons_window = show_moons_window;
@@ -2611,6 +2642,7 @@ impl ViewerState {
         let torus_zoom = self.torus_zoom;
         let link_width = settings.link_width;
         let fixed_sizes = settings.fixed_sizes;
+        let show_sat_border = settings.show_sat_border;
         let flattening = celestial_body.flattening();
         let show_polar_circle = settings.show_polar_circle;
         let show_equator = settings.show_equator;
@@ -2637,7 +2669,8 @@ impl ViewerState {
 
         let is_2d_projection = planet_projection != crate::projection::ProjectionKind::Orthographic;
         let log_power = settings.solar_system_log_power;
-        let detail_gl_info = self.tile_overlay_detail_gl_info(celestial_body);
+        let detail_bounds = self.tile_overlay_detail_bounds(celestial_body);
+        let gpu_available = self.render_state.is_some();
 
         let show_torus = show_torus && render_planet;
         let show_planet_sizes = self.show_planet_sizes;
@@ -2662,7 +2695,7 @@ impl ViewerState {
                             hide_behind_earth, single_color, dark_mode, show_routing_paths,
                             show_manhattan_path, show_shortest_path, show_radiation_path, radiation_weight,
                             show_asc_desc_colors,
-                            show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
+                            show_altitude_lines, render_planet, fixed_sizes, show_sat_border, show_polar_circle,
                             show_equator, show_graticule, show_crosshairs, show_terminator, show_eclipse, show_sun, earth_fixed_camera,
                             use_gpu_rendering: self.use_gpu_rendering, show_clouds, show_day_night, show_city_lights,
                             show_stars, show_borders, show_cities,
@@ -2723,15 +2756,7 @@ impl ViewerState {
                                         planet.radiation.igrf_grid_cache = Some((sphere_r, crate::igrf::IgrfGrid::new(sphere_r)));
                                     }
                                 }
-                                crate::config::HeatmapMode::IgrfRadiation => {
-                                    let kp = planet.radiation.kp_index;
-                                    let stale = planet.radiation.igrf_rad_cache.as_ref()
-                                        .map(|(r, k, _)| *r != sphere_r || *k != kp)
-                                        .unwrap_or(true);
-                                    if stale {
-                                        planet.radiation.igrf_rad_cache = Some((sphere_r, kp, crate::igrf::IgrfRadGrid::new(sphere_r, kp)));
-                                    }
-                                }
+                                crate::config::HeatmapMode::IgrfRadiation => {}
                                 _ => {}
                             }
                         }
@@ -2757,7 +2782,7 @@ impl ViewerState {
                             &mut planet.cameras_to_remove,
                             planet_radius,
                             flattening,
-                            self.sphere_renderer.as_ref(),
+                            gpu_available,
                             (celestial_body, skin, tex_res),
                             &body_y_rotation,
                             sun_dir,
@@ -2768,7 +2793,7 @@ impl ViewerState {
                             body_rot_angle,
                             &mut self.dragging_place,
                             (tab_idx, planet_idx),
-                            detail_gl_info,
+                            detail_bounds,
                             #[cfg(not(target_arch = "wasm32"))]
                             { match &self.geo_data { GeoLoadState::Loaded(d) => if show_borders { d.borders.as_slice() } else { &[] }, _ => &[] } },
                             #[cfg(target_arch = "wasm32")]
@@ -2853,7 +2878,7 @@ impl ViewerState {
                             rad_ref,
                             &body_y_rotation,
                             time,
-                            self.map_renderer.as_ref(),
+                            gpu_available,
                             planet_projection.shader_id(),
                         );
                     });
@@ -2862,7 +2887,7 @@ impl ViewerState {
                 if show_torus {
                     ui.vertical(|ui| {
                         let planet = &mut self.tabs[tab_idx].planets[planet_idx];
-                        let rad_grid = planet.radiation.igrf_rad_cache.as_ref().map(|(_, _, g)| g);
+                        let rad_grid: Option<&crate::igrf::IgrfRadGrid> = None;
                         let (trot, tzoom) = draw_torus(
                             ui,
                             &format!("torus_{}", view_name),

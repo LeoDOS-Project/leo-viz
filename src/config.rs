@@ -253,6 +253,7 @@ pub struct View3DFlags {
     pub show_altitude_lines: bool,
     pub render_planet: bool,
     pub fixed_sizes: bool,
+    pub show_sat_border: bool,
     pub show_polar_circle: bool,
     pub show_equator: bool,
     pub show_graticule: bool,
@@ -334,6 +335,7 @@ pub struct TabSettings {
     pub sat_radius: f32,
     pub link_width: f32,
     pub fixed_sizes: bool,
+    pub show_sat_border: bool,
     pub trackpad_rotate: bool,
     pub north_up: bool,
     pub show_moon_orbits: bool,
@@ -393,6 +395,7 @@ impl Default for TabSettings {
             sat_radius: 1.5,
             link_width: 0.25,
             fixed_sizes: false,
+            show_sat_border: false,
             trackpad_rotate: true,
             north_up: true,
             show_moon_orbits: true,
@@ -629,6 +632,7 @@ pub struct RadiationConfig {
     pub igrf_grid_cache: Option<(f64, crate::igrf::IgrfGrid)>,
     pub igrf_rad_cache: Option<(f64, f64, crate::igrf::IgrfRadGrid)>,
     #[cfg(not(target_arch = "wasm32"))]
+    #[allow(dead_code)]
     pub igrf_rad_pending: Option<(f64, f64, std::sync::Arc<std::sync::Mutex<Option<crate::igrf::IgrfRadGrid>>>)>,
 }
 

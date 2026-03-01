@@ -10,11 +10,14 @@ use crate::config::{
 };
 use crate::geo::CityLabel;
 use crate::math::{rotate_point_matrix, rotation_from_drag};
-use crate::renderer::{SphereRenderer, MapRenderer};
+use crate::renderer::{
+    PlanetUniforms, SunUniforms, HeatmapUniforms,
+    PlanetPaintCallback, SunPaintCallback, HeatmapPaintCallback, MapPaintCallback,
+    mat3_to_padded_cols,
+};
 use crate::texture::EarthTexture;
-use crate::tile::{DetailBounds, DetailTexture};
 use crate::walker::{WalkerType, WalkerConstellation, SatelliteState};
-use eframe::{egui, egui_glow, glow};
+use eframe::egui;
 use egui::mutex::Mutex;
 use egui_plot::{Line, Plot, PlotImage, PlotPoint, PlotPoints, Points, Polygon, Text};
 use nalgebra::{Matrix3, Vector3};
@@ -41,6 +44,24 @@ fn blend_proton_electron(p: f64, e: f64, show_p: bool, show_e: bool, smooth: boo
 }
 
 
+#[allow(dead_code)]
+fn igrf_rad_to_rgba(grid: &crate::igrf::IgrfRadGrid) -> Vec<u8> {
+    let w = 181;
+    let h = 91;
+    let mut data = vec![0u8; w * h * 4];
+    for ci in 0..h {
+        for li in 0..w {
+            let idx = (ci * w + li) * 4;
+            let p = (grid.protons[ci * w + li] * 255.0).round() as u8;
+            let e = (grid.electrons[ci * w + li] * 255.0).round() as u8;
+            data[idx] = p;
+            data[idx + 1] = e;
+            data[idx + 2] = 0;
+            data[idx + 3] = 255;
+        }
+    }
+    data
+}
 
 fn clip_link_at_earth(
     rx1: f64, ry1: f64, rz1: f64, visible1: bool,
@@ -470,7 +491,7 @@ pub fn draw_3d_view(
     cameras_to_remove: &mut Vec<usize>,
     planet_radius: f64,
     flattening: f64,
-    sphere_renderer: Option<&Arc<Mutex<SphereRenderer>>>,
+    gpu_available: bool,
     body_key: (CelestialBody, Skin, TextureResolution),
     body_rotation: &Matrix3<f64>,
     sun_dir: [f32; 3],
@@ -481,7 +502,7 @@ pub fn draw_3d_view(
     body_rot_angle: f64,
     dragging_place: &mut Option<(usize, usize, bool, usize)>,
     drag_tab_planet: (usize, usize),
-    detail_gl_info: Option<(glow::Texture, [f32; 4])>,
+    detail_bounds: Option<[f32; 4]>,
     geo_borders: &[Vec<(f64, f64)>],
     geo_cities: &[CityLabel],
     conjunction_lines: &[(ConjunctionInfo, f64)],
@@ -497,7 +518,7 @@ pub fn draw_3d_view(
         hide_behind_earth, single_color, dark_mode, show_routing_paths,
         show_manhattan_path, show_shortest_path, show_radiation_path, radiation_weight,
         show_asc_desc_colors,
-        show_altitude_lines, render_planet, fixed_sizes, show_polar_circle,
+        show_altitude_lines, render_planet, fixed_sizes, show_sat_border, show_polar_circle,
         show_equator, show_graticule, show_crosshairs, show_terminator, show_eclipse, show_sun, earth_fixed_camera, use_gpu_rendering,
         show_clouds, show_day_night, show_city_lights, show_stars, show_borders, show_cities,
         trackpad_rotate,
@@ -519,12 +540,10 @@ pub fn draw_3d_view(
     let scaled_sat_radius = sat_radius * zoom_factor;
     let scaled_link_width = (link_width * zoom_factor).max(0.5);
 
-    let use_gpu = sphere_renderer.is_some() && render_planet && use_gpu_rendering;
+    let use_gpu = gpu_available && render_planet && use_gpu_rendering;
 
-    // Draw sphere FIRST (before plot) so it renders behind
     if use_gpu {
         let rect = egui::Rect::from_min_size(ui.cursor().min, egui::Vec2::new(width, height));
-        let renderer = sphere_renderer.unwrap().clone();
         let combined_rotation = if earth_fixed_camera {
             rotation
         } else {
@@ -544,40 +563,101 @@ pub fn draw_3d_view(
             _ => 0.0,
         };
 
-        let bg = ui.visuals().extreme_bg_color;
-        let bg_color = [bg.r() as f32 / 255.0, bg.g() as f32 / 255.0, bg.b() as f32 / 255.0];
-        let detail_info = detail_gl_info;
+        let bg_c = ui.visuals().extreme_bg_color;
+        let bg_color = [bg_c.r() as f32 / 255.0, bg_c.g() as f32 / 255.0, bg_c.b() as f32 / 255.0];
         let logical_aspect = width / height.max(1.0);
-        let callback = egui::PaintCallback {
-            rect,
-            callback: Arc::new(egui_glow::CallbackFn::new(move |info, painter| {
-                let gl = painter.gl();
-                let vp = info.viewport_in_pixels();
-                let ppp = info.pixels_per_point;
-                let uv_scale = [
-                    vp.width_px as f32 / (width * ppp).max(1.0),
-                    vp.height_px as f32 / (height * ppp).max(1.0),
-                ];
-                let r = renderer.lock();
-                if let Some((detail_tex, detail_bounds)) = detail_info {
-                    let dt = DetailTexture {
-                        width: 0,
-                        height: 0,
-                        bounds: DetailBounds {
-                            min_lon: detail_bounds[0] as f64,
-                            max_lon: detail_bounds[1] as f64,
-                            min_lat: detail_bounds[2] as f64,
-                            max_lat: detail_bounds[3] as f64,
-                        },
-                        gl_texture: Some(detail_tex),
-                    };
-                    r.paint(gl, key, &inv_rotation, &star_inv_rotation, flat as f64, logical_aspect, scale, atmosphere, show_clouds, show_day_night, show_city_lights, sun_dir, Some(&dt), show_stars, show_stars, bg_color, uv_scale);
-                } else {
-                    r.paint(gl, key, &inv_rotation, &star_inv_rotation, flat as f64, logical_aspect, scale, atmosphere, show_clouds, show_day_night, show_city_lights, sun_dir, None, show_stars, show_stars, bg_color, uv_scale);
-                }
-            })),
+
+        let rot_cols = mat3_to_padded_cols(&inv_rotation);
+        let star_cols = mat3_to_padded_cols(&star_inv_rotation);
+
+        let ring_params = key.0.ring_params();
+        let (ring_inner, ring_outer) = ring_params.map(|(_, i, o)| (i, o)).unwrap_or((0.0, 0.0));
+        let has_rings_f = if ring_params.is_some() { 1.0f32 } else { 0.0 };
+        let adams = if has_rings_f > 0.5 && key.0 == CelestialBody::Neptune { 1.0f32 } else { 0.0 };
+        let eps = if has_rings_f > 0.5 && key.0 == CelestialBody::Uranus { 1.0f32 } else { 0.0 };
+
+        let has_detail = detail_bounds.is_some();
+        let db = detail_bounds.unwrap_or([0.0; 4]);
+
+        let uniforms = PlanetUniforms {
+            inv_rot_0: rot_cols[0], inv_rot_1: rot_cols[1], inv_rot_2: rot_cols[2],
+            star_rot_0: star_cols[0], star_rot_1: star_cols[1], star_rot_2: star_cols[2],
+            sun_dir_flat: [sun_dir[0], sun_dir[1], sun_dir[2], flat],
+            bg_aspect: [bg_color[0], bg_color[1], bg_color[2], logical_aspect],
+            detail_bounds: db,
+            uv_etc: [1.0, 1.0, scale, atmosphere],
+            flags_a: [
+                if show_clouds { 1.0 } else { 0.0 },
+                if show_day_night { 1.0 } else { 0.0 },
+                if show_city_lights { 1.0 } else { 0.0 },
+                if show_stars { 1.0 } else { 0.0 },
+            ],
+            flags_b: [if has_detail { 1.0 } else { 0.0 }, 0.0, has_rings_f, ring_inner],
+            flags_c: [ring_outer, adams, eps, 0.0],
         };
+
+        let callback = egui_wgpu::Callback::new_paint_callback(
+            rect,
+            PlanetPaintCallback::new(uniforms, key, show_stars, has_detail),
+        );
         ui.painter().add(callback);
+
+        if let Some(rad) = radiation {
+            if rad.show_heatmap_sphere {
+                let dipole_tilt = rad.dipole_tilt.to_radians();
+                let tilt_lon = (-287.3_f64).to_radians();
+                let hm_mag_axis = Vector3::new(
+                    dipole_tilt.sin() * tilt_lon.cos(),
+                    dipole_tilt.cos(),
+                    dipole_tilt.sin() * tilt_lon.sin(),
+                ).normalize();
+                let offset_lat = 22.0_f64.to_radians();
+                let offset_lon = (-140.0_f64).to_radians();
+                let sphere_r_km = planet_radius + rad.heatmap_altitude_km;
+                let hm_dipole_ox = (rad.dipole_offset_km * offset_lat.cos() * offset_lon.cos() / sphere_r_km) as f32;
+                let hm_dipole_oy = (rad.dipole_offset_km * offset_lat.sin() / sphere_r_km) as f32;
+                let hm_dipole_oz = (rad.dipole_offset_km * offset_lat.cos() * offset_lon.sin() / sphere_r_km) as f32;
+
+                let hm_mode = match rad.heatmap_mode {
+                    crate::config::HeatmapMode::Radiation => 0i32,
+                    crate::config::HeatmapMode::FieldStrength => 1,
+                    crate::config::HeatmapMode::IgrfField => 2,
+                    crate::config::HeatmapMode::IgrfRadiation => 3,
+                };
+
+                let hm_kp = rad.kp_index as f32;
+                let hm_planet_r = (planet_radius / sphere_r_km) as f32;
+                let hm_show_p = if rad.show_protons { 1.0f32 } else { 0.0 };
+                let hm_show_e = if rad.show_electrons { 1.0f32 } else { 0.0 };
+                let hm_smooth = rad.smooth_colors;
+                let hm_mag_f = [hm_mag_axis.x as f32, hm_mag_axis.y as f32, hm_mag_axis.z as f32];
+                let hm_dipole_f = [hm_dipole_ox, hm_dipole_oy, hm_dipole_oz];
+                let hm_sphere_r_km = sphere_r_km as f32;
+                let hm_scale = (sphere_r_km / margin) as f32;
+                let (hm_rad_data, hm_compute_rad): (Option<(u64, Vec<u8>)>, Option<f32>) =
+                    if rad.heatmap_mode == crate::config::HeatmapMode::IgrfRadiation {
+                        (None, Some(hm_sphere_r_km))
+                    } else {
+                        (None, None)
+                    };
+                let hm_inv_rotation = inv_rotation;
+                let hm_rot_cols = mat3_to_padded_cols(&hm_inv_rotation);
+                let hm_uniforms = HeatmapUniforms {
+                    inv_rot_0: hm_rot_cols[0], inv_rot_1: hm_rot_cols[1], inv_rot_2: hm_rot_cols[2],
+                    mag_aspect: [hm_mag_f[0], hm_mag_f[1], hm_mag_f[2], logical_aspect],
+                    dipole_scale: [hm_dipole_f[0], hm_dipole_f[1], hm_dipole_f[2], hm_scale],
+                    uv_mode_smooth: [1.0, 1.0, hm_mode as f32, if hm_smooth { 1.0 } else { 0.0 }],
+                    kp_pr_sr_sp: [hm_kp, hm_planet_r, hm_sphere_r_km, hm_show_p],
+                    se_pad: [hm_show_e, 0.0, 0.0, 0.0],
+                };
+
+                let hm_callback = egui_wgpu::Callback::new_paint_callback(
+                    rect,
+                    HeatmapPaintCallback::new(hm_uniforms, hm_rad_data, hm_compute_rad),
+                );
+                ui.painter().add(hm_callback);
+            }
+        }
 
         if show_sun {
             let sun_v = Vector3::new(sun_dir[0] as f64, sun_dir[1] as f64, sun_dir[2] as f64).normalize();
@@ -593,21 +673,17 @@ pub fn draw_3d_view(
                 let sun_intensity = (1.0 / (sun_dist_au * sun_dist_au)).min(2.0);
                 let zoom_dil = (1.0 / zoom as f32).sqrt();
                 let cam_ratio = (moon_camera_distance_km / 1_000_000.0) as f32;
-                let sun_renderer = sphere_renderer.unwrap().clone();
-                let sun_callback = egui::PaintCallback {
-                    rect,
-                    callback: Arc::new(egui_glow::CallbackFn::new(move |info, painter| {
-                        let gl = painter.gl();
-                        let vp = info.viewport_in_pixels();
-                        let ppp = info.pixels_per_point;
-                        let uv_s = [
-                            vp.width_px as f32 / (width * ppp).max(1.0),
-                            vp.height_px as f32 / (height * ppp).max(1.0),
-                        ];
-                        let r = sun_renderer.lock();
-                        r.paint_sun(gl, sun_pos_uv, scale, cam_ratio, sun_intensity, zoom_dil, logical_aspect, uv_s);
-                    })),
+
+                let sun_uniforms = SunUniforms {
+                    uv_aspect_ps: [1.0, 1.0, logical_aspect, scale],
+                    sun_cam_int: [sun_pos_uv[0], sun_pos_uv[1], cam_ratio, sun_intensity],
+                    zoom_pad: [zoom_dil, 0.0, 0.0, 0.0],
                 };
+
+                let sun_callback = egui_wgpu::Callback::new_paint_callback(
+                    rect,
+                    SunPaintCallback::new(sun_uniforms),
+                );
                 ui.painter().add(sun_callback);
             }
         }
@@ -621,7 +697,7 @@ pub fn draw_3d_view(
         .show_grid(false)
         .show_x(false)
         .show_y(false)
-        .show_background(sphere_renderer.is_none() || !use_gpu_rendering)
+        .show_background(!gpu_available || !use_gpu_rendering)
         .allow_drag(false)
         .allow_zoom(false)
         .allow_scroll(false)
@@ -893,7 +969,7 @@ pub fn draw_3d_view(
             let dipole_oy = rad_config.dipole_offset_km * offset_lat.sin();
             let dipole_oz = rad_config.dipole_offset_km * offset_lat.cos() * offset_lon.sin();
 
-            if rad_config.show_heatmap_sphere {
+            if rad_config.show_heatmap_sphere && !use_gpu {
                 let sphere_r = planet_radius + rad_config.heatmap_altitude_km;
                 let sphere_r_sq = sphere_r * sphere_r;
                 let ma = mag_axis;
@@ -2570,6 +2646,14 @@ pub fn draw_3d_view(
                     };
 
                     if !hide_behind_earth && !in_front {
+                        if show_sat_border {
+                            plot_ui.points(
+                                Points::new("", PlotPoints::new(vec![[rx, ry]]))
+                                    .color(bg_color)
+                                    .radius(scaled_sat_radius * 0.8 + 1.0)
+                                    .filled(false),
+                            );
+                        }
                         plot_ui.points(
                             Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                 .color(dim_col)
@@ -2586,6 +2670,14 @@ pub fn draw_3d_view(
                         }
                     }
                     if in_front {
+                        if show_sat_border {
+                            plot_ui.points(
+                                Points::new("", PlotPoints::new(vec![[rx, ry]]))
+                                    .color(bg_color)
+                                    .radius(scaled_sat_radius + 1.0)
+                                    .filled(false),
+                            );
+                        }
                         plot_ui.points(
                             Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                 .color(color)
@@ -3603,31 +3695,25 @@ pub fn draw_map_view(
     radiation: Option<&RadiationConfig>,
     body_rotation: &Matrix3<f64>,
     time: f64,
-    map_renderer: Option<&Arc<Mutex<MapRenderer>>>,
+    gpu_available: bool,
     proj_shader_id: i32,
 ) {
     let (xmin, xmax) = proj.x_range();
     let (ymin, ymax) = proj.y_range();
 
-    let use_gpu = map_renderer.is_some();
+    let use_gpu = gpu_available;
 
     let shared_bounds = Arc::new(Mutex::new([xmin, xmax, ymin, ymax]));
 
-    if let Some(renderer) = map_renderer {
+    if use_gpu {
         let rect = egui::Rect::from_min_size(
             ui.cursor().min,
             egui::Vec2::new(width, height),
         );
-        let renderer = renderer.clone();
-        let bounds_ref = shared_bounds.clone();
-        let callback = egui::PaintCallback {
+        let callback = egui_wgpu::Callback::new_paint_callback(
             rect,
-            callback: Arc::new(egui_glow::CallbackFn::new(move |_info, painter| {
-                let gl = painter.gl();
-                let [bx0, bx1, by0, by1] = *bounds_ref.lock();
-                renderer.lock().paint(gl, proj_shader_id, bx0, bx1, by0, by1);
-            })),
-        };
+            MapPaintCallback::new(proj_shader_id, shared_bounds.clone()),
+        );
         ui.painter().add(callback);
     }
 
