@@ -187,13 +187,14 @@ impl ViewerState {
             }
         }
 
-        let s = &mut self.tabs[active].settings;
+        let tab = &mut self.tabs[active];
 
         ui.separator();
         ui.label(egui::RichText::new("Display").strong());
 
-        ui.checkbox(&mut s.render_planet, "Show planet");
+        ui.checkbox(&mut tab.settings.render_planet, "Show planet");
         ui.indent("planet_opts", |ui| {
+            let (s, planets) = (&mut tab.settings, &mut tab.planets);
             let on = s.render_planet;
             ui.add_enabled_ui(on, |ui| {
                 ui.horizontal(|ui| {
@@ -382,10 +383,51 @@ impl ViewerState {
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_sun, "Show sun"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_polar_circle, "Show polar circle"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_equator, "Show equator"));
-                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_radiation_belts, "Radiation belts"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_graticule, "Show graticule"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_crosshairs, "Show crosshairs"));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_day_night, "Show day/night"));
+            });
+
+            ui.label(egui::RichText::new("Radiation").strong());
+            ui.indent("radiation_opts", |ui| {
+                if let Some(planet) = planets.first_mut() {
+                    let rad = &mut planet.radiation;
+                    let mut show_belts = s.show_radiation_belts
+                        && rad.heatmap_mode == crate::config::HeatmapMode::IgrfRadiation;
+                    let mut show_field = s.show_radiation_belts
+                        && rad.heatmap_mode == crate::config::HeatmapMode::IgrfField;
+                    if ui.add_enabled(on, egui::Checkbox::new(&mut show_belts, "Show radiation belts")).changed() {
+                        if show_belts {
+                            s.show_radiation_belts = true;
+                            rad.heatmap_mode = crate::config::HeatmapMode::IgrfRadiation;
+                        } else {
+                            s.show_radiation_belts = show_field;
+                        }
+                    }
+                    if ui.add_enabled(on, egui::Checkbox::new(&mut show_field, "Show geomagnetic field")).changed() {
+                        if show_field {
+                            s.show_radiation_belts = true;
+                            rad.heatmap_mode = crate::config::HeatmapMode::IgrfField;
+                        } else {
+                            s.show_radiation_belts = show_belts;
+                        }
+                    }
+                    let either = show_belts || show_field;
+                    ui.add_enabled(on && either, egui::Checkbox::new(&mut rad.show_heatmap_sphere, "Show heatmap sphere"));
+                    ui.add_enabled(on && either, egui::Checkbox::new(&mut rad.show_sat_exposure, "Color satellites"));
+                    ui.add_enabled_ui(on && either, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Altitude:");
+                            ui.add(egui::DragValue::new(&mut rad.heatmap_altitude_km)
+                                .range(0.0..=50000.0).speed(50.0).max_decimals(0).suffix(" km"));
+                            if planet.constellations.len() == 1 {
+                                if ui.button("Match constellation").clicked() {
+                                    rad.heatmap_altitude_km = planet.constellations[0].altitude_km;
+                                }
+                            }
+                        });
+                    });
+                }
             });
 
             ui.label(egui::RichText::new("Ground").strong());
@@ -404,6 +446,7 @@ impl ViewerState {
             });
         });
 
+        let s = &mut tab.settings;
         ui.checkbox(&mut s.show_solar_system, "Show solar system");
         ui.indent("solar_system_opts", |ui| {
             let on = s.show_solar_system;

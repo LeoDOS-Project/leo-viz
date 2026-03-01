@@ -127,7 +127,7 @@ fn legendre(colat_rad: f64) -> ([[f64; N_MAX + 1]; N_MAX + 1], [[f64; N_MAX + 1]
 
 #[derive(Clone)]
 pub(crate) struct IgrfGrid {
-    grid: Vec<f64>,
+    pub(crate) grid: Vec<f64>,
     pub(crate) f_min: f64,
     pub(crate) f_max: f64,
 }
@@ -358,8 +358,8 @@ fn trace_field_line(r_km: f64, colat_rad: f64, elon_rad: f64) -> (f64, f64) {
 
 #[derive(Clone)]
 pub(crate) struct IgrfRadGrid {
-    protons: Vec<f64>,
-    electrons: Vec<f64>,
+    pub(crate) protons: Vec<f64>,
+    pub(crate) electrons: Vec<f64>,
 }
 
 impl IgrfRadGrid {

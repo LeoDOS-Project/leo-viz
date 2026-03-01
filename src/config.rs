@@ -571,7 +571,7 @@ pub enum HeatmapMode {
     IgrfRadiation,
 }
 
-const GEOMAGNETIC_PALETTE: [[u8; 3]; 18] = [
+pub(crate) const GEOMAGNETIC_PALETTE: [[u8; 3]; 18] = [
     [9,33,52], [12,40,79], [16,47,113], [51,52,144],
     [77,60,148], [100,72,143], [120,82,139], [140,90,133],
     [160,100,131], [180,108,125], [202,118,114], [222,128,102],
@@ -628,6 +628,8 @@ pub struct RadiationConfig {
     pub smooth_colors: bool,
     pub igrf_grid_cache: Option<(f64, crate::igrf::IgrfGrid)>,
     pub igrf_rad_cache: Option<(f64, f64, crate::igrf::IgrfRadGrid)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub igrf_rad_pending: Option<(f64, f64, std::sync::Arc<std::sync::Mutex<Option<crate::igrf::IgrfRadGrid>>>)>,
 }
 
 impl Default for RadiationConfig {
@@ -658,6 +660,8 @@ impl Default for RadiationConfig {
             smooth_colors: false,
             igrf_grid_cache: None,
             igrf_rad_cache: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            igrf_rad_pending: None,
         }
     }
 }
