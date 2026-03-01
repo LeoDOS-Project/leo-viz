@@ -1189,7 +1189,7 @@ fn star_rot() -> mat3x3f { return mat3x3f(u.star_rot_0.xyz, u.star_rot_1.xyz, u.
         }
         if r >= ring_inner && r <= ring_outer {
             let ru = (r - ring_inner) / (ring_outer - ring_inner);
-            let rs = textureSample(t_ring, samp_c, vec2f(ru, 0.5));
+            let rs = textureSampleLevel(t_ring, samp_c, vec2f(ru, 0.5), 0.0);
             ring_color = rs.rgb;
             ring_alpha = rs.a;
             if adams_arc > 0.5 && ru > 0.82 {
@@ -1222,7 +1222,7 @@ fn star_rot() -> mat3x3f { return mat3x3f(u.star_rot_0.xyz, u.star_rot_1.xyz, u.
             let slon = atan2(-dir.z, dir.x);
             let su = (slon + PI) / (2.0 * PI);
             let sv = (PI / 2.0 - slat) / PI;
-            bg = textureSample(t_stars, samp_r, vec2f(su, sv)).rgb;
+            bg = textureSampleLevel(t_stars, samp_r, vec2f(su, sv), 0.0).rgb;
             bg_a = 1.0;
         }
         if atmosphere > 0.0 && screen_dist < atmo_outer {
@@ -1254,7 +1254,7 @@ fn star_rot() -> mat3x3f { return mat3x3f(u.star_rot_0.xyz, u.star_rot_1.xyz, u.
             let slon = atan2(-dir.z, dir.x);
             let su = (slon + PI) / (2.0 * PI);
             let sv = (PI / 2.0 - slat) / PI;
-            bg = textureSample(t_stars, samp_r, vec2f(su, sv)).rgb;
+            bg = textureSampleLevel(t_stars, samp_r, vec2f(su, sv), 0.0).rgb;
             bg_a = 1.0;
         }
         if transparent_bg > 0.5 { return vec4f(ring_color, ring_alpha); }
@@ -1272,16 +1272,16 @@ fn star_rot() -> mat3x3f { return mat3x3f(u.star_rot_0.xyz, u.star_rot_1.xyz, u.
         let du = (lon_deg - u.detail_bounds.x) / (u.detail_bounds.y - u.detail_bounds.x);
         let dv = (u.detail_bounds.w - lat_ortho) / (u.detail_bounds.w - u.detail_bounds.z);
         if du >= 0.0 && du <= 1.0 && dv >= 0.0 && dv <= 1.0 {
-            day_color = textureSample(t_detail, samp_c, vec2f(du, dv)).rgb;
+            day_color = textureSampleLevel(t_detail, samp_c, vec2f(du, dv), 0.0).rgb;
         } else {
-            day_color = textureSample(t_planet, samp_r, vec2f(tex_u, tex_v)).rgb;
+            day_color = textureSampleLevel(t_planet, samp_r, vec2f(tex_u, tex_v), 0.0).rgb;
         }
     } else {
-        day_color = textureSample(t_planet, samp_r, vec2f(tex_u, tex_v)).rgb;
+        day_color = textureSampleLevel(t_planet, samp_r, vec2f(tex_u, tex_v), 0.0).rgb;
     }
 
     if show_clouds > 0.5 && use_detail < 0.5 {
-        let cloud = textureSample(t_clouds, samp_r, vec2f(tex_u, tex_v)).r;
+        let cloud = textureSampleLevel(t_clouds, samp_r, vec2f(tex_u, tex_v), 0.0).r;
         day_color = mix(day_color, vec3f(1.0), cloud);
     }
 
@@ -1293,7 +1293,7 @@ fn star_rot() -> mat3x3f { return mat3x3f(u.star_rot_0.xyz, u.star_rot_1.xyz, u.
         let lit_day = day_color * shade;
         var night_lights = vec3f(0.0);
         if show_city_lights > 0.5 {
-            night_lights = textureSample(t_night, samp_r, vec2f(tex_u, tex_v)).rgb;
+            night_lights = textureSampleLevel(t_night, samp_r, vec2f(tex_u, tex_v), 0.0).rgb;
         }
         color = mix(night_lights, lit_day, day_factor);
     } else {
@@ -1567,7 +1567,7 @@ fn inv_rot() -> mat3x3f { return mat3x3f(u.inv_rot_0.xyz, u.inv_rot_1.xyz, u.inv
         let elon = atan2(-gp.z, gp.x);
         let u_tex = colat / PI;
         let v_tex = (elon + PI) / (2.0 * PI);
-        let pe = textureSample(t_data, samp, vec2f(v_tex, u_tex));
+        let pe = textureSampleLevel(t_data, samp, vec2f(v_tex, u_tex), 0.0);
         let pval = pe.r * show_p;
         let eval = pe.g * show_e;
         intensity = max(pval, eval);
@@ -1575,7 +1575,7 @@ fn inv_rot() -> mat3x3f { return mat3x3f(u.inv_rot_0.xyz, u.inv_rot_1.xyz, u.inv
 
     var t = clamp(intensity, 0.0, 1.0);
     if is_smooth < 0.5 { t = floor(t * 17.0) / 17.0; }
-    let color = textureSample(t_palette, samp, vec2f(t, 0.5)).rgb;
+    let color = textureSampleLevel(t_palette, samp, vec2f(t, 0.5), 0.0).rgb;
 
     let edge_width = 3.0 * fwidth(d);
     let edge_alpha = smoothstep(1.0, 1.0 - edge_width, d);
@@ -1830,7 +1830,7 @@ fn inv_proj(p: i32, x: f32, y: f32) -> vec2f {
     if ll.x < -900.0 { return vec4f(0.0); }
     let tu = (ll.y + 180.0) / 360.0;
     let tv = (90.0 - ll.x) / 180.0;
-    return textureSample(t_earth, samp, vec2f(tu, tv));
+    return textureSampleLevel(t_earth, samp, vec2f(tu, tv), 0.0);
 }
 ");
 
