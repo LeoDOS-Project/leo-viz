@@ -274,6 +274,8 @@ impl App {
                 #[cfg(not(target_arch = "wasm32"))]
                 asteroid_rx: None,
                 hohmann: crate::solar_system::HohmannState::default(),
+                conjunction_body_a: CelestialBody::Earth,
+                conjunction_body_b: CelestialBody::Mars,
                 #[cfg(target_arch = "wasm32")]
                 last_url_hash: String::new(),
                 last_frame_instant: None,

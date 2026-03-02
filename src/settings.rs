@@ -616,6 +616,75 @@ impl ViewerState {
                     }
                 });
             });
+            ui.add_enabled(on, egui::Checkbox::new(&mut s.show_orbital_events, "Orbital events"))
+                .on_hover_text("Show upcoming astronomical events");
+            let ev_on = on && s.show_orbital_events;
+            let ev_sim_time = s.time;
+            ui.indent("orbital_events_opts", |ui| {
+                ui.add_enabled_ui(ev_on, |ui| {
+                    let ss_ts = self.start_timestamp + Duration::seconds(ev_sim_time as i64);
+                    let j2000 = ss_ts.signed_duration_since(*crate::solar_system::J2000_EPOCH_PUB).num_seconds() as f64 / 86400.0;
+
+                    ui.label(egui::RichText::new("Conjunction").strong());
+                    ui.horizontal(|ui| {
+                        use crate::solar_system::HOHMANN_PLANETS;
+                        egui::ComboBox::from_id_salt("conj_body_a")
+                            .selected_text(self.conjunction_body_a.label())
+                            .width(70.0)
+                            .show_ui(ui, |ui| {
+                                for &body in &HOHMANN_PLANETS {
+                                    ui.selectable_value(&mut self.conjunction_body_a, body, body.label());
+                                }
+                            });
+                        ui.label("\u{2014}");
+                        egui::ComboBox::from_id_salt("conj_body_b")
+                            .selected_text(self.conjunction_body_b.label())
+                            .width(70.0)
+                            .show_ui(ui, |ui| {
+                                for &body in &HOHMANN_PLANETS {
+                                    ui.selectable_value(&mut self.conjunction_body_b, body, body.label());
+                                }
+                            });
+                    });
+                    if self.conjunction_body_a == self.conjunction_body_b {
+                        ui.label("Select two different bodies");
+                    } else if let Some(wait) = crate::solar_system::next_conjunction_days(
+                        self.conjunction_body_a,
+                        self.conjunction_body_b,
+                        j2000,
+                    ) {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("Next: {:.1} days", wait));
+                            if ui.button("\u{23e9}").on_hover_text("Fast-forward to conjunction").clicked() {
+                                s.time += wait * 86400.0;
+                            }
+                        });
+                    }
+
+                    ui.label(egui::RichText::new("Opposition").strong());
+                    for &body in crate::solar_system::outer_planets() {
+                        if let Some(wait) = crate::solar_system::next_opposition_days(body, j2000) {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("{}: {:.1} d", body.label(), wait));
+                                if ui.button("\u{23e9}").on_hover_text(format!("Fast-forward to {} opposition", body.label())).clicked() {
+                                    s.time += wait * 86400.0;
+                                }
+                            });
+                        }
+                    }
+
+                    ui.label(egui::RichText::new("Equinox / Solstice").strong());
+                    let (eq_wait, eq_name) = crate::solar_system::next_equinox_solstice(j2000);
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{}: {:.1} d", eq_name, eq_wait));
+                        if ui.button("\u{23e9}").on_hover_text(format!("Fast-forward to {}", eq_name)).clicked() {
+                            s.time += eq_wait * 86400.0;
+                        }
+                    });
+                });
+            });
+            ui.add_enabled(on, egui::Checkbox::new(&mut s.show_circular_calendar, "Circular calendar"))
+                .on_hover_text("Show month wedges on Earth's orbit");
         });
 
         ui.checkbox(&mut self.show_planet_sizes, "Show planet sizes")

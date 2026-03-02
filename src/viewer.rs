@@ -135,6 +135,8 @@ pub(crate) struct ViewerState {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) asteroid_rx: Option<mpsc::Receiver<Result<Vec<crate::solar_system::Asteroid>, String>>>,
     pub(crate) hohmann: crate::solar_system::HohmannState,
+    pub(crate) conjunction_body_a: CelestialBody,
+    pub(crate) conjunction_body_b: CelestialBody,
     #[cfg(target_arch = "wasm32")]
     pub(crate) last_url_hash: String,
     pub(crate) last_frame_instant: Option<web_time::Instant>,
@@ -3093,6 +3095,15 @@ impl ViewerState {
                                 ast_slice,
                                 self.asteroid_sprite.as_ref(),
                             );
+                            if self.tabs[tab_idx].settings.show_circular_calendar {
+                                let cal_j2000 = ss_timestamp.signed_duration_since(*crate::solar_system::J2000_EPOCH_PUB).num_seconds() as f64 / 86400.0;
+                                crate::solar_system::draw_circular_calendar(
+                                    plot_ui,
+                                    cal_j2000,
+                                    log_power,
+                                    dark_mode,
+                                );
+                            }
                             if self.tabs[tab_idx].settings.show_hohmann {
                                 let ss_j2000 = ss_timestamp.signed_duration_since(*crate::solar_system::J2000_EPOCH_PUB).num_seconds() as f64 / 86400.0;
                                 if self.hohmann.launched {

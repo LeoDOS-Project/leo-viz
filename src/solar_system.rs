@@ -101,6 +101,285 @@ pub fn next_launch_window_days(
     Some(wait.max(0.0))
 }
 
+pub fn heliocentric_longitude(body: CelestialBody, j2000_days: f64) -> Option<f64> {
+    let pos = compute_body_position_au(body, j2000_days)?;
+    Some(pos[1].atan2(pos[0]))
+}
+
+pub fn next_conjunction_days(
+    a: CelestialBody,
+    b: CelestialBody,
+    j2000_days: f64,
+) -> Option<f64> {
+    let t_a = a.orbital_period_days()?;
+    let t_b = b.orbital_period_days()?;
+    let rate_a = 2.0 * PI / t_a;
+    let rate_b = 2.0 * PI / t_b;
+    let rel_rate = rate_b - rate_a;
+    if rel_rate.abs() < 1e-15 {
+        return None;
+    }
+
+    let ang_a = heliocentric_longitude(a, j2000_days)?;
+    let ang_b = heliocentric_longitude(b, j2000_days)?;
+    let mut diff = ang_b - ang_a;
+    while diff > PI {
+        diff -= 2.0 * PI;
+    }
+    while diff < -PI {
+        diff += 2.0 * PI;
+    }
+
+    let mut wait = -diff / rel_rate;
+    if wait < 1.0 {
+        wait += (2.0 * PI / rel_rate.abs()).abs();
+    }
+
+    for _ in 0..8 {
+        let t = j2000_days + wait;
+        let la = heliocentric_longitude(a, t)?;
+        let lb = heliocentric_longitude(b, t)?;
+        let mut err = lb - la;
+        while err > PI {
+            err -= 2.0 * PI;
+        }
+        while err < -PI {
+            err += 2.0 * PI;
+        }
+        wait -= err / rel_rate;
+        if wait < 0.0 {
+            wait += (2.0 * PI / rel_rate.abs()).abs();
+        }
+    }
+
+    Some(wait.max(0.0))
+}
+
+const OUTER_PLANETS: [CelestialBody; 4] = [
+    CelestialBody::Mars,
+    CelestialBody::Jupiter,
+    CelestialBody::Saturn,
+    CelestialBody::Neptune,
+];
+
+pub fn outer_planets() -> &'static [CelestialBody] {
+    &OUTER_PLANETS
+}
+
+pub fn next_opposition_days(
+    body: CelestialBody,
+    j2000_days: f64,
+) -> Option<f64> {
+    let t_e = CelestialBody::Earth.orbital_period_days()?;
+    let t_b = body.orbital_period_days()?;
+    let rate_e = 2.0 * PI / t_e;
+    let rate_b = 2.0 * PI / t_b;
+    let rel_rate = rate_b - rate_e;
+    if rel_rate.abs() < 1e-15 {
+        return None;
+    }
+
+    let ang_e = heliocentric_longitude(CelestialBody::Earth, j2000_days)?;
+    let ang_b = heliocentric_longitude(body, j2000_days)?;
+    let mut diff = ang_b - ang_e - PI;
+    while diff > PI {
+        diff -= 2.0 * PI;
+    }
+    while diff < -PI {
+        diff += 2.0 * PI;
+    }
+
+    let mut wait = -diff / rel_rate;
+    if wait < 1.0 {
+        wait += (2.0 * PI / rel_rate.abs()).abs();
+    }
+
+    for _ in 0..8 {
+        let t = j2000_days + wait;
+        let le = heliocentric_longitude(CelestialBody::Earth, t)?;
+        let lb = heliocentric_longitude(body, t)?;
+        let mut err = lb - le - PI;
+        while err > PI {
+            err -= 2.0 * PI;
+        }
+        while err < -PI {
+            err += 2.0 * PI;
+        }
+        wait -= err / rel_rate;
+        if wait < 0.0 {
+            wait += (2.0 * PI / rel_rate.abs()).abs();
+        }
+    }
+
+    Some(wait.max(0.0))
+}
+
+pub fn next_equinox_solstice(j2000_days: f64) -> (f64, &'static str) {
+    let ts_epoch = *J2000_EPOCH;
+    let current = ts_epoch + chrono::Duration::seconds((j2000_days * 86400.0) as i64);
+    use chrono::Datelike;
+    let doy = current.ordinal() as f64;
+    let year = current.year();
+
+    let events: [(f64, &str); 4] = [
+        (80.0, "Vernal Equinox"),
+        (172.0, "Summer Solstice"),
+        (266.0, "Autumnal Equinox"),
+        (355.0, "Winter Solstice"),
+    ];
+
+    let mut best_wait = f64::MAX;
+    let mut best_name = events[0].1;
+
+    for &(event_doy, name) in &events {
+        let mut wait = event_doy - doy;
+        if wait < 1.0 {
+            wait += 365.0;
+        }
+        if wait < best_wait {
+            best_wait = wait;
+            best_name = name;
+        }
+    }
+
+    let _ = year;
+    (best_wait, best_name)
+}
+
+pub fn draw_circular_calendar(
+    plot_ui: &mut egui_plot::PlotUi,
+    j2000_days: f64,
+    log_power: f64,
+    dark_mode: bool,
+) {
+    use egui_plot::Polygon;
+
+    let earth_sma = match CelestialBody::Earth.semi_major_axis_au() {
+        Some(a) => a,
+        None => return,
+    };
+
+    let earth_period = match CelestialBody::Earth.orbital_period_days() {
+        Some(p) => p,
+        None => return,
+    };
+    let mean_lon = CelestialBody::Earth.mean_longitude_j2000_deg().to_radians();
+
+    let month_names = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let month_colors: [eframe::egui::Color32; 12] = [
+        eframe::egui::Color32::from_rgba_unmultiplied(135, 206, 235, 50),
+        eframe::egui::Color32::from_rgba_unmultiplied(175, 238, 238, 50),
+        eframe::egui::Color32::from_rgba_unmultiplied(144, 238, 144, 50),
+        eframe::egui::Color32::from_rgba_unmultiplied(152, 251, 152, 50),
+        eframe::egui::Color32::from_rgba_unmultiplied(255, 255, 150, 50),
+        eframe::egui::Color32::from_rgba_unmultiplied(255, 218, 185, 50),
+        eframe::egui::Color32::from_rgba_unmultiplied(255, 182, 135, 50),
+        eframe::egui::Color32::from_rgba_unmultiplied(255, 160, 122, 50),
+        eframe::egui::Color32::from_rgba_unmultiplied(244, 164, 96, 50),
+        eframe::egui::Color32::from_rgba_unmultiplied(210, 180, 140, 50),
+        eframe::egui::Color32::from_rgba_unmultiplied(176, 196, 222, 50),
+        eframe::egui::Color32::from_rgba_unmultiplied(173, 216, 230, 50),
+    ];
+
+    let ts_epoch = *J2000_EPOCH;
+    let current_dt = ts_epoch + chrono::Duration::seconds((j2000_days * 86400.0) as i64);
+    use chrono::Datelike;
+    let current_year = current_dt.year();
+
+    let outer_r = earth_sma;
+
+    let mut month_boundaries = Vec::with_capacity(13);
+    for m in 0..=12 {
+        let (y, month) = if m < 12 {
+            (current_year, m as u32 + 1)
+        } else {
+            (current_year + 1, 1)
+        };
+        if let Some(date) = chrono::NaiveDate::from_ymd_opt(y, month, 1) {
+            let dt = date
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+                .and_utc();
+            let boundary_j2000 =
+                (dt - ts_epoch).num_seconds() as f64 / 86400.0;
+            let angle = mean_lon
+                + 2.0 * PI * boundary_j2000 / earth_period;
+            month_boundaries.push(angle);
+        }
+    }
+
+    let arc_segments = 20;
+    for m in 0..12 {
+        if m + 1 >= month_boundaries.len() {
+            break;
+        }
+        let a_start = month_boundaries[m];
+        let a_end = month_boundaries[m + 1];
+
+        let mut pts: Vec<[f64; 2]> = Vec::with_capacity(arc_segments + 3);
+        pts.push(scale_position(0.0, 0.0, log_power));
+        for i in 0..=arc_segments {
+            let frac = i as f64 / arc_segments as f64;
+            let a = a_start + (a_end - a_start) * frac;
+            let ox = outer_r * a.cos();
+            let oy = outer_r * a.sin();
+            pts.push(scale_position(ox, oy, log_power));
+        }
+
+        let stroke_color = eframe::egui::Color32::from_rgba_unmultiplied(
+            month_colors[m].r(),
+            month_colors[m].g(),
+            month_colors[m].b(),
+            30,
+        );
+        plot_ui.polygon(
+            Polygon::new("", pts)
+                .fill_color(month_colors[m])
+                .stroke(eframe::egui::Stroke::new(1.0, stroke_color)),
+        );
+
+        let mid_angle = (a_start + a_end) / 2.0;
+        let label_r = earth_sma * 0.65;
+        let lx = label_r * mid_angle.cos();
+        let ly = label_r * mid_angle.sin();
+        let [sx, sy] = scale_position(lx, ly, log_power);
+
+        let label_color = if dark_mode {
+            eframe::egui::Color32::from_rgba_unmultiplied(255, 255, 255, 160)
+        } else {
+            eframe::egui::Color32::from_rgba_unmultiplied(0, 0, 0, 160)
+        };
+        plot_ui.text(
+            Text::new(
+                "",
+                PlotPoint::new(sx, sy),
+                eframe::egui::RichText::new(month_names[m]).size(9.0),
+            )
+            .color(label_color),
+        );
+    }
+
+    if let Some(earth_pos) =
+        compute_body_position_au(CelestialBody::Earth, j2000_days)
+    {
+        let earth_angle = earth_pos[1].atan2(earth_pos[0]);
+        let [s1x, s1y] = scale_position(0.0, 0.0, log_power);
+        let marker_outer = earth_sma * 1.04;
+        let p2x = marker_outer * earth_angle.cos();
+        let p2y = marker_outer * earth_angle.sin();
+        let [s2x, s2y] = scale_position(p2x, p2y, log_power);
+
+        plot_ui.line(
+            Line::new("", vec![[s1x, s1y], [s2x, s2y]])
+                .color(eframe::egui::Color32::from_rgb(255, 220, 50))
+                .width(2.5),
+        );
+    }
+}
+
 pub struct HohmannState {
     pub origin: CelestialBody,
     pub dest: CelestialBody,
