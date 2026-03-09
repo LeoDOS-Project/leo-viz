@@ -259,7 +259,6 @@ impl App {
                 view_height: 600.0,
                 solar_system_handles: HashMap::new(),
                 ss_last_render_instant: None,
-                show_planet_sizes: false,
                 planet_sizes_t: 0.0,
                 planet_sizes_auto_zoom: false,
                 planet_sizes_zoom_duration: 30.0,
@@ -276,6 +275,10 @@ impl App {
                 hohmann: crate::solar_system::HohmannState::default(),
                 conjunction_body_a: CelestialBody::Earth,
                 conjunction_body_b: CelestialBody::Mars,
+                opposition_body_a: CelestialBody::Earth,
+                opposition_body_b: CelestialBody::Mars,
+                alignment_planets: [true; 8],
+                alignment_search_years: 1000.0,
                 #[cfg(target_arch = "wasm32")]
                 last_url_hash: String::new(),
                 last_frame_instant: None,
@@ -394,7 +397,12 @@ impl eframe::App for App {
                             gpu.upload_texture(&rs.device, &rs.queue, key, tex);
                         }
                         let rot = Matrix3::identity();
-                        let image = gpu.render_to_image(&rs.device, &rs.queue, key, &rot, moon_body.flattening(), 64);
+                        let reqs = [crate::renderer::RttRequest { key, inv_rotation: rot, flattening: moon_body.flattening(), size: 64, skip_rings: false }];
+                        let batch = gpu.render_batch_to_images(&rs.device, &rs.queue, &reqs);
+                        let image = match batch.into_iter().next() {
+                            Some((_, img)) => img,
+                            None => continue,
+                        };
                         let handle = ctx.load_texture(
                             format!("moon_{:?}", moon_body),
                             image,
@@ -1108,14 +1116,16 @@ impl eframe::App for App {
         }
 
         {
-            let show_ss = v.tabs.get(active_tab_idx)
-                .map(|t| t.settings.show_solar_system)
-                .unwrap_or(false);
+            let vm = v.tabs.get(active_tab_idx)
+                .map(|t| t.settings.view_mode)
+                .unwrap_or(crate::config::ViewMode::Planet);
+            let show_ss = vm == crate::config::ViewMode::SolarSystem;
+            let show_planet_sizes = vm == crate::config::ViewMode::PlanetSizes;
             let tab_time = v.tabs.get(active_tab_idx)
                 .map(|t| t.settings.time)
                 .unwrap_or(0.0);
 
-            if show_ss || v.show_planet_sizes {
+            if show_ss || show_planet_sizes {
                 #[cfg(not(target_arch = "wasm32"))]
                 for &body in &CelestialBody::ALL {
                     let key = (body, Skin::Default, TextureResolution::R512);
@@ -1175,7 +1185,7 @@ impl eframe::App for App {
                     ));
                 }
 
-                let render_interval = if v.show_planet_sizes { 200 } else if v.ss_auto_zoom { 5000 } else { 1000 };
+                let render_interval = if show_planet_sizes { 200 } else if v.ss_auto_zoom { 5000 } else { 1000 };
                 let needs_render = v.solar_system_handles.is_empty()
                     || v.ss_last_render_instant.map_or(true, |t| t.elapsed().as_millis() > render_interval);
                 if needs_render {
@@ -1193,7 +1203,7 @@ impl eframe::App for App {
                     sorted_bodies.sort_by(|a, b| b.radius_km().partial_cmp(&a.radius_km()).unwrap());
                     let focus_idx = (v.planet_sizes_t as usize).min(sorted_bodies.len().saturating_sub(1));
                     let focus_radius = sorted_bodies[focus_idx].radius_km();
-                    let max_render = if v.show_planet_sizes { 192 } else { 64 };
+                    let max_render = if show_planet_sizes { 192 } else { 64 };
 
                     let gpu_ok = cfg!(not(target_arch = "wasm32")) && v.render_state.is_some();
                     if gpu_ok {
@@ -1211,6 +1221,7 @@ impl eframe::App for App {
                                     gpu.upload_ring_texture(&rs.device, &rs.queue, body, ring_tex);
                                 }
                             }
+                            let mut requests = Vec::new();
                             for body in CelestialBody::ALL {
                                 let key = (body, Skin::Default, TextureResolution::R512);
                                 let ratio = (body.radius_km() / focus_radius).min(1.0);
@@ -1226,13 +1237,20 @@ impl eframe::App for App {
                                 );
                                 let combined = tilt_mat * y_rot;
                                 let inv_rotation = combined.transpose();
-                                let image = gpu.render_to_image(&rs.device, &rs.queue, key, &inv_rotation, body.flattening(), body_render_size);
-                                let handle = ctx.load_texture(
-                                    format!("ss_{:?}", body),
-                                    image,
-                                    egui::TextureOptions::LINEAR,
-                                );
-                                v.solar_system_handles.insert(body, handle);
+                                requests.push(crate::renderer::RttRequest { key, inv_rotation, flattening: body.flattening(), size: body_render_size, skip_rings: show_planet_sizes });
+                            }
+                            let images = gpu.render_batch_to_images(&rs.device, &rs.queue, &requests);
+                            for (body, image) in images {
+                                if let Some(handle) = v.solar_system_handles.get_mut(&body) {
+                                    handle.set(image, egui::TextureOptions::LINEAR);
+                                } else {
+                                    let handle = ctx.load_texture(
+                                        format!("ss_{:?}", body),
+                                        image,
+                                        egui::TextureOptions::LINEAR,
+                                    );
+                                    v.solar_system_handles.insert(body, handle);
+                                }
                             }
                         }
                     } else {
@@ -1255,12 +1273,16 @@ impl eframe::App for App {
                                 let image = texture.render_sphere_with_rings(
                                     body_render_size, &combined, body.flattening(), body, ring_tex,
                                 );
-                                let handle = ctx.load_texture(
-                                    format!("ss_{:?}", body),
-                                    image,
-                                    egui::TextureOptions::LINEAR,
-                                );
-                                v.solar_system_handles.insert(body, handle);
+                                if let Some(handle) = v.solar_system_handles.get_mut(&body) {
+                                    handle.set(image, egui::TextureOptions::LINEAR);
+                                } else {
+                                    let handle = ctx.load_texture(
+                                        format!("ss_{:?}", body),
+                                        image,
+                                        egui::TextureOptions::LINEAR,
+                                    );
+                                    v.solar_system_handles.insert(body, handle);
+                                }
                             }
                         }
                     }

@@ -155,33 +155,23 @@ pub fn next_conjunction_days(
     Some(wait.max(0.0))
 }
 
-const OUTER_PLANETS: [CelestialBody; 4] = [
-    CelestialBody::Mars,
-    CelestialBody::Jupiter,
-    CelestialBody::Saturn,
-    CelestialBody::Neptune,
-];
-
-pub fn outer_planets() -> &'static [CelestialBody] {
-    &OUTER_PLANETS
-}
-
 pub fn next_opposition_days(
-    body: CelestialBody,
+    a: CelestialBody,
+    b: CelestialBody,
     j2000_days: f64,
 ) -> Option<f64> {
-    let t_e = CelestialBody::Earth.orbital_period_days()?;
-    let t_b = body.orbital_period_days()?;
-    let rate_e = 2.0 * PI / t_e;
+    let t_a = a.orbital_period_days()?;
+    let t_b = b.orbital_period_days()?;
+    let rate_a = 2.0 * PI / t_a;
     let rate_b = 2.0 * PI / t_b;
-    let rel_rate = rate_b - rate_e;
+    let rel_rate = rate_b - rate_a;
     if rel_rate.abs() < 1e-15 {
         return None;
     }
 
-    let ang_e = heliocentric_longitude(CelestialBody::Earth, j2000_days)?;
-    let ang_b = heliocentric_longitude(body, j2000_days)?;
-    let mut diff = ang_b - ang_e - PI;
+    let ang_a = heliocentric_longitude(a, j2000_days)?;
+    let ang_b = heliocentric_longitude(b, j2000_days)?;
+    let mut diff = ang_b - ang_a - PI;
     while diff > PI {
         diff -= 2.0 * PI;
     }
@@ -196,9 +186,9 @@ pub fn next_opposition_days(
 
     for _ in 0..8 {
         let t = j2000_days + wait;
-        let le = heliocentric_longitude(CelestialBody::Earth, t)?;
-        let lb = heliocentric_longitude(body, t)?;
-        let mut err = lb - le - PI;
+        let la = heliocentric_longitude(a, t)?;
+        let lb = heliocentric_longitude(b, t)?;
+        let mut err = lb - la - PI;
         while err > PI {
             err -= 2.0 * PI;
         }
@@ -212,6 +202,79 @@ pub fn next_opposition_days(
     }
 
     Some(wait.max(0.0))
+}
+
+pub fn planet_angular_spread(bodies: &[CelestialBody], j2000_days: f64) -> Option<f64> {
+    let mut angles: Vec<f64> = Vec::new();
+    for &body in bodies {
+        if let Some(a) = heliocentric_longitude(body, j2000_days) {
+            angles.push(a);
+        }
+    }
+    if angles.len() < 2 {
+        return None;
+    }
+    angles.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    let mut max_gap = 0.0_f64;
+    for i in 0..angles.len() {
+        let next = if i + 1 < angles.len() {
+            angles[i + 1] - angles[i]
+        } else {
+            (angles[0] + 2.0 * PI) - angles[i]
+        };
+        max_gap = max_gap.max(next);
+    }
+    Some(2.0 * PI - max_gap)
+}
+
+pub fn next_alignment_days(bodies: &[CelestialBody], j2000_days: f64, search_years: f64) -> Option<(f64, f64)> {
+    if bodies.len() < 2 { return None; }
+
+    let mut best_spread = f64::MAX;
+    let mut best_day = 0.0;
+
+    let search_range = search_years * 365.25;
+    let coarse_step = (search_range / 10_000.0).max(1.0);
+    let mut t = j2000_days;
+    while t < j2000_days + search_range {
+        if let Some(spread) = planet_angular_spread(bodies, t) {
+            if spread < best_spread {
+                best_spread = spread;
+                best_day = t;
+            }
+        }
+        t += coarse_step;
+    }
+
+    let mid_start = (best_day - 2000.0).max(j2000_days);
+    let mid_end = best_day + 2000.0;
+    let mut t = mid_start;
+    while t < mid_end {
+        if let Some(spread) = planet_angular_spread(bodies, t) {
+            if spread < best_spread {
+                best_spread = spread;
+                best_day = t;
+            }
+        }
+        t += 10.0;
+    }
+
+    let fine_start = (best_day - 20.0).max(j2000_days);
+    let fine_end = best_day + 20.0;
+    let mut t = fine_start;
+    while t < fine_end {
+        if let Some(spread) = planet_angular_spread(bodies, t) {
+            if spread < best_spread {
+                best_spread = spread;
+                best_day = t;
+            }
+        }
+        t += 0.5;
+    }
+
+    let wait = best_day - j2000_days;
+    Some((wait.max(0.0), best_spread.to_degrees()))
 }
 
 pub fn next_equinox_solstice(j2000_days: f64) -> (f64, &'static str) {
@@ -252,8 +315,6 @@ pub fn draw_circular_calendar(
     log_power: f64,
     dark_mode: bool,
 ) {
-    use egui_plot::Polygon;
-
     let earth_sma = match CelestialBody::Earth.semi_major_axis_au() {
         Some(a) => a,
         None => return,
@@ -270,18 +331,18 @@ pub fn draw_circular_calendar(
         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
     let month_colors: [eframe::egui::Color32; 12] = [
-        eframe::egui::Color32::from_rgba_unmultiplied(135, 206, 235, 50),
-        eframe::egui::Color32::from_rgba_unmultiplied(175, 238, 238, 50),
-        eframe::egui::Color32::from_rgba_unmultiplied(144, 238, 144, 50),
-        eframe::egui::Color32::from_rgba_unmultiplied(152, 251, 152, 50),
-        eframe::egui::Color32::from_rgba_unmultiplied(255, 255, 150, 50),
-        eframe::egui::Color32::from_rgba_unmultiplied(255, 218, 185, 50),
-        eframe::egui::Color32::from_rgba_unmultiplied(255, 182, 135, 50),
-        eframe::egui::Color32::from_rgba_unmultiplied(255, 160, 122, 50),
-        eframe::egui::Color32::from_rgba_unmultiplied(244, 164, 96, 50),
-        eframe::egui::Color32::from_rgba_unmultiplied(210, 180, 140, 50),
-        eframe::egui::Color32::from_rgba_unmultiplied(176, 196, 222, 50),
-        eframe::egui::Color32::from_rgba_unmultiplied(173, 216, 230, 50),
+        eframe::egui::Color32::from_rgba_unmultiplied(135, 206, 235, 80),
+        eframe::egui::Color32::from_rgba_unmultiplied(175, 238, 238, 80),
+        eframe::egui::Color32::from_rgba_unmultiplied(144, 238, 144, 80),
+        eframe::egui::Color32::from_rgba_unmultiplied(152, 251, 152, 80),
+        eframe::egui::Color32::from_rgba_unmultiplied(255, 255, 150, 80),
+        eframe::egui::Color32::from_rgba_unmultiplied(255, 218, 185, 80),
+        eframe::egui::Color32::from_rgba_unmultiplied(255, 182, 135, 80),
+        eframe::egui::Color32::from_rgba_unmultiplied(255, 160, 122, 80),
+        eframe::egui::Color32::from_rgba_unmultiplied(244, 164, 96, 80),
+        eframe::egui::Color32::from_rgba_unmultiplied(210, 180, 140, 80),
+        eframe::egui::Color32::from_rgba_unmultiplied(176, 196, 222, 80),
+        eframe::egui::Color32::from_rgba_unmultiplied(173, 216, 230, 80),
     ];
 
     let ts_epoch = *J2000_EPOCH;
@@ -292,17 +353,10 @@ pub fn draw_circular_calendar(
     let outer_r = earth_sma;
 
     let mut month_boundaries = Vec::with_capacity(13);
-    for m in 0..=12 {
-        let (y, month) = if m < 12 {
-            (current_year, m as u32 + 1)
-        } else {
-            (current_year + 1, 1)
-        };
-        if let Some(date) = chrono::NaiveDate::from_ymd_opt(y, month, 1) {
-            let dt = date
-                .and_hms_opt(0, 0, 0)
-                .unwrap()
-                .and_utc();
+    for m in 0..12 {
+        let date = chrono::NaiveDate::from_ymd_opt(current_year, m as u32 + 1, 1);
+        if let Some(date) = date {
+            let dt = date.and_hms_opt(0, 0, 0).unwrap().and_utc();
             let boundary_j2000 =
                 (dt - ts_epoch).num_seconds() as f64 / 86400.0;
             let angle = mean_lon
@@ -310,6 +364,17 @@ pub fn draw_circular_calendar(
             month_boundaries.push(angle);
         }
     }
+    if !month_boundaries.is_empty() {
+        month_boundaries.push(month_boundaries[0] + 2.0 * PI);
+    }
+
+    let mut painter = plot_ui.ctx().layer_painter(eframe::egui::LayerId::background());
+    let clip = plot_ui.response().rect;
+    painter.set_clip_rect(clip);
+
+    let to_screen = |px: f64, py: f64| -> eframe::egui::Pos2 {
+        plot_ui.screen_from_plot(PlotPoint::new(px, py))
+    };
 
     let arc_segments = 20;
     for m in 0..12 {
@@ -319,14 +384,16 @@ pub fn draw_circular_calendar(
         let a_start = month_boundaries[m];
         let a_end = month_boundaries[m + 1];
 
-        let mut pts: Vec<[f64; 2]> = Vec::with_capacity(arc_segments + 3);
-        pts.push(scale_position(0.0, 0.0, log_power));
+        let mut screen_pts: Vec<eframe::egui::Pos2> = Vec::with_capacity(arc_segments + 3);
+        let [cx, cy] = scale_position(0.0, 0.0, log_power);
+        screen_pts.push(to_screen(cx, cy));
         for i in 0..=arc_segments {
             let frac = i as f64 / arc_segments as f64;
             let a = a_start + (a_end - a_start) * frac;
             let ox = outer_r * a.cos();
             let oy = outer_r * a.sin();
-            pts.push(scale_position(ox, oy, log_power));
+            let [sx, sy] = scale_position(ox, oy, log_power);
+            screen_pts.push(to_screen(sx, sy));
         }
 
         let stroke_color = eframe::egui::Color32::from_rgba_unmultiplied(
@@ -335,30 +402,31 @@ pub fn draw_circular_calendar(
             month_colors[m].b(),
             30,
         );
-        plot_ui.polygon(
-            Polygon::new("", pts)
-                .fill_color(month_colors[m])
-                .stroke(eframe::egui::Stroke::new(1.0, stroke_color)),
+        let shape = eframe::egui::Shape::convex_polygon(
+            screen_pts,
+            month_colors[m],
+            eframe::egui::Stroke::new(1.0, stroke_color),
         );
+        painter.add(shape);
 
         let mid_angle = (a_start + a_end) / 2.0;
         let label_r = earth_sma * 0.65;
         let lx = label_r * mid_angle.cos();
         let ly = label_r * mid_angle.sin();
         let [sx, sy] = scale_position(lx, ly, log_power);
+        let label_screen = to_screen(sx, sy);
 
         let label_color = if dark_mode {
             eframe::egui::Color32::from_rgba_unmultiplied(255, 255, 255, 160)
         } else {
             eframe::egui::Color32::from_rgba_unmultiplied(0, 0, 0, 160)
         };
-        plot_ui.text(
-            Text::new(
-                "",
-                PlotPoint::new(sx, sy),
-                eframe::egui::RichText::new(month_names[m]).size(9.0),
-            )
-            .color(label_color),
+        painter.text(
+            label_screen,
+            eframe::egui::Align2::CENTER_CENTER,
+            month_names[m],
+            eframe::egui::FontId::proportional(9.0),
+            label_color,
         );
     }
 
@@ -372,10 +440,9 @@ pub fn draw_circular_calendar(
         let p2y = marker_outer * earth_angle.sin();
         let [s2x, s2y] = scale_position(p2x, p2y, log_power);
 
-        plot_ui.line(
-            Line::new("", vec![[s1x, s1y], [s2x, s2y]])
-                .color(eframe::egui::Color32::from_rgb(255, 220, 50))
-                .width(2.5),
+        painter.line_segment(
+            [to_screen(s1x, s1y), to_screen(s2x, s2y)],
+            eframe::egui::Stroke::new(2.5, eframe::egui::Color32::from_rgb(255, 220, 50)),
         );
     }
 }
@@ -812,6 +879,8 @@ pub fn draw_solar_system_view(
     log_power: f64,
     asteroids: &[Asteroid],
     _asteroid_sprite: Option<&eframe::egui::TextureHandle>,
+    show_labels: bool,
+    show_calendar: bool,
 ) -> Option<CelestialBody> {
     let j2000_days = (timestamp - *J2000_EPOCH).num_seconds() as f64 / 86400.0;
 
@@ -939,6 +1008,10 @@ pub fn draw_solar_system_view(
         );
     }
 
+    if show_calendar {
+        draw_circular_calendar(plot_ui, j2000_days, log_power, dark_mode);
+    }
+
     let base_label_size = (90.0 / view_size.max(0.01)).clamp(8.0, 16.0) as f32;
 
     for &(body, x, y, visual_radius) in &bodies {
@@ -953,7 +1026,7 @@ pub fn draw_solar_system_view(
             ));
         }
 
-        if body.parent_body().is_none() || body == focused_body {
+        if show_labels && (body.parent_body().is_none() || body == focused_body) {
             let name_color = if body == focused_body {
                 body.display_color()
             } else {
@@ -1221,15 +1294,16 @@ pub fn draw_planet_sizes(
         let margin = 12.0;
         let compute_layout = |k: usize| -> Vec<(f64, f64)> {
             let r_focus = sorted[k].radius_km();
-            let h_scale = view_h / (2.5 * r_focus);
+            let h_scale = view_h / (2.0 * r_focus);
             let num_gaps = (n - k).saturating_sub(1).max(1) as f64;
             let usable_w = view_w - 2.0 * margin;
-            let body_ext = |b: &CelestialBody| -> f64 {
-                b.ring_params().map(|(_, _, o)| (o as f64).max(1.0)).unwrap_or(1.0)
-            };
-            let gap = 8.0;
+            let body_ext = |_b: &CelestialBody| -> f64 { 1.0 };
             let total_extent: f64 = sorted[k..].iter()
                 .map(|b| 2.0 * b.radius_km() * body_ext(b)).sum();
+            let prelim_scale = h_scale.min(usable_w / total_extent);
+            let min_r_px = sorted[k..].last()
+                .map(|b| b.radius_km() * prelim_scale).unwrap_or(1.0);
+            let gap = (min_r_px * 0.5).clamp(1.0, 8.0);
             let w_scale = (usable_w - num_gaps * gap) / total_extent;
             let scale = h_scale.min(w_scale);
 
@@ -1312,12 +1386,11 @@ pub fn draw_planet_sizes(
         for j in 0..n {
             let (xa, ra) = layout_a[j];
             let (xb, rb) = layout_b[j];
-            let cx = (xa * (1.0 - frac) + xb * frac) as f32 + rect.left();
+            let cx = (view_w - (xa * (1.0 - frac) + xb * frac)) as f32 + rect.left();
             let r_px = (ra * (1.0 - frac) + rb * frac) as f32;
 
             let body = sorted[j];
-            let ring_scale = body.ring_params().map(|(_, _, o)| (o as f32).max(1.0)).unwrap_or(1.0);
-            let vis_extent = r_px * ring_scale;
+            let vis_extent = r_px;
 
             if cx + vis_extent < rect.left() - 10.0
                 || cx - vis_extent > rect.right() + 10.0
@@ -1330,7 +1403,7 @@ pub fn draw_planet_sizes(
             if let Some(handle) = sphere_handles.get(&body) {
                 let img_rect = egui::Rect::from_center_size(
                     egui::Pos2::new(cx, center_y),
-                    egui::Vec2::splat(r_px * 2.0 * ring_scale),
+                    egui::Vec2::splat(r_px * 2.0),
                 );
                 painter.image(
                     handle.id(),
@@ -1348,8 +1421,7 @@ pub fn draw_planet_sizes(
                 let name_size = (base_name * decay).max(7.0);
                 let km_size = (base_km * decay).max(5.0);
                 let sub_size = (base_km * decay * 0.9).max(5.0);
-                let ring_scale = body.ring_params().map(|(_, _, o)| (o as f32).max(1.0)).unwrap_or(1.0);
-                let vert_extent = r_px * (ring_scale * 0.5).max(1.0);
+                let vert_extent = r_px;
                 let mut label_y = center_y + vert_extent + 8.0;
                 painter.text(
                     egui::Pos2::new(cx, label_y),

@@ -53,8 +53,17 @@ pub struct MapUniforms {
     pub proj_invscale: [f32; 4],
 }
 
+pub struct RttRequest {
+    pub key: (CelestialBody, Skin, TextureResolution),
+    pub inv_rotation: Matrix3<f64>,
+    pub flattening: f64,
+    pub size: usize,
+    pub skip_rings: bool,
+}
+
 pub struct GpuResources {
     pub planet_pipeline: wgpu::RenderPipeline,
+    pub rtt_pipeline: wgpu::RenderPipeline,
     pub sun_pipeline: wgpu::RenderPipeline,
     pub heatmap_pipeline: wgpu::RenderPipeline,
     pub map_pipeline: wgpu::RenderPipeline,
@@ -86,12 +95,11 @@ pub struct GpuResources {
 
     pub _target_format: wgpu::TextureFormat,
 
-    pub planet_ub: wgpu::Buffer,
     pub sun_ub: wgpu::Buffer,
     pub heatmap_ub: wgpu::Buffer,
     pub map_ub: wgpu::Buffer,
-    pub planet_bg: Option<wgpu::BindGroup>,
-    pub planet_bg_key: Option<(((CelestialBody, Skin, TextureResolution), bool, bool), u64)>,
+    pub planet_bg_queue: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+    pub planet_bg_paint_idx: std::sync::atomic::AtomicUsize,
     pub sun_bg: Option<wgpu::BindGroup>,
     pub heatmap_bg: Option<wgpu::BindGroup>,
     pub heatmap_bg_key: u64,
@@ -271,6 +279,8 @@ impl GpuResources {
 
         let planet_pipeline = create_pipeline(device, format, &planet_bgl, PLANET_WGSL, "planet",
             Some(wgpu::BlendState::ALPHA_BLENDING));
+        let rtt_pipeline = create_pipeline(device, wgpu::TextureFormat::Rgba8Unorm, &planet_bgl, PLANET_WGSL, "rtt",
+            None);
         let sun_pipeline = create_pipeline(device, format, &sun_bgl, SUN_WGSL, "sun",
             Some(wgpu::BlendState {
                 color: wgpu::BlendComponent {
@@ -319,7 +329,6 @@ impl GpuResources {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let planet_ub = make_ub("planet_ub", std::mem::size_of::<PlanetUniforms>() as u64);
         let sun_ub = make_ub("sun_ub", std::mem::size_of::<SunUniforms>() as u64);
         let heatmap_ub = make_ub("heatmap_ub", std::mem::size_of::<HeatmapUniforms>() as u64);
         let map_ub = make_ub("map_ub", std::mem::size_of::<MapUniforms>() as u64);
@@ -452,6 +461,7 @@ impl GpuResources {
 
         Self {
             planet_pipeline,
+            rtt_pipeline,
             sun_pipeline,
             heatmap_pipeline,
             map_pipeline,
@@ -477,9 +487,10 @@ impl GpuResources {
             dummy_view,
             _dummy_view_rgba: dummy_view_rgba,
             _target_format: format,
-            planet_ub, sun_ub, heatmap_ub, map_ub,
-            planet_bg: None, sun_bg, heatmap_bg: None, map_bg: None,
-            planet_bg_key: None, heatmap_bg_key: 0, map_bg_key: 0, texture_gen: 0,
+            sun_ub, heatmap_ub, map_ub,
+            planet_bg_queue: Vec::new(), planet_bg_paint_idx: std::sync::atomic::AtomicUsize::new(0),
+            sun_bg, heatmap_bg: None, map_bg: None,
+            heatmap_bg_key: 0, map_bg_key: 0, texture_gen: 0,
             rad_trace_pipeline, rad_blur_pipeline, rad_reduce_pipeline, rad_finalize_pipeline,
             rad_compute_bgl, rad_bg_ab, rad_bg_ba,
             rad_params_buf, rad_aep8_buf, rad_grid_a, rad_grid_b, rad_max_buf,
@@ -604,142 +615,162 @@ impl GpuResources {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn render_to_image(
+    pub fn render_batch_to_images(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        key: (CelestialBody, Skin, TextureResolution),
-        inv_rotation: &Matrix3<f64>,
-        flattening: f64,
-        size: usize,
-    ) -> egui::ColorImage {
-        if !self.textures.contains_key(&key) {
-            return egui::ColorImage {
-                size: [size, size],
-                pixels: vec![egui::Color32::TRANSPARENT; size * size],
-                source_size: egui::Vec2::ZERO,
-            };
-        }
+        requests: &[RttRequest],
+    ) -> Vec<(CelestialBody, egui::ColorImage)> {
+        if requests.is_empty() { return Vec::new(); }
 
-        let ring_params = key.0.ring_params();
-        let outer_ratio = ring_params.map(|(_, _, o)| o as f64).unwrap_or(1.0);
-        let img_scale = if outer_ratio > 1.0 { outer_ratio } else { 1.0 };
-        let fbo_size = (size as f64 * img_scale).ceil() as u32;
-        let scale = (size as f32) / (fbo_size as f32);
-
-        let format = wgpu::TextureFormat::Rgba8Unorm;
-        let rtt_pipeline = create_pipeline(device, format, &self.planet_bgl, PLANET_WGSL, "rtt",
-            None);
-
-        let render_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("rtt"),
-            size: wgpu::Extent3d { width: fbo_size, height: fbo_size, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let render_view = render_tex.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let rot_cols = mat3_to_padded_cols(inv_rotation);
-        let (ring_inner, ring_outer) = ring_params.map(|(_, i, o)| (i, o)).unwrap_or((0.0, 0.0));
-        let has_rings_f = if self.ring_textures.contains_key(&key.0) { 1.0f32 } else { 0.0 };
-        let adams = if has_rings_f > 0.5 && key.0 == CelestialBody::Neptune { 1.0f32 } else { 0.0 };
-        let eps = if has_rings_f > 0.5 && key.0 == CelestialBody::Uranus { 1.0f32 } else { 0.0 };
-
-        let uniforms = PlanetUniforms {
-            inv_rot_0: rot_cols[0], inv_rot_1: rot_cols[1], inv_rot_2: rot_cols[2],
-            star_rot_0: rot_cols[0], star_rot_1: rot_cols[1], star_rot_2: rot_cols[2],
-            sun_dir_flat: [0.0, 0.0, -1.0, flattening as f32],
-            bg_aspect: [0.0, 0.0, 0.0, 1.0],
-            detail_bounds: [0.0; 4],
-            uv_etc: [1.0, 1.0, scale, 0.0],
-            flags_a: [0.0, 0.0, 0.0, 0.0],
-            flags_b: [0.0, 1.0, has_rings_f, ring_inner],
-            flags_c: [ring_outer, adams, eps, 0.0],
-        };
-
-        let ubuf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("rtt_ub"), size: std::mem::size_of::<PlanetUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&ubuf, 0, bytemuck::bytes_of(&uniforms));
-
-        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("rtt_bg"),
-            layout: &self.planet_bgl,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler_repeat) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler_clamp) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(self.planet_view(&key)) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&self.dummy_view) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&self.dummy_view) },
-                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&self.dummy_view) },
-                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&self.dummy_view) },
-                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(self.ring_view(key.0)) },
-            ],
-        });
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("rtt") });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("rtt"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &render_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            });
-            pass.set_pipeline(&rtt_pipeline);
-            pass.set_bind_group(0, &bg, &[]);
-            pass.draw(0..4, 0..1);
-        }
-
-        let bpp = 4u32;
-        let unpadded_bpr = fbo_size * bpp;
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padded_bpr = (unpadded_bpr + align - 1) / align * align;
+        let bpp = 4u32;
+        let format = wgpu::TextureFormat::Rgba8Unorm;
 
-        let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("rtt_readback"),
-            size: (padded_bpr * fbo_size) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo { texture: &render_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            wgpu::TexelCopyBufferInfo { buffer: &readback, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_bpr), rows_per_image: None } },
-            wgpu::Extent3d { width: fbo_size, height: fbo_size, depth_or_array_layers: 1 },
-        );
+        struct Item {
+            body: CelestialBody,
+            fbo_size: u32,
+            padded_bpr: u32,
+            render_tex: wgpu::Texture,
+            readback: wgpu::Buffer,
+            bg: wgpu::BindGroup,
+        }
+
+        let mut items: Vec<Item> = Vec::with_capacity(requests.len());
+
+        for req in requests {
+            if !self.textures.contains_key(&req.key) { continue; }
+
+            let ring_params = if req.skip_rings { None } else { req.key.0.ring_params() };
+            let outer_ratio = ring_params.map(|(_, _, o)| o as f64).unwrap_or(1.0);
+            let img_scale = if outer_ratio > 1.0 { outer_ratio } else { 1.0 };
+            let fbo_size = (req.size as f64 * img_scale).ceil() as u32;
+            let scale = (req.size as f32) / (fbo_size as f32);
+
+            let render_tex = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("rtt"),
+                size: wgpu::Extent3d { width: fbo_size, height: fbo_size, depth_or_array_layers: 1 },
+                mip_level_count: 1, sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+
+            let rot_cols = mat3_to_padded_cols(&req.inv_rotation);
+            let (ring_inner, ring_outer) = ring_params.map(|(_, i, o)| (i, o)).unwrap_or((0.0, 0.0));
+            let has_rings_f = if self.ring_textures.contains_key(&req.key.0) { 1.0f32 } else { 0.0 };
+            let adams = if has_rings_f > 0.5 && req.key.0 == CelestialBody::Neptune { 1.0f32 } else { 0.0 };
+            let eps = if has_rings_f > 0.5 && req.key.0 == CelestialBody::Uranus { 1.0f32 } else { 0.0 };
+
+            let uniforms = PlanetUniforms {
+                inv_rot_0: rot_cols[0], inv_rot_1: rot_cols[1], inv_rot_2: rot_cols[2],
+                star_rot_0: rot_cols[0], star_rot_1: rot_cols[1], star_rot_2: rot_cols[2],
+                sun_dir_flat: [0.0, 0.0, -1.0, req.flattening as f32],
+                bg_aspect: [0.0, 0.0, 0.0, 1.0],
+                detail_bounds: [0.0; 4],
+                uv_etc: [1.0, 1.0, scale, 0.0],
+                flags_a: [0.0, 0.0, 0.0, 0.0],
+                flags_b: [0.0, 1.0, has_rings_f, ring_inner],
+                flags_c: [ring_outer, adams, eps, 0.0],
+            };
+
+            let ubuf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("rtt_ub"), size: std::mem::size_of::<PlanetUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            queue.write_buffer(&ubuf, 0, bytemuck::bytes_of(&uniforms));
+
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("rtt_bg"),
+                layout: &self.planet_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler_repeat) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler_clamp) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(self.planet_view(&req.key)) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&self.dummy_view) },
+                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&self.dummy_view) },
+                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&self.dummy_view) },
+                    wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&self.dummy_view) },
+                    wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(self.ring_view(req.key.0)) },
+                ],
+            });
+
+            let unpadded_bpr = fbo_size * bpp;
+            let padded_bpr = (unpadded_bpr + align - 1) / align * align;
+
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("rtt_readback"),
+                size: (padded_bpr * fbo_size) as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+
+            items.push(Item { body: req.key.0, fbo_size, padded_bpr, render_tex, readback, bg });
+        }
+
+        if items.is_empty() { return Vec::new(); }
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("rtt_batch") });
+
+        let views: Vec<wgpu::TextureView> = items.iter()
+            .map(|item| item.render_tex.create_view(&wgpu::TextureViewDescriptor::default()))
+            .collect();
+
+        for (i, item) in items.iter().enumerate() {
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("rtt"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &views[i],
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    ..Default::default()
+                });
+                pass.set_pipeline(&self.rtt_pipeline);
+                pass.set_bind_group(0, &item.bg, &[]);
+                pass.draw(0..4, 0..1);
+            }
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo { texture: &item.render_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyBufferInfo { buffer: &item.readback, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(item.padded_bpr), rows_per_image: None } },
+                wgpu::Extent3d { width: item.fbo_size, height: item.fbo_size, depth_or_array_layers: 1 },
+            );
+        }
+
         queue.submit(std::iter::once(encoder.finish()));
 
-        let slice = readback.slice(..);
-        let (sender, receiver) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = sender.send(r); });
-        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(10)) });
-        receiver.recv().ok();
-
-        let data = slice.get_mapped_range();
-        let fs = fbo_size as usize;
-        let mut pixels = Vec::with_capacity(fs * fs);
-        for y in (0..fs).rev() {
-            for x in 0..fs {
-                let offset = y * padded_bpr as usize + x * 4;
-                pixels.push(egui::Color32::from_rgba_unmultiplied(
-                    data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
-                ));
-            }
+        for item in &items {
+            let slice = item.readback.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |_| {});
         }
-        drop(data);
-        readback.unmap();
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(5)) });
 
-        egui::ColorImage { size: [fs, fs], pixels, source_size: egui::Vec2::ZERO }
+        let mut results = Vec::with_capacity(items.len());
+        for item in &items {
+            let slice = item.readback.slice(..);
+            let data = slice.get_mapped_range();
+            let fs = item.fbo_size as usize;
+            let mut pixels = Vec::with_capacity(fs * fs);
+            for y in 0..fs {
+                for x in 0..fs {
+                    let offset = y * item.padded_bpr as usize + x * 4;
+                    pixels.push(egui::Color32::from_rgba_unmultiplied(
+                        data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+                    ));
+                }
+            }
+            drop(data);
+            item.readback.unmap();
+            results.push((item.body, egui::ColorImage { size: [fs, fs], pixels, source_size: egui::Vec2::ZERO }));
+        }
+
+        results
     }
 }
 
@@ -863,35 +894,42 @@ impl PlanetPaintCallback {
 impl CallbackTrait for PlanetPaintCallback {
     fn prepare(&self, device: &wgpu::Device, queue: &wgpu::Queue, _sd: &ScreenDescriptor, _enc: &mut wgpu::CommandEncoder, res: &mut CallbackResources) -> Vec<wgpu::CommandBuffer> {
         let gpu = res.get_mut::<GpuResources>().unwrap();
-        queue.write_buffer(&gpu.planet_ub, 0, bytemuck::bytes_of(&self.uniforms));
-
-        let new_key = (self.texture_key, self.has_detail, self.show_milky_way);
-        let gen = gpu.texture_gen;
-        if gpu.planet_bg.is_none() || gpu.planet_bg_key != Some((new_key, gen)) {
-            let detail_v = if self.has_detail { gpu.detail_view_or_dummy() } else { &gpu.dummy_view };
-            gpu.planet_bg = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("planet_bg"),
-                layout: &gpu.planet_bgl,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: gpu.planet_ub.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&gpu.sampler_repeat) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&gpu.sampler_clamp) },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(gpu.planet_view(&self.texture_key)) },
-                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(gpu.cloud_view(self.texture_key.2)) },
-                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(gpu.night_view()) },
-                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(detail_v) },
-                    wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(gpu.star_view(self.show_milky_way)) },
-                    wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(gpu.ring_view(self.texture_key.0)) },
-                ],
-            }));
-            gpu.planet_bg_key = Some((new_key, gen));
+        let paint_idx = gpu.planet_bg_paint_idx.load(std::sync::atomic::Ordering::Relaxed);
+        if paint_idx >= gpu.planet_bg_queue.len() {
+            gpu.planet_bg_queue.clear();
+            gpu.planet_bg_paint_idx.store(0, std::sync::atomic::Ordering::Relaxed);
         }
+        let ub = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("planet_ub_inst"),
+            size: std::mem::size_of::<PlanetUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&ub, 0, bytemuck::bytes_of(&self.uniforms));
+        let detail_v = if self.has_detail { gpu.detail_view_or_dummy() } else { &gpu.dummy_view };
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("planet_bg"),
+            layout: &gpu.planet_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: ub.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&gpu.sampler_repeat) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&gpu.sampler_clamp) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(gpu.planet_view(&self.texture_key)) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(gpu.cloud_view(self.texture_key.2)) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(gpu.night_view()) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(detail_v) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(gpu.star_view(self.show_milky_way)) },
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(gpu.ring_view(self.texture_key.0)) },
+            ],
+        });
+        gpu.planet_bg_queue.push((ub, bg));
         Vec::new()
     }
 
     fn paint(&self, _info: egui::PaintCallbackInfo, render_pass: &mut wgpu::RenderPass<'static>, res: &CallbackResources) {
         let gpu = res.get::<GpuResources>().unwrap();
-        if let Some(ref bg) = gpu.planet_bg {
+        let idx = gpu.planet_bg_paint_idx.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some((_, ref bg)) = gpu.planet_bg_queue.get(idx) {
             render_pass.set_pipeline(&gpu.planet_pipeline);
             render_pass.set_bind_group(0, bg, &[]);
             render_pass.draw(0..4, 0..1);

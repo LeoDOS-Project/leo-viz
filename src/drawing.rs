@@ -19,7 +19,7 @@ use crate::texture::EarthTexture;
 use crate::walker::{WalkerType, WalkerConstellation, SatelliteState};
 use eframe::egui;
 use egui::mutex::Mutex;
-use egui_plot::{Line, Plot, PlotImage, PlotPoint, PlotPoints, Points, Polygon, Text};
+use egui_plot::{Line, MarkerShape, Plot, PlotImage, PlotPoint, PlotPoints, Points, Polygon, Text};
 use nalgebra::{Matrix3, Vector3};
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
@@ -2418,12 +2418,12 @@ pub fn draw_3d_view(
 
                     if is_kessler {
                         if hide_behind_earth && !in_front { continue; }
-                        let alpha = if in_front { 180u8 } else { 60 };
-                        let c = egui::Color32::from_rgba_unmultiplied(200, 200, 200, alpha);
-                        let r = scaled_sat_radius * 0.4;
+                        let alpha = if in_front { 220u8 } else { 80 };
+                        let c = egui::Color32::from_rgba_unmultiplied(255, 60, 60, alpha);
+                        let r = scaled_sat_radius * 0.6;
                         plot_ui.points(
                             Points::new("", PlotPoints::new(vec![[rx, ry]]))
-                                .color(c).radius(r).filled(true),
+                                .color(c).radius(r).shape(MarkerShape::Cross).filled(true),
                         );
                         continue;
                     }

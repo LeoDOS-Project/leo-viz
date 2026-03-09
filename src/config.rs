@@ -285,6 +285,24 @@ pub enum CameraMode {
     TrackSatellite,
 }
 
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum ViewMode {
+    #[default]
+    Planet,
+    SolarSystem,
+    PlanetSizes,
+}
+
+impl ViewMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            ViewMode::Planet => "Planet",
+            ViewMode::SolarSystem => "Solar System",
+            ViewMode::PlanetSizes => "Planet Sizes",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct TabSettings {
     pub time: f64,
@@ -312,7 +330,6 @@ pub struct TabSettings {
     pub show_axes: bool,
     pub show_magnetic_axis: bool,
     pub hide_behind_earth: bool,
-    pub render_planet: bool,
     pub show_altitude_lines: bool,
     pub show_devices: bool,
     pub show_polar_circle: bool,
@@ -329,8 +346,9 @@ pub struct TabSettings {
     pub show_clouds: bool,
     pub show_stars: bool,
     pub show_radiation_belts: bool,
-    pub show_solar_system: bool,
+    pub view_mode: ViewMode,
     pub show_hohmann: bool,
+    pub show_ss_labels: bool,
     pub solar_system_log_power: f64,
     pub sat_radius: f32,
     pub link_width: f32,
@@ -342,7 +360,6 @@ pub struct TabSettings {
     pub show_moon_lines: bool,
     pub show_moon_labels: bool,
     pub moon_camera_distance_km: f64,
-    pub show_orbital_events: bool,
     pub show_circular_calendar: bool,
 }
 
@@ -374,7 +391,6 @@ impl Default for TabSettings {
             show_axes: false,
             show_magnetic_axis: false,
             hide_behind_earth: true,
-            render_planet: true,
             show_altitude_lines: false,
             show_devices: false,
             show_polar_circle: false,
@@ -391,8 +407,9 @@ impl Default for TabSettings {
             show_clouds: false,
             show_stars: false,
             show_radiation_belts: false,
-            show_solar_system: false,
+            view_mode: ViewMode::Planet,
             show_hohmann: false,
+            show_ss_labels: true,
             solar_system_log_power: 0.4,
             sat_radius: 1.5,
             link_width: 0.25,
@@ -404,7 +421,6 @@ impl Default for TabSettings {
             show_moon_lines: false,
             show_moon_labels: true,
             moon_camera_distance_km: 1_000_000.0,
-            show_orbital_events: false,
             show_circular_calendar: false,
         }
     }

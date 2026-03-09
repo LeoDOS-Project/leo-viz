@@ -229,7 +229,10 @@ pub(crate) fn predict_conjunctions(
     threshold_km: f64,
     window_seconds: f64,
 ) -> Vec<PredictedConjunction> {
-    let step = 10.0_f64;
+    let total_sats: usize = walker_data.iter().map(|(wc, _)| wc.total_sats).sum::<usize>()
+        + tle_groups.iter().map(|g| g.satellites.len()).sum::<usize>();
+    let max_steps = if total_sats > 500 { 2000 } else if total_sats > 100 { 10000 } else { 60000 };
+    let step = (window_seconds / max_steps as f64).max(10.0);
     let steps = (window_seconds / step).ceil() as usize;
     let mut best: HashMap<(String, String), (f64, f64)> = HashMap::new();
     let mut names_sources: HashMap<(String, String), (String, String)> = HashMap::new();

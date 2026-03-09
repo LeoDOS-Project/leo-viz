@@ -193,11 +193,21 @@ impl ViewerState {
         ui.separator();
         ui.label(egui::RichText::new("Display").strong());
 
-        ui.checkbox(&mut tab.settings.render_planet, "Show planet")
-            .on_hover_text("Render the 3D planet surface");
+        ui.horizontal(|ui| {
+            ui.label("View:");
+            use crate::config::ViewMode;
+            egui::ComboBox::from_id_salt("view_mode")
+                .selected_text(tab.settings.view_mode.label())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut tab.settings.view_mode, ViewMode::Planet, "Planet");
+                    ui.selectable_value(&mut tab.settings.view_mode, ViewMode::SolarSystem, "Solar System");
+                    ui.selectable_value(&mut tab.settings.view_mode, ViewMode::PlanetSizes, "Planet Sizes");
+                });
+        });
+        if tab.settings.view_mode == crate::config::ViewMode::Planet {
         ui.indent("planet_opts", |ui| {
             let (s, planets) = (&mut tab.settings, &mut tab.planets);
-            let on = s.render_planet;
+            let on = true;
             ui.add_enabled_ui(on, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Projection:");
@@ -500,12 +510,12 @@ impl ViewerState {
                     .on_hover_text("Draw national border lines");
             });
         });
+        }
 
+        if tab.settings.view_mode == crate::config::ViewMode::SolarSystem {
         let s = &mut tab.settings;
-        ui.checkbox(&mut s.show_solar_system, "Show solar system")
-            .on_hover_text("Display planets in the solar system");
         ui.indent("solar_system_opts", |ui| {
-            let on = s.show_solar_system;
+            let on = true;
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(on, |ui| {
                     ui.label("Scale:");
@@ -529,12 +539,11 @@ impl ViewerState {
                         .on_hover_text("Pause duration at each zoom level");
                 });
             });
-            ui.add_enabled(on, egui::Checkbox::new(&mut s.show_hohmann, "Hohmann transfer"))
-                .on_hover_text("Visualize Hohmann transfer orbits between planets");
-            let h_on = on && s.show_hohmann;
+            ui.add_enabled(on, egui::Checkbox::new(&mut s.show_ss_labels, "Planet labels"))
+                .on_hover_text("Show planet name labels in the solar system view");
+            ui.label(egui::RichText::new("Hohmann Transfer").strong());
             let h_sim_time = s.time;
             ui.indent("hohmann_opts", |ui| {
-                ui.add_enabled_ui(h_on, |ui| {
                     use crate::solar_system::{HOHMANN_PLANETS, hohmann_transfer_params, next_launch_window_days};
                     let h = &mut self.hohmann;
                     ui.horizontal(|ui| {
@@ -614,14 +623,10 @@ impl ViewerState {
                             }
                         }
                     }
-                });
             });
-            ui.add_enabled(on, egui::Checkbox::new(&mut s.show_orbital_events, "Orbital events"))
-                .on_hover_text("Show upcoming astronomical events");
-            let ev_on = on && s.show_orbital_events;
+            ui.label(egui::RichText::new("Orbital Events").strong());
             let ev_sim_time = s.time;
             ui.indent("orbital_events_opts", |ui| {
-                ui.add_enabled_ui(ev_on, |ui| {
                     let ss_ts = self.start_timestamp + Duration::seconds(ev_sim_time as i64);
                     let j2000 = ss_ts.signed_duration_since(*crate::solar_system::J2000_EPOCH_PUB).num_seconds() as f64 / 86400.0;
 
@@ -662,15 +667,39 @@ impl ViewerState {
                     }
 
                     ui.label(egui::RichText::new("Opposition").strong());
-                    for &body in crate::solar_system::outer_planets() {
-                        if let Some(wait) = crate::solar_system::next_opposition_days(body, j2000) {
-                            ui.horizontal(|ui| {
-                                ui.label(format!("{}: {:.1} d", body.label(), wait));
-                                if ui.button("\u{23e9}").on_hover_text(format!("Fast-forward to {} opposition", body.label())).clicked() {
-                                    s.time += wait * 86400.0;
+                    ui.horizontal(|ui| {
+                        use crate::solar_system::HOHMANN_PLANETS;
+                        egui::ComboBox::from_id_salt("opp_body_a")
+                            .selected_text(self.opposition_body_a.label())
+                            .width(70.0)
+                            .show_ui(ui, |ui| {
+                                for &body in &HOHMANN_PLANETS {
+                                    ui.selectable_value(&mut self.opposition_body_a, body, body.label());
                                 }
                             });
-                        }
+                        ui.label("\u{2014}");
+                        egui::ComboBox::from_id_salt("opp_body_b")
+                            .selected_text(self.opposition_body_b.label())
+                            .width(70.0)
+                            .show_ui(ui, |ui| {
+                                for &body in &HOHMANN_PLANETS {
+                                    ui.selectable_value(&mut self.opposition_body_b, body, body.label());
+                                }
+                            });
+                    });
+                    if self.opposition_body_a == self.opposition_body_b {
+                        ui.label("Select two different bodies");
+                    } else if let Some(wait) = crate::solar_system::next_opposition_days(
+                        self.opposition_body_a,
+                        self.opposition_body_b,
+                        j2000,
+                    ) {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("Next: {:.1} days", wait));
+                            if ui.button("\u{23e9}").on_hover_text("Fast-forward to opposition").clicked() {
+                                s.time += wait * 86400.0;
+                            }
+                        });
                     }
 
                     ui.label(egui::RichText::new("Equinox / Solstice").strong());
@@ -681,31 +710,69 @@ impl ViewerState {
                             s.time += eq_wait * 86400.0;
                         }
                     });
-                });
+
+                    ui.label(egui::RichText::new("Planet Alignment").strong());
+                    {
+                        use crate::solar_system::HOHMANN_PLANETS;
+                        ui.horizontal_wrapped(|ui| {
+                            for (i, &body) in HOHMANN_PLANETS.iter().enumerate() {
+                                ui.checkbox(&mut self.alignment_planets[i], body.label());
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Search:");
+                            ui.add(egui::DragValue::new(&mut self.alignment_search_years)
+                                .range(0.0..=100_000.0).speed(10.0).suffix(" yr"));
+                        });
+                        let selected: Vec<crate::celestial::CelestialBody> = HOHMANN_PLANETS.iter()
+                            .enumerate()
+                            .filter(|(i, _)| self.alignment_planets[*i])
+                            .map(|(_, &b)| b)
+                            .collect();
+                        if selected.len() < 2 {
+                            ui.label("Select at least 2 planets");
+                        } else {
+                            if let Some(spread) = crate::solar_system::planet_angular_spread(&selected, j2000) {
+                                ui.label(format!("Current spread: {:.1}\u{00b0}", spread.to_degrees()));
+                            }
+                            if let Some((wait, spread_deg)) = crate::solar_system::next_alignment_days(&selected, j2000, self.alignment_search_years) {
+                                ui.horizontal(|ui| {
+                                    let time_str = if wait > 365.0 {
+                                        format!("{:.1} yr", wait / 365.25)
+                                    } else {
+                                        format!("{:.0} d", wait)
+                                    };
+                                    ui.label(format!("Best: {:.1}\u{00b0} in {}", spread_deg, time_str));
+                                    if ui.button("\u{23e9}").on_hover_text("Fast-forward to tightest alignment").clicked() {
+                                        s.time += wait * 86400.0;
+                                    }
+                                });
+                            }
+                        }
+                    }
             });
             ui.add_enabled(on, egui::Checkbox::new(&mut s.show_circular_calendar, "Circular calendar"))
                 .on_hover_text("Show month wedges on Earth's orbit");
         });
+        }
 
-        ui.checkbox(&mut self.show_planet_sizes, "Show planet sizes")
-            .on_hover_text("Display relative planet sizes");
+        if tab.settings.view_mode == crate::config::ViewMode::PlanetSizes {
         ui.indent("planet_sizes_opts", |ui| {
-            ui.add_enabled_ui(self.show_planet_sizes, |ui| {
-                ui.horizontal(|ui| {
-                    let label = if self.planet_sizes_auto_zoom { "\u{23f8}" } else { "\u{25b6}" };
-                    if ui.button(label).on_hover_text("Toggle auto-zoom animation").clicked() {
-                        self.planet_sizes_auto_zoom = !self.planet_sizes_auto_zoom;
-                        if self.planet_sizes_auto_zoom { self.planet_sizes_auto_time = 0.0; }
-                    }
-                    ui.label("Auto-zoom");
-                    ui.add(egui::DragValue::new(&mut self.planet_sizes_zoom_duration).range(5.0..=120.0).speed(0.5).suffix("s"))
-                        .on_hover_text("Duration of zoom animation cycle");
-                    ui.label("Stay:");
-                    ui.add(egui::DragValue::new(&mut self.planet_sizes_stay_duration).range(0.0..=30.0).speed(0.1).suffix("s"))
-                        .on_hover_text("Pause duration at each zoom level");
-                });
+            ui.horizontal(|ui| {
+                let label = if self.planet_sizes_auto_zoom { "\u{23f8}" } else { "\u{25b6}" };
+                if ui.button(label).on_hover_text("Toggle auto-zoom animation").clicked() {
+                    self.planet_sizes_auto_zoom = !self.planet_sizes_auto_zoom;
+                    if self.planet_sizes_auto_zoom { self.planet_sizes_auto_time = 0.0; }
+                }
+                ui.label("Auto-zoom");
+                ui.add(egui::DragValue::new(&mut self.planet_sizes_zoom_duration).range(5.0..=120.0).speed(0.5).suffix("s"))
+                    .on_hover_text("Duration of zoom animation cycle");
+                ui.label("Stay:");
+                ui.add(egui::DragValue::new(&mut self.planet_sizes_stay_duration).range(0.0..=30.0).speed(0.1).suffix("s"))
+                    .on_hover_text("Pause duration at each zoom level");
             });
         });
+        }
         ui.checkbox(&mut self.auto_hide_tab_bar, "Auto-hide UI")
             .on_hover_text("Hide the tab bar and sidebar automatically");
         ui.checkbox(&mut self.auto_cycle_tabs, "Auto-cycle tabs")

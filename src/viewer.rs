@@ -120,7 +120,6 @@ pub(crate) struct ViewerState {
     pub(crate) view_height: f32,
     pub(crate) solar_system_handles: HashMap<CelestialBody, egui::TextureHandle>,
     pub(crate) ss_last_render_instant: Option<web_time::Instant>,
-    pub(crate) show_planet_sizes: bool,
     pub(crate) planet_sizes_t: f64,
     pub(crate) planet_sizes_auto_zoom: bool,
     pub(crate) planet_sizes_zoom_duration: f32,
@@ -137,6 +136,10 @@ pub(crate) struct ViewerState {
     pub(crate) hohmann: crate::solar_system::HohmannState,
     pub(crate) conjunction_body_a: CelestialBody,
     pub(crate) conjunction_body_b: CelestialBody,
+    pub(crate) opposition_body_a: CelestialBody,
+    pub(crate) opposition_body_b: CelestialBody,
+    pub(crate) alignment_planets: [bool; 8],
+    pub(crate) alignment_search_years: f64,
     #[cfg(target_arch = "wasm32")]
     pub(crate) last_url_hash: String,
     pub(crate) last_frame_instant: Option<web_time::Instant>,
@@ -2121,6 +2124,8 @@ impl ViewerState {
                     let max_debris = planet.kessler.max_debris;
                     let candidates: Vec<_> = planet.conjunction_cache.conjunctions.iter()
                         .filter(|c| c.distance_km < coll_thresh)
+                        .filter(|c| !(c.source_a == "Kessler Debris" && c.source_b == "Kessler Debris"))
+                        .take(10)
                         .map(|c| (c.pos_a, c.pos_b, c.name_a.clone(), c.name_b.clone()))
                         .collect();
                     for (pos_a, pos_b, name_a, name_b) in candidates {
@@ -2238,7 +2243,7 @@ impl ViewerState {
             let mut show_lines = planet.show_conjunction_lines;
             egui::Window::new(format!("Conjunctions - {}", planet_name))
                 .open(&mut show_conj_window)
-                .default_width(500.0)
+                .default_size([500.0, 500.0])
                 .show(ui.ctx(), |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Threshold:");
@@ -2256,85 +2261,9 @@ impl ViewerState {
                     ui.separator();
                     egui::ScrollArea::vertical()
                         .id_salt("conj_scroll")
+                        .min_scrolled_height(400.0)
                         .max_height(400.0)
                         .show(ui, |ui| {
-                            let threshold = conj_cache.threshold_km;
-                            let current: Vec<_> = conj_cache.conjunctions.iter()
-                                .filter(|c| c.distance_km <= threshold)
-                                .collect();
-                            if !current.is_empty() {
-                                ui.strong("Current");
-                                egui::Grid::new("conj_grid")
-                                    .striped(true)
-                                    .show(ui, |ui| {
-                                        ui.strong("Dist");
-                                        ui.strong("Object A");
-                                        ui.strong("");
-                                        ui.strong("Object B");
-                                        ui.strong("TCA");
-                                        ui.strong("Min Dist");
-                                        ui.end_row();
-                                        for conj in &current {
-                                            let urgency = 1.0 - (conj.distance_km / threshold).clamp(0.0, 1.0);
-                                            let r = (255.0 * urgency) as u8;
-                                            let g = (255.0 * (1.0 - urgency)) as u8;
-                                            let color = egui::Color32::from_rgb(r, g, 0);
-                                            ui.colored_label(color, format!("{:.1} km", conj.distance_km));
-                                            ui.label(format!("{} ({})", conj.name_a, conj.source_a));
-                                            ui.label("↔");
-                                            ui.label(format!("{} ({})", conj.name_b, conj.source_b));
-                                            if conj.tca_seconds.abs() < 1.0 {
-                                                ui.colored_label(egui::Color32::RED, "NOW");
-                                            } else if conj.tca_seconds > 0.0 {
-                                                ui.label(format!("{:.0}s", conj.tca_seconds));
-                                            } else {
-                                                ui.label(format!("{:.0}s ago", -conj.tca_seconds));
-                                            }
-                                            ui.label(format!("{:.1} km", conj.min_distance_km));
-                                            ui.end_row();
-                                        }
-                                    });
-                                ui.separator();
-                            }
-
-                            ui.horizontal(|ui| {
-                                ui.strong("Predicted");
-                                ui.add(
-                                    egui::DragValue::new(&mut conj_cache.prediction_window_min)
-                                        .range(1.0..=60.0)
-                                        .speed(1.0)
-                                        .suffix(" min"),
-                                ).on_hover_text("Look-ahead window for conjunction predictions");
-                            });
-                            if conj_cache.predictions.is_empty() {
-                                ui.weak("No upcoming conjunctions predicted");
-                            } else {
-                                egui::Grid::new("conj_pred_grid")
-                                    .striped(true)
-                                    .show(ui, |ui| {
-                                        ui.strong("In");
-                                        ui.strong("Object A");
-                                        ui.strong("");
-                                        ui.strong("Object B");
-                                        ui.strong("Min Dist");
-                                        ui.end_row();
-                                        for pred in &conj_cache.predictions {
-                                            let secs = pred.time_until;
-                                            if secs < 60.0 {
-                                                ui.colored_label(egui::Color32::RED, format!("{:.0}s", secs));
-                                            } else {
-                                                ui.label(format!("{:.0}m {:.0}s", (secs / 60.0).floor(), secs % 60.0));
-                                            }
-                                            ui.label(format!("{} ({})", pred.name_a, pred.source_a));
-                                            ui.label("↔");
-                                            ui.label(format!("{} ({})", pred.name_b, pred.source_b));
-                                            ui.label(format!("{:.1} km", pred.min_distance_km));
-                                            ui.end_row();
-                                        }
-                                    });
-                            }
-
-                            ui.separator();
                             ui.strong("Kessler Simulation");
                             ui.horizontal(|ui| {
                                 ui.checkbox(&mut kessler.enabled, "Enable")
@@ -2398,6 +2327,84 @@ impl ViewerState {
                                         kessler.active_corrections.len()
                                     ));
                                 }
+                            }
+
+                            let threshold = conj_cache.threshold_km;
+                            let current: Vec<_> = conj_cache.conjunctions.iter()
+                                .filter(|c| c.distance_km <= threshold)
+                                .take(10)
+                                .collect();
+                            if !current.is_empty() {
+                                ui.separator();
+                                ui.strong("Current");
+                                egui::Grid::new("conj_grid")
+                                    .striped(true)
+                                    .show(ui, |ui| {
+                                        ui.strong("Dist");
+                                        ui.strong("Object A");
+                                        ui.strong("");
+                                        ui.strong("Object B");
+                                        ui.strong("TCA");
+                                        ui.strong("Min Dist");
+                                        ui.end_row();
+                                        for conj in &current {
+                                            let urgency = 1.0 - (conj.distance_km / threshold).clamp(0.0, 1.0);
+                                            let r = (255.0 * urgency) as u8;
+                                            let g = (255.0 * (1.0 - urgency)) as u8;
+                                            let color = egui::Color32::from_rgb(r, g, 0);
+                                            ui.colored_label(color, format!("{:.1} km", conj.distance_km));
+                                            ui.label(format!("{} ({})", conj.name_a, conj.source_a));
+                                            ui.label("↔");
+                                            ui.label(format!("{} ({})", conj.name_b, conj.source_b));
+                                            if conj.tca_seconds.abs() < 1.0 {
+                                                ui.colored_label(egui::Color32::RED, "NOW");
+                                            } else if conj.tca_seconds > 0.0 {
+                                                ui.label(format!("{:.0}s", conj.tca_seconds));
+                                            } else {
+                                                ui.label(format!("{:.0}s ago", -conj.tca_seconds));
+                                            }
+                                            ui.label(format!("{:.1} km", conj.min_distance_km));
+                                            ui.end_row();
+                                        }
+                                    });
+                            }
+
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.strong("Predicted");
+                                ui.add(
+                                    egui::DragValue::new(&mut conj_cache.prediction_window_min)
+                                        .range(1.0..=60.0)
+                                        .speed(1.0)
+                                        .suffix(" min"),
+                                ).on_hover_text("Look-ahead window for conjunction predictions");
+                            });
+                            if conj_cache.predictions.is_empty() {
+                                ui.weak("No upcoming conjunctions predicted");
+                            } else {
+                                egui::Grid::new("conj_pred_grid")
+                                    .striped(true)
+                                    .show(ui, |ui| {
+                                        ui.strong("In");
+                                        ui.strong("Object A");
+                                        ui.strong("");
+                                        ui.strong("Object B");
+                                        ui.strong("Min Dist");
+                                        ui.end_row();
+                                        for pred in conj_cache.predictions.iter().take(10) {
+                                            let secs = pred.time_until;
+                                            if secs < 60.0 {
+                                                ui.colored_label(egui::Color32::RED, format!("{:.0}s", secs));
+                                            } else {
+                                                ui.label(format!("{:.0}m {:.0}s", (secs / 60.0).floor(), secs % 60.0));
+                                            }
+                                            ui.label(format!("{} ({})", pred.name_a, pred.source_a));
+                                            ui.label("↔");
+                                            ui.label(format!("{} ({})", pred.name_b, pred.source_b));
+                                            ui.label(format!("{:.1} km", pred.min_distance_km));
+                                            ui.end_row();
+                                        }
+                                    });
                             }
                         });
                 });
@@ -2672,10 +2679,12 @@ impl ViewerState {
             available.y = available.y.min((clip.max.y - cursor.y).max(0.0));
         }
         let settings = &self.tabs[tab_idx].settings;
-        let render_planet = settings.render_planet;
-        let show_torus = settings.show_torus;
+        let view_mode = settings.view_mode;
+        let render_planet = view_mode == crate::config::ViewMode::Planet;
+        let show_torus = settings.show_torus && render_planet;
         let planet_projection = settings.planet_projection;
-        let show_solar_system = settings.show_solar_system;
+        let show_solar_system = view_mode == crate::config::ViewMode::SolarSystem;
+        let show_planet_sizes = view_mode == crate::config::ViewMode::PlanetSizes;
         let show_orbits = settings.show_orbits;
         let show_axes = settings.show_axes;
         let show_magnetic_axis = settings.show_magnetic_axis;
@@ -2746,9 +2755,6 @@ impl ViewerState {
         let log_power = settings.solar_system_log_power;
         let detail_bounds = self.tile_overlay_detail_bounds(celestial_body);
         let gpu_available = self.render_state.is_some();
-
-        let show_torus = show_torus && render_planet;
-        let show_planet_sizes = self.show_planet_sizes;
 
         let num_views = [render_planet, show_torus, show_solar_system, show_planet_sizes]
             .iter().filter(|v| **v).count();
@@ -3085,6 +3091,8 @@ impl ViewerState {
                                 crate::solar_system::AsteroidLoadState::Loaded(v) => v.as_slice(),
                                 _ => &[],
                             };
+                            let show_ss_labels = self.tabs[tab_idx].settings.show_ss_labels;
+                            let show_cal = self.tabs[tab_idx].settings.show_circular_calendar;
                             let ss_click = crate::solar_system::draw_solar_system_view(
                                 plot_ui,
                                 celestial_body,
@@ -3094,16 +3102,9 @@ impl ViewerState {
                                 log_power,
                                 ast_slice,
                                 self.asteroid_sprite.as_ref(),
+                                show_ss_labels,
+                                show_cal,
                             );
-                            if self.tabs[tab_idx].settings.show_circular_calendar {
-                                let cal_j2000 = ss_timestamp.signed_duration_since(*crate::solar_system::J2000_EPOCH_PUB).num_seconds() as f64 / 86400.0;
-                                crate::solar_system::draw_circular_calendar(
-                                    plot_ui,
-                                    cal_j2000,
-                                    log_power,
-                                    dark_mode,
-                                );
-                            }
                             if self.tabs[tab_idx].settings.show_hohmann {
                                 let ss_j2000 = ss_timestamp.signed_duration_since(*crate::solar_system::J2000_EPOCH_PUB).num_seconds() as f64 / 86400.0;
                                 if self.hohmann.launched {
