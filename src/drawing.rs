@@ -512,9 +512,11 @@ pub fn draw_3d_view(
     moon_handles: &HashMap<CelestialBody, egui::TextureHandle>,
     context_menu_request: &mut Option<(egui::Pos2, f64, f64)>,
     label_click_request: &mut Option<(bool, usize, egui::Pos2)>,
+    physics_colors: &HashMap<(usize, usize), egui::Color32>,
+    physics_info: &HashMap<(usize, usize), (f64, f64, bool)>,
 ) -> (Matrix3<f64>, f64) {
     let View3DFlags {
-        show_orbits, show_axes, show_magnetic_axis, show_coverage, show_links, show_intra_links,
+        show_orbits, show_axes, show_magnetic_axis, show_coverage, show_links,
         hide_behind_earth, single_color, dark_mode, show_routing_paths,
         show_manhattan_path, show_shortest_path, show_radiation_path, radiation_weight,
         show_asc_desc_colors,
@@ -1934,47 +1936,6 @@ pub fn draw_3d_view(
             }
         }
 
-        if show_intra_links {
-            let base_link_color = if show_routing_paths || show_asc_desc_colors {
-                egui::Color32::from_rgb(80, 80, 80)
-            } else {
-                egui::Color32::from_rgb(200, 200, 200)
-            };
-            let link_dim = egui::Color32::from_rgba_unmultiplied(50, 50, 60, 80);
-            for (constellation, positions, _, _, _, _) in constellations {
-                let sats_per_plane = constellation.sats_per_plane();
-                for plane in 0..constellation.num_planes {
-                    let plane_sats: Vec<_> = positions.iter()
-                        .filter(|s| s.plane == plane)
-                        .collect();
-                    for i in 0..plane_sats.len() {
-                        let sat = plane_sats[i];
-                        let next = plane_sats[(i + 1) % sats_per_plane];
-                        let (rx1, ry1, rz1) = rotate_point_matrix(sat.x, sat.y, sat.z, &satellite_rotation);
-                        let (rx2, ry2, rz2) = rotate_point_matrix(next.x, next.y, next.z, &satellite_rotation);
-                        let visible1 = rz1 >= 0.0 || (rx1 * rx1 + ry1 * ry1) >= earth_r_sq;
-                        let visible2 = rz2 >= 0.0 || (rx2 * rx2 + ry2 * ry2) >= earth_r_sq;
-                        if hide_behind_earth {
-                            if let Some((p1, p2)) = clip_link_at_earth(rx1, ry1, rz1, visible1, rx2, ry2, rz2, visible2, earth_r_sq) {
-                                plot_ui.line(
-                                    Line::new("", PlotPoints::new(vec![p1, p2]))
-                                        .color(base_link_color)
-                                        .width(scaled_link_width),
-                                );
-                            }
-                        } else {
-                            let color = if visible1 && visible2 { base_link_color } else { link_dim };
-                            plot_ui.line(
-                                Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
-                                    .color(color)
-                                    .width(scaled_link_width),
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
         for (conj, threshold) in conjunction_lines {
             let (rx1, ry1, rz1) = rotate_point_matrix(conj.pos_a[0], conj.pos_a[1], conj.pos_a[2], &satellite_rotation);
             let (rx2, ry2, rz2) = rotate_point_matrix(conj.pos_b[0], conj.pos_b[1], conj.pos_b[2], &satellite_rotation);
@@ -2428,7 +2389,11 @@ pub fn draw_3d_view(
                         continue;
                     }
 
-                    let mut color = plane_color(color_offset + sat.plane);
+                    let mut color = if let Some(&pc) = physics_colors.get(&(*orig_idx, sat.plane * constellation.sats_per_plane() + sat.sat_index)) {
+                        pc
+                    } else {
+                        plane_color(color_offset + sat.plane)
+                    };
                     if let Some(rc) = radiation {
                         if rc.show_sat_exposure {
                             let bp = body_rotation.transpose() * Vector3::new(sat.x, sat.y, sat.z);
@@ -2554,7 +2519,10 @@ pub fn draw_3d_view(
                     let is_tracked = satellite_cameras.iter().any(|c|
                         c.constellation_idx == *orig_idx && c.plane == sat.plane && c.sat_index == sat.sat_index
                     );
-                    let color = if show_asc_desc_colors {
+                    let flat_idx = sat.plane * constellation.sats_per_plane() + sat.sat_index;
+                    let color = if let Some(&pc) = physics_colors.get(&(*orig_idx, flat_idx)) {
+                        pc
+                    } else if show_asc_desc_colors {
                         if is_tracked {
                             if sat.ascending { COLOR_ASCENDING } else { COLOR_DESCENDING }
                         } else if sat.ascending {
@@ -3021,7 +2989,7 @@ pub fn draw_3d_view(
                         Some(name) => name.clone(),
                         None => format!("P{}S{}", sat.plane, sat.sat_index),
                     };
-                    let text = if let (Some(inc), Some(mm)) = (sat.tle_inclination_deg, sat.tle_mean_motion) {
+                    let mut text = if let (Some(inc), Some(mm)) = (sat.tle_inclination_deg, sat.tle_mean_motion) {
                         let revs_per_day = mm;
                         let period_min = 1440.0 / revs_per_day;
                         format!(
@@ -3040,6 +3008,14 @@ pub fn draw_3d_view(
                             alt_km, vel_km_s,
                         )
                     };
+                    let flat_idx = sat.plane * constellation.sats_per_plane() + sat.sat_index;
+                    if let Some(&(soc, temp_k, is_dead)) = physics_info.get(&(*orig_idx, flat_idx)) {
+                        if is_dead {
+                            text.push_str("\n⚠ DEAD");
+                        } else {
+                            text.push_str(&format!("\nBattery: {:.0}%  T: {:.0} K", soc * 100.0, temp_k));
+                        }
+                    }
                     let font = egui::FontId::proportional(12.0);
                     let galley = ui.painter().layout_no_wrap(text, font, egui::Color32::WHITE);
                     let text_pos = screen_pos + egui::Vec2::new(scaled_sat_radius * 3.0, -galley.size().y / 2.0);
@@ -3056,7 +3032,7 @@ pub fn draw_3d_view(
         let plot_pos = response.transform.value_from_position(hover_pos);
         let hover_threshold = margin * 0.025;
 
-        'hover: for (constellation, positions, color_offset, _, _, _label) in constellations {
+        'hover: for (constellation, positions, color_offset, _, orig_idx, _label) in constellations {
             for sat in positions {
                 let (rx, ry, rz) = rotate_point_matrix(sat.x, sat.y, sat.z, &satellite_rotation);
                 let earth_r_sq = (planet_radius * EARTH_VISUAL_SCALE).powi(2);
@@ -3086,7 +3062,7 @@ pub fn draw_3d_view(
                     let body_pos = inv_body * Vector3::new(sat.x, sat.y, sat.z);
                     let ground_lat = (body_pos.y / r).asin().to_degrees();
                     let ground_lon = (-body_pos.z).atan2(body_pos.x).to_degrees();
-                    let tip = if let (Some(inc), Some(mm)) = (sat.tle_inclination_deg, sat.tle_mean_motion) {
+                    let mut tip = if let (Some(inc), Some(mm)) = (sat.tle_inclination_deg, sat.tle_mean_motion) {
                         let period_min = 1440.0 / mm;
                         format!(
                             "{}  {:.1}° {:.1}°\n{:.0} km  {:.2} km/s\nInc {:.1}°  {:.2} rev/day\nPeriod {:.1} min",
@@ -3098,6 +3074,14 @@ pub fn draw_3d_view(
                             id, ground_lat, ground_lon, alt_km, vel_km_s,
                         )
                     };
+                    let flat_idx = sat.plane * constellation.sats_per_plane() + sat.sat_index;
+                    if let Some(&(soc, temp_k, is_dead)) = physics_info.get(&(*orig_idx, flat_idx)) {
+                        if is_dead {
+                            tip.push_str("\n⚠ DEAD");
+                        } else {
+                            tip.push_str(&format!("\nBattery: {:.0}%  T: {:.0} K", soc * 100.0, temp_k));
+                        }
+                    }
                     let font = egui::FontId::proportional(12.0);
                     let galley = ui.painter().layout_no_wrap(tip, font, egui::Color32::WHITE);
                     let tip_pos = screen_pt - egui::Vec2::new(galley.size().x * 0.5, galley.size().y + scaled_sat_radius * 2.0 + 8.0);
@@ -3677,7 +3661,6 @@ pub fn draw_map_view(
     link_width: f32,
     show_orbits: bool,
     show_links: bool,
-    show_intra_links: bool,
     show_coverage: bool,
     coverage_angle: f64,
     show_routing_paths: bool,
@@ -3843,24 +3826,6 @@ pub fn draw_map_view(
                                 if (x1 - x2).abs() < 180.0 {
                                     plot_ui.line(Line::new("", PlotPoints::new(vec![[x1, y1], [x2, y2]])).color(link_color).width(link_width));
                                 }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if show_intra_links {
-                for plane in 0..constellation.num_planes {
-                    let plane_sats: Vec<_> = positions.iter().filter(|s| s.plane == plane).collect();
-                    let link_color = egui::Color32::from_rgba_unmultiplied(120, 120, 120, 40);
-                    for i in 0..plane_sats.len() {
-                        let j = (i + 1) % plane_sats.len();
-                        if let (Some((x1, y1)), Some((x2, y2))) = (
-                            proj.project(plane_sats[i].lat, plane_sats[i].lon),
-                            proj.project(plane_sats[j].lat, plane_sats[j].lon),
-                        ) {
-                            if (x1 - x2).abs() < 180.0 {
-                                plot_ui.line(Line::new("", PlotPoints::new(vec![[x1, y1], [x2, y2]])).color(link_color).width(link_width * 0.5));
                             }
                         }
                     }

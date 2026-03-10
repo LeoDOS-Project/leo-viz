@@ -1633,6 +1633,19 @@ impl ViewerState {
                                 cameras_to_clean.push(cidx);
                             }
                         }
+                        let phy_btn = if cons.show_physics_ui {
+                            egui::Button::new(egui::RichText::new("⚡").color(egui::Color32::WHITE))
+                                .fill(egui::Color32::from_rgb(60, 100, 160)).small()
+                        } else {
+                            egui::Button::new(egui::RichText::new("⚡"))
+                                .fill(egui::Color32::from_rgb(80, 80, 80)).small()
+                        };
+                        if ui.add(phy_btn).on_hover_text("Toggle physics simulation").clicked() {
+                            cons.show_physics_ui = !cons.show_physics_ui;
+                            if !cons.show_physics_ui {
+                                cons.physics.enabled = false;
+                            }
+                        }
                         if num_constellations > 0 {
                             let btn = egui::Button::new(
                                 egui::RichText::new("x").color(egui::Color32::WHITE)
@@ -1643,7 +1656,8 @@ impl ViewerState {
                         }
                     });
 
-                    {
+                    ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
                     ui.horizontal(|ui| {
                         let mut sats = cons.sats_per_plane as i32;
                         let mut planes = cons.num_planes as i32;
@@ -1749,7 +1763,7 @@ impl ViewerState {
                             cons.preset = Preset::None;
                         }
                         if let Some(ref mut spacing) = cons.raan_spacing {
-                            if ui.add(egui::DragValue::new(spacing).range(0.1..=180.0).suffix("°").speed(0.5)).changed() {
+                            if ui.add(egui::DragValue::new(spacing).range(0.0001..=180.0).suffix("°").speed(0.01).max_decimals(4)).changed() {
                                 cons.preset = Preset::None;
                             }
                         } else {
@@ -1769,16 +1783,13 @@ impl ViewerState {
                     });
 
                     ui.horizontal(|ui| {
-                        ui.label("ISL planes:");
-                        let mut p = cons.isl_plane_count as i32;
-                        if ui.add(egui::DragValue::new(&mut p).range(0..=10)).on_hover_text("Inter-plane ISL connections per satellite").changed() {
-                            cons.isl_plane_count = p as usize;
-                        }
-                        ui.label("sats:");
-                        let mut s = cons.isl_intra_count as i32;
-                        if ui.add(egui::DragValue::new(&mut s).range(0..=10)).on_hover_text("Intra-plane ISL connections per satellite").changed() {
-                            cons.isl_intra_count = s as usize;
-                        }
+                        ui.label("ISLs/sat:");
+                        ui.selectable_value(&mut cons.isl_neighbors, 0, "Off")
+                            .on_hover_text("No inter-satellite links");
+                        ui.selectable_value(&mut cons.isl_neighbors, 4, "4")
+                            .on_hover_text("4 neighbors (cardinal: up/down/left/right)");
+                        ui.selectable_value(&mut cons.isl_neighbors, 8, "8")
+                            .on_hover_text("8 neighbors (cardinal + diagonal)");
                     });
 
                     ui.horizontal(|ui| {
@@ -1845,7 +1856,116 @@ impl ViewerState {
                                 }
                             });
                     });
+                    }); // end left vertical
+
+                    if cons.show_physics_ui {
+                        ui.separator();
+                        ui.vertical(|ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt(format!("phy_scroll_{}_{}_{}", tab_idx, planet_idx, cidx))
+                        .max_height(200.0)
+                        .show(ui, |ui| {
+                    let phy = &mut cons.physics;
+                    phy.enabled = true;
+                    {
+                        ui.horizontal(|ui| {
+                            ui.label("Color:");
+                            ui.selectable_value(&mut phy.color_mode, crate::physics::PhysicsColorMode::Normal, "Normal")
+                                .on_hover_text("Use default plane colors");
+                            ui.selectable_value(&mut phy.color_mode, crate::physics::PhysicsColorMode::Battery, "Battery")
+                                .on_hover_text("Color by state of charge (green=full, red=empty)");
+                            ui.selectable_value(&mut phy.color_mode, crate::physics::PhysicsColorMode::Temperature, "Temp")
+                                .on_hover_text("Color by temperature (blue=cold, red=hot)");
+                        });
+                        ui.checkbox(&mut phy.power_enabled, "Power model")
+                            .on_hover_text("Simulate battery charge/discharge with eclipse-gated solar panels");
+                        if phy.power_enabled {
+                            ui.indent("power_settings", |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Battery:");
+                                    ui.add(egui::DragValue::new(&mut phy.max_battery_ws).range(100.0..=1_000_000.0).speed(100.0).suffix(" Ws"))
+                                        .on_hover_text("Maximum battery capacity in watt-seconds (joules)");
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Charge rate:");
+                                    ui.add(egui::DragValue::new(&mut phy.charging_rate_w).range(0.0..=1000.0).speed(1.0).suffix(" W"))
+                                        .on_hover_text("Solar panel or RTG power generation rate");
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Idle power:");
+                                    ui.add(egui::DragValue::new(&mut phy.idle_power_w).range(0.0..=500.0).speed(0.5).suffix(" W"))
+                                        .on_hover_text("Constant power draw from satellite subsystems");
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Device:");
+                                    ui.selectable_value(&mut phy.power_device_type, crate::physics::PowerDeviceType::SolarPanel, "Solar")
+                                        .on_hover_text("Solar panels: only charge when not in eclipse");
+                                    ui.selectable_value(&mut phy.power_device_type, crate::physics::PowerDeviceType::Rtg, "RTG")
+                                        .on_hover_text("Radioisotope thermoelectric generator: charges regardless of eclipse");
+                                });
+                            });
+                        }
+                        ui.checkbox(&mut phy.thermal_enabled, "Thermal model")
+                            .on_hover_text("Single-node heat balance: solar, albedo, body IR, emission, and activity heat");
+                        if phy.thermal_enabled {
+                            ui.indent("thermal_settings", |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Mass:");
+                                    ui.add(egui::DragValue::new(&mut phy.mass_kg).range(1.0..=10000.0).speed(1.0).suffix(" kg"))
+                                        .on_hover_text("Spacecraft mass affecting thermal inertia");
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Thermal cap:");
+                                    ui.add(egui::DragValue::new(&mut phy.thermal_capacity).range(100.0..=5000.0).speed(10.0).suffix(" J/kgK"))
+                                        .on_hover_text("Specific heat capacity of the spacecraft structure");
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Heat ratio:");
+                                    ui.add(egui::DragValue::new(&mut phy.heat_ratio).range(0.0..=1.0).speed(0.01))
+                                        .on_hover_text("Fraction of electrical power dissipated as heat (0=none, 1=all)");
+                                });
+                            });
+                        }
+                        ui.checkbox(&mut phy.radiation_enabled, "Radiation model")
+                            .on_hover_text("Poisson-process radiation events: random restarts and permanent failures");
+                        if phy.radiation_enabled {
+                            ui.indent("radiation_settings", |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Failure rate:");
+                                    ui.add(egui::DragValue::new(&mut phy.failure_rate).range(0.0..=1e-6).speed(1e-12).min_decimals(13))
+                                        .on_hover_text("Probability per second of permanent satellite failure (single event latch-up)");
+                                    ui.label("/s");
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Restart rate:");
+                                    ui.add(egui::DragValue::new(&mut phy.restart_rate).range(0.0..=1e-4).speed(1e-10).min_decimals(11))
+                                        .on_hover_text("Probability per second of transient restart event (single event upset)");
+                                    ui.label("/s");
+                                });
+                            });
+                        }
+                        if !cons.physics_state.is_empty() {
+                            let alive = cons.physics_state.iter().filter(|s| !s.is_dead).count();
+                            let dead = cons.physics_state.len() - alive;
+                            let avg_soc = if alive > 0 {
+                                cons.physics_state.iter().filter(|s| !s.is_dead)
+                                    .map(|s| s.state_of_charge(&cons.physics)).sum::<f64>() / alive as f64
+                            } else { 0.0 };
+                            let avg_temp = if alive > 0 {
+                                cons.physics_state.iter().filter(|s| !s.is_dead)
+                                    .map(|s| s.temperature_k).sum::<f64>() / alive as f64
+                            } else { 0.0 };
+                            ui.label(format!("Alive: {}  Dead: {}  Avg Battery: {:.0}%  Avg T: {:.0} K",
+                                alive, dead, avg_soc * 100.0, avg_temp));
+                            if ui.button("Reset physics").on_hover_text("Clear all physics state and reinitialize").clicked() {
+                                cons.physics_state.clear();
+                            }
+                        }
                     }
+                    }); // end scroll area
+                    }); // end right vertical
+                    } // end show_physics_ui
+                    }); // end horizontal_top
                 });
                 ui.separator();
             }
@@ -1889,7 +2009,7 @@ impl ViewerState {
         let skin = planet.skin;
         let view_name = planet.name.clone();
 
-        let hide_sats = self.tabs[tab_idx].settings.zoom > 100.0;
+        let hide_sats = self.tabs[tab_idx].settings.zoom > 100.0 && self.tile_overlay.enabled;
         let mut constellations_data: Vec<_> = if hide_sats {
             Vec::new()
         } else {
@@ -1969,8 +2089,7 @@ impl ViewerState {
                             raan_offset_deg: 0.0,
                             raan_spacing_deg: None,
                             sat_spacing_km: None,
-                            isl_plane_count: 0,
-                            isl_intra_count: 0,
+                            isl_neighbors: 0,
                             eccentricity: 0.0,
                             arg_periapsis_deg: 0.0,
                             planet_radius,
@@ -1993,8 +2112,7 @@ impl ViewerState {
                         raan_offset_deg: 0.0,
                         raan_spacing_deg: None,
                         sat_spacing_km: None,
-                        isl_plane_count: 0,
-                        isl_intra_count: 0,
+                        isl_neighbors: 0,
                         eccentricity: 0.0,
                         arg_periapsis_deg: 0.0,
                         planet_radius,
@@ -2076,8 +2194,7 @@ impl ViewerState {
                         raan_offset_deg: 0.0,
                         raan_spacing_deg: None,
                         sat_spacing_km: None,
-                        isl_plane_count: 0,
-                        isl_intra_count: 0,
+                        isl_neighbors: 0,
                         eccentricity: 0.0,
                         arg_periapsis_deg: 0.0,
                         planet_radius,
@@ -2086,6 +2203,57 @@ impl ViewerState {
                         planet_equatorial_radius: planet_eq_radius,
                     };
                     constellations_data.push((dummy_wc, debris_positions, 0, 3, usize::MAX, "Kessler Debris".to_string()));
+                }
+            }
+        }
+
+        {
+            use chrono::Datelike;
+            let time = self.tabs[tab_idx].settings.time;
+            let sim_speed = self.tabs[tab_idx].settings.speed;
+            let dt = if self.tabs[tab_idx].settings.animate {
+                ui.ctx().input(|i| i.stable_dt) as f64 * sim_speed
+            } else {
+                0.0
+            };
+            let timestamp = self.start_timestamp + chrono::Duration::seconds(time as i64);
+            let day_of_year = timestamp.ordinal() as f64;
+            let decl_rad = (crate::time::SOLAR_DECLINATION_MAX
+                * ((360.0 / crate::time::DAYS_PER_YEAR) * (day_of_year + 10.0)).to_radians().cos())
+                .to_radians();
+            let sun_ra = ((day_of_year - 80.0) * 360.0 / 365.0).to_radians();
+            let sun_inertial = Vector3::new(
+                decl_rad.cos() * sun_ra.cos(),
+                decl_rad.sin(),
+                -decl_rad.cos() * sun_ra.sin(),
+            ).normalize();
+            let frame_seed = (time * 1000.0) as u64;
+            let planet = &mut self.tabs[tab_idx].planets[planet_idx];
+            for (_, positions, _, _, orig_idx, _) in &constellations_data {
+                if *orig_idx == usize::MAX { continue; }
+                let constellation = &mut planet.constellations[*orig_idx];
+                if !constellation.physics.enabled { continue; }
+                let total = constellation.sats_per_plane * constellation.num_planes;
+                if constellation.physics_state.len() != total {
+                    constellation.physics_state = (0..total)
+                        .map(|_| crate::physics::SatellitePhysics::new(&constellation.physics))
+                        .collect();
+                }
+                for (si, sat) in positions.iter().enumerate() {
+                    if si >= constellation.physics_state.len() { break; }
+                    let sat_pos = Vector3::new(sat.x, sat.y, sat.z);
+                    let alt = (sat_pos.norm() - planet_radius).max(0.0);
+                    let seed = frame_seed.wrapping_add(*orig_idx as u64 * 10000 + si as u64);
+                    crate::physics::update_satellite(
+                        &mut constellation.physics_state[si],
+                        &constellation.physics,
+                        dt,
+                        &sat_pos,
+                        &sun_inertial,
+                        planet_radius,
+                        alt,
+                        seed,
+                    );
                 }
             }
         }
@@ -2709,7 +2877,6 @@ impl ViewerState {
         };
         let sat_radius = settings.sat_radius;
         let show_links = settings.show_links;
-        let show_intra_links = settings.show_intra_links;
         let hide_behind_earth = render_planet && settings.hide_behind_earth;
         let single_color = settings.single_color || constellations_data.len() > 1;
         let dark_mode = self.dark_mode;
@@ -2772,7 +2939,7 @@ impl ViewerState {
                     ui.vertical(|ui| {
                         let planet = &mut self.tabs[tab_idx].planets[planet_idx];
                         let view_flags = View3DFlags {
-                            show_orbits, show_axes, show_magnetic_axis, show_coverage, show_links, show_intra_links,
+                            show_orbits, show_axes, show_magnetic_axis, show_coverage, show_links,
                             hide_behind_earth, single_color, dark_mode, show_routing_paths,
                             show_manhattan_path, show_shortest_path, show_radiation_path, radiation_weight,
                             show_asc_desc_colors,
@@ -2841,6 +3008,41 @@ impl ViewerState {
                                 _ => {}
                             }
                         }
+                        let physics_colors: HashMap<(usize, usize), egui::Color32> = {
+                            let mut map = HashMap::new();
+                            for c in &planet.constellations {
+                                if !c.physics.enabled || c.physics_state.is_empty() { continue; }
+                                let cidx = planet.constellations.iter().position(|x| std::ptr::eq(x, c)).unwrap_or(usize::MAX);
+                                for (si, ps) in c.physics_state.iter().enumerate() {
+                                    let color = if ps.is_dead {
+                                        crate::physics::dead_color()
+                                    } else {
+                                        match c.physics.color_mode {
+                                            crate::physics::PhysicsColorMode::Battery => {
+                                                crate::physics::battery_color(ps.state_of_charge(&c.physics))
+                                            }
+                                            crate::physics::PhysicsColorMode::Temperature => {
+                                                crate::physics::temperature_color(ps.temperature_k)
+                                            }
+                                            crate::physics::PhysicsColorMode::Normal => continue,
+                                        }
+                                    };
+                                    map.insert((cidx, si), color);
+                                }
+                            }
+                            map
+                        };
+                        let physics_info: HashMap<(usize, usize), (f64, f64, bool)> = {
+                            let mut map = HashMap::new();
+                            for c in &planet.constellations {
+                                if !c.physics.enabled || c.physics_state.is_empty() { continue; }
+                                let cidx = planet.constellations.iter().position(|x| std::ptr::eq(x, c)).unwrap_or(usize::MAX);
+                                for (si, ps) in c.physics_state.iter().enumerate() {
+                                    map.insert((cidx, si), (ps.state_of_charge(&c.physics), ps.temperature_k, ps.is_dead));
+                                }
+                            }
+                            map
+                        };
                         let mut ctx_menu_req: Option<(egui::Pos2, f64, f64)> = None;
                         let mut label_click_req: Option<(bool, usize, egui::Pos2)> = None;
                         let (rot, new_zoom) = draw_3d_view(
@@ -2894,6 +3096,8 @@ impl ViewerState {
                             &self.moon_image_handles,
                             &mut ctx_menu_req,
                             &mut label_click_req,
+                            &physics_colors,
+                            &physics_info,
                         );
                         self.tabs[tab_idx].settings.rotation = rot;
                         self.tabs[tab_idx].settings.zoom = new_zoom;
@@ -2935,7 +3139,6 @@ impl ViewerState {
                             link_width,
                             show_orbits,
                             show_links,
-                            show_intra_links,
                             show_coverage,
                             coverage_angle,
                             show_routing_paths,

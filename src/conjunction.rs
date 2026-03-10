@@ -68,6 +68,7 @@ impl SpatialGrid {
                 let a = &self.sats[indices[i]];
                 for j in (i + 1)..indices.len() {
                     let b = &self.sats[indices[j]];
+                    if a.ci == b.ci { continue; }
                     let d_sq = dist_sq(a, b);
                     if d_sq < thresh_sq {
                         results.push((a, b, d_sq.sqrt()));
@@ -82,6 +83,7 @@ impl SpatialGrid {
                         let a = &self.sats[ai];
                         for &bi in neighbor_indices {
                             let b = &self.sats[bi];
+                            if a.ci == b.ci { continue; }
                             let d_sq = dist_sq(a, b);
                             if d_sq < thresh_sq {
                                 results.push((a, b, d_sq.sqrt()));
@@ -243,6 +245,7 @@ pub(crate) fn predict_conjunctions(
 
         let mut grid = SpatialGrid::new(threshold_km.max(1.0));
 
+        let mut ci_counter = 0usize;
         for (wc, label) in walker_data {
             let positions = wc.satellite_positions(future_time);
             for (idx, sat) in positions.iter().enumerate() {
@@ -250,7 +253,7 @@ pub(crate) fn predict_conjunctions(
                     format!("{} P{}:S{}", label, sat.plane, sat.sat_index)
                 });
                 grid.insert(SatRef {
-                    ci: 0,
+                    ci: ci_counter,
                     si: idx,
                     x: sat.x,
                     y: sat.y,
@@ -259,6 +262,7 @@ pub(crate) fn predict_conjunctions(
                     source: label.clone(),
                 });
             }
+            ci_counter += 1;
         }
 
         for group in tle_groups {
@@ -275,13 +279,14 @@ pub(crate) fn predict_conjunctions(
                 let y = prediction.position[2];
                 let z = -prediction.position[1];
                 grid.insert(SatRef {
-                    ci: 0,
-                    si: 1_000_000 + idx,
+                    ci: ci_counter,
+                    si: idx,
                     x, y, z,
                     name: sat.name.clone(),
                     source: group.label.clone(),
                 });
             }
+            ci_counter += 1;
         }
 
         let pairs = grid.find_close_pairs(threshold_km);

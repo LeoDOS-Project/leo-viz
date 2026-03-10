@@ -384,10 +384,8 @@ impl ViewerState {
                     .on_hover_text("Draw concentric altitude reference rings");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_torus, "Show torus"))
                     .on_hover_text("Display the orbital torus shell");
-                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_intra_links, "Intra-plane links"))
-                    .on_hover_text("Show links between satellites in the same plane");
-                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_links, "Inter-plane links"))
-                    .on_hover_text("Show links between satellites in adjacent planes");
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_links, "ISL links"))
+                    .on_hover_text("Show inter-satellite links based on ISL neighbors setting");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_routing_paths, "Show routing paths"))
                     .on_hover_text("Visualize routing algorithms between ground stations");
                 ui.indent("routing_opts", |ui| {
@@ -405,10 +403,10 @@ impl ViewerState {
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(on, |ui| {
                         ui.label("Sat:");
-                        ui.add(egui::DragValue::new(&mut s.sat_radius).range(1.0..=15.0).speed(0.1))
+                        ui.add(egui::DragValue::new(&mut s.sat_radius).range(0.001..=15.0).speed(0.01).max_decimals(3))
                             .on_hover_text("Satellite dot radius in pixels");
                         ui.label("Link:");
-                        ui.add(egui::DragValue::new(&mut s.link_width).range(0.1..=5.0).speed(0.1))
+                        ui.add(egui::DragValue::new(&mut s.link_width).range(0.001..=5.0).speed(0.01).max_decimals(3))
                             .on_hover_text("ISL link line width in pixels");
                     });
                 });

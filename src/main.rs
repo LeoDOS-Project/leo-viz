@@ -18,6 +18,7 @@ mod walker;
 mod pass;
 mod conjunction;
 mod kessler;
+mod physics;
 mod radiation;
 mod igrf;
 mod projection;

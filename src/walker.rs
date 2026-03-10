@@ -21,8 +21,7 @@ pub struct WalkerConstellation {
     pub raan_offset_deg: f64,
     pub raan_spacing_deg: Option<f64>,
     pub sat_spacing_km: Option<f64>,
-    pub isl_plane_count: usize,
-    pub isl_intra_count: usize,
+    pub isl_neighbors: usize,
     pub eccentricity: f64,
     pub arg_periapsis_deg: f64,
     pub planet_radius: f64,
@@ -242,30 +241,36 @@ impl WalkerConstellation {
             }
         }
 
-        let no_wrap = is_star || self.partial_coverage();
+        let no_plane_wrap = is_star || self.partial_coverage();
         let no_sat_wrap = self.partial_sat_coverage();
+        let offsets: &[(isize, isize)] = match self.isl_neighbors {
+            4 => &[(0, 1), (1, 0), (0, -1), (-1, 0)],
+            8 => &[(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)],
+            _ => &[],
+        };
+        let np = self.num_planes as isize;
+        let sp = sats_per_plane as isize;
         for i in 0..positions.len() {
-            let plane = positions[i].plane;
-            let sat_idx = positions[i].sat_index;
+            let plane = positions[i].plane as isize;
+            let sat_idx = positions[i].sat_index as isize;
             let mut nbrs = Vec::new();
-            for d in 1..=self.isl_plane_count {
-                if no_wrap && plane + d >= self.num_planes {
-                    break;
-                }
-                let target_plane = (plane + d) % self.num_planes;
-                let start = target_plane * sats_per_plane;
-                let j = start + sat_idx;
-                if j < positions.len() {
+            for &(dp, ds) in offsets {
+                let tp = plane + dp;
+                let ts = sat_idx + ds;
+                let tp = if no_plane_wrap {
+                    if tp < 0 || tp >= np { continue; } else { tp }
+                } else {
+                    ((tp % np) + np) % np
+                };
+                let ts = if no_sat_wrap {
+                    if ts < 0 || ts >= sp { continue; } else { ts }
+                } else {
+                    ((ts % sp) + sp) % sp
+                };
+                let j = (tp * sp + ts) as usize;
+                if j < positions.len() && j > i {
                     nbrs.push(j);
                 }
-            }
-            for d in 1..=self.isl_intra_count {
-                if no_sat_wrap && sat_idx + d >= sats_per_plane {
-                    break;
-                }
-                let target_sat = (sat_idx + d) % sats_per_plane;
-                let j = plane * sats_per_plane + target_sat;
-                nbrs.push(j);
             }
             positions[i].neighbors = nbrs;
         }
