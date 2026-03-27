@@ -13,6 +13,29 @@ use nalgebra::Matrix3;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, PartialEq)]
+pub enum Propagator {
+    Keplerian,
+    J2,
+    Numerical,
+    #[cfg(not(target_arch = "wasm32"))]
+    Lib42,
+}
+
+#[derive(Clone)]
+pub struct NumericalSatState {
+    pub pos: [f64; 3],
+    pub vel: [f64; 3],
+}
+
+#[derive(Clone)]
+pub struct NumericalState {
+    pub sats: Vec<NumericalSatState>,
+    pub time: f64,
+    pub config_hash: u64,
+}
+
+
+#[derive(Clone, Copy, PartialEq)]
 pub enum Preset {
     None,
     Starlink,
@@ -38,6 +61,7 @@ pub struct ConstellationConfig {
     pub eccentricity: f64,
     pub arg_periapsis: f64,
     pub isl_neighbors: usize,
+    pub propagator: Propagator,
     pub drag_enabled: bool,
     pub ballistic_coeff: f64,
     pub preset: Preset,
@@ -46,6 +70,7 @@ pub struct ConstellationConfig {
     pub show_physics_ui: bool,
     pub physics: crate::physics::PhysicsConfig,
     pub physics_state: Vec<crate::physics::SatellitePhysics>,
+    pub numerical: Option<NumericalState>,
 }
 
 impl ConstellationConfig {
@@ -64,6 +89,7 @@ impl ConstellationConfig {
             eccentricity: 0.0,
             arg_periapsis: 0.0,
             isl_neighbors: 4,
+            propagator: Propagator::Keplerian,
             drag_enabled: false,
             ballistic_coeff: 100.0,
             preset: Preset::None,
@@ -72,11 +98,25 @@ impl ConstellationConfig {
             show_physics_ui: false,
             physics: crate::physics::PhysicsConfig::default(),
             physics_state: Vec::new(),
+            numerical: None,
         }
     }
 
     pub fn total_sats(&self) -> usize {
         self.sats_per_plane * self.num_planes
+    }
+
+    pub fn orbital_config_hash(&self) -> u64 {
+        let mut h = 0u64;
+        h = h.wrapping_mul(31).wrapping_add(self.sats_per_plane as u64);
+        h = h.wrapping_mul(31).wrapping_add(self.num_planes as u64);
+        h = h.wrapping_mul(31).wrapping_add(self.altitude_km.to_bits());
+        h = h.wrapping_mul(31).wrapping_add(self.inclination.to_bits());
+        h = h.wrapping_mul(31).wrapping_add(self.eccentricity.to_bits());
+        h = h.wrapping_mul(31).wrapping_add(self.arg_periapsis.to_bits());
+        h = h.wrapping_mul(31).wrapping_add(self.phasing.to_bits());
+        h = h.wrapping_mul(31).wrapping_add(self.raan_offset.to_bits());
+        h
     }
 
     pub fn sso_inclination(altitude_km: f64, eccentricity: f64, planet_mu: f64, planet_j2: f64, planet_eq_radius: f64, planet_year_days: f64) -> Option<f64> {
@@ -104,6 +144,7 @@ impl ConstellationConfig {
             raan_spacing_deg: self.raan_spacing,
             sat_spacing_km: self.sat_spacing_km,
             isl_neighbors: self.isl_neighbors,
+            propagator: self.propagator,
             eccentricity: self.eccentricity,
             arg_periapsis_deg: self.arg_periapsis,
             planet_radius,

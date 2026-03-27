@@ -21,10 +21,25 @@ cargo build --release
 
 ## TODO
 
-- Ability to see other planets around the one currently being viewed. When 
+### Features
+
+- Ability to see other planets around the one currently being viewed. When
 zoomed out, we should be able to see the solar system.
 - Clicking another planet should make that planet be focused instead.
 - Camera tilt (Ctrl+drag) with perspective projection for viewing satellites from the side
+- Lambert solver for orbit transfer visualization (satellite maneuvers between orbits)
+- Two-impulse rendezvous planning (engine burns to move a satellite to meet another)
+
+### Realism
+
+- Euler-Hill relative motion for formation flying (drift modeling within tight clusters)
+- WGS84 ellipsoid model for precise ground track lat/lon
+- Per-satellite NRLMSISE-00 atmosphere drag (varies by position, time, solar activity) via leodos-lib42
+- EGM96 spherical harmonic gravity model via leodos-lib42
+- NASA 42 numerical integration propagator via leodos-lib42 (full force models: drag, solar pressure, higher-order gravity)
+- Lunar gravitational perturbations on satellite orbits
+- Precession/nutation frame transforms for long-term coordinate accuracy
+- Lagrange point visualization for cislunar orbits
 
 ## Image Credits
 

@@ -883,6 +883,28 @@ impl eframe::App for App {
                         let dh_ms = -rho * v_ms * a_m / cons.ballistic_coeff;
                         cons.altitude_km = (h + dh_ms * sim_seconds / 1000.0).max(0.0);
                     }
+                    if cons.propagator == crate::config::Propagator::Numerical {
+                        let j2_val = planet.celestial_body.j2();
+                        let re = planet.celestial_body.equatorial_radius_km();
+                        let current_time = tab.settings.time;
+                        let config_hash = cons.orbital_config_hash();
+                        let need_init = match &cons.numerical {
+                            Some(ns) => ns.config_hash != config_hash || ns.sats.len() != cons.sats_per_plane * cons.num_planes,
+                            None => true,
+                        };
+                        if need_init {
+                            let wc = cons.constellation(r_planet, mu, j2_val, re);
+                            cons.numerical = Some(wc.initialize_numerical_state(current_time, config_hash));
+                        } else {
+                            let ns = cons.numerical.as_mut().unwrap();
+                            if !crate::walker::step_numerical_state(ns, sim_seconds, mu, j2_val, re) {
+                                let wc = cons.constellation(r_planet, mu, j2_val, re);
+                                cons.numerical = Some(wc.initialize_numerical_state(current_time, config_hash));
+                            }
+                        }
+                    } else if cons.numerical.is_some() {
+                        cons.numerical = None;
+                    }
                 }
             }
         }

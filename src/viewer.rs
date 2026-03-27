@@ -6,7 +6,7 @@
 
 use crate::celestial::{CelestialBody, Skin, TextureResolution};
 use crate::config::{
-    AreaOfInterest, ConstellationConfig, DeviceLayer, GroundStation, Preset, TabConfig, View3DFlags,
+    AreaOfInterest, ConstellationConfig, DeviceLayer, GroundStation, NumericalState, Preset, Propagator, TabConfig, View3DFlags,
 };
 use crate::drawing::{
     draw_3d_view, draw_map_view, draw_torus, plane_color,
@@ -55,6 +55,82 @@ pub(crate) struct EditingPlaceState {
     pub(crate) planet_idx: usize,
     pub(crate) screen_pos: egui::Pos2,
     pub(crate) just_opened: bool,
+}
+
+fn numerical_state_to_positions(
+    wc: &WalkerConstellation,
+    ns: &NumericalState,
+) -> Vec<SatelliteState> {
+    let sats_per_plane = wc.sats_per_plane();
+    let is_star = wc.walker_type == WalkerType::Star;
+    let np = wc.num_planes as isize;
+    let sp = sats_per_plane as isize;
+
+    let partial_plane = wc.raan_spacing_deg.is_some() && {
+        let max_spread = match wc.walker_type {
+            WalkerType::Delta => 2.0 * std::f64::consts::PI,
+            WalkerType::Star => std::f64::consts::PI,
+        };
+        (wc.raan_step() * wc.num_planes as f64) < max_spread - 1e-9
+    };
+    let no_plane_wrap = is_star || partial_plane;
+    let no_sat_wrap = wc.sat_spacing_km.is_some() && {
+        let orbit_radius = wc.planet_radius + wc.altitude_km;
+        let step = wc.sat_spacing_km.unwrap() / orbit_radius;
+        (step * sats_per_plane as f64) < 2.0 * std::f64::consts::PI - 1e-9
+    };
+
+    let offsets: &[(isize, isize)] = match wc.isl_neighbors {
+        4 => &[(0, 1), (1, 0), (0, -1), (-1, 0)],
+        8 => &[(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)],
+        _ => &[],
+    };
+
+    let mut positions: Vec<SatelliteState> = ns.sats.iter().enumerate().map(|(i, sat)| {
+        let plane = i / sats_per_plane;
+        let sat_index = i % sats_per_plane;
+        let [x, y, z] = sat.pos;
+        let r = (x * x + y * y + z * z).sqrt();
+        let lat = (y / r).asin().to_degrees();
+        let lon = -z.atan2(x).to_degrees();
+        // Ascending if moving northward (vy > 0)
+        let ascending = sat.vel[1] > 0.0;
+        SatelliteState {
+            plane, sat_index, x, y, z, lat, lon, ascending,
+            neighbors: Vec::new(),
+            name: None,
+            tle_inclination_deg: None,
+            tle_mean_motion: None,
+        }
+    }).collect();
+
+    // Build neighbor links (same logic as WalkerConstellation)
+    for i in 0..positions.len() {
+        let plane = positions[i].plane as isize;
+        let sat_idx = positions[i].sat_index as isize;
+        let mut nbrs = Vec::new();
+        for &(dp, ds) in offsets {
+            let tp = plane + dp;
+            let ts = sat_idx + ds;
+            let tp = if no_plane_wrap {
+                if tp < 0 || tp >= np { continue; } else { tp }
+            } else {
+                ((tp % np) + np) % np
+            };
+            let ts = if no_sat_wrap {
+                if ts < 0 || ts >= sp { continue; } else { ts }
+            } else {
+                ((ts % sp) + sp) % sp
+            };
+            let j = (tp * sp + ts) as usize;
+            if j < positions.len() && j > i {
+                nbrs.push(j);
+            }
+        }
+        positions[i].neighbors = nbrs;
+    }
+
+    positions
 }
 
 pub(crate) struct ViewerState {
@@ -1793,6 +1869,19 @@ impl ViewerState {
                     });
 
                     ui.horizontal(|ui| {
+                        ui.label("Propagator:");
+                        ui.selectable_value(&mut cons.propagator, Propagator::Keplerian, "Keplerian")
+                            .on_hover_text("Two-body Keplerian (RAAN drift only)");
+                        ui.selectable_value(&mut cons.propagator, Propagator::J2, "J2")
+                            .on_hover_text("J2 secular perturbations (RAAN drift, ω precession, mean motion correction)");
+                        ui.selectable_value(&mut cons.propagator, Propagator::Numerical, "RK4")
+                            .on_hover_text("Numerical RK4 integration with J2 (per-satellite state, forward-only)");
+                        #[cfg(not(target_arch = "wasm32"))]
+                        ui.selectable_value(&mut cons.propagator, Propagator::Lib42, "J2 Osc")
+                            .on_hover_text("J2 osculating via NASA 42 (secular drifts + periodic SMA corrections)");
+                    });
+
+                    ui.horizontal(|ui| {
                         let old_type = cons.walker_type;
                         ui.selectable_value(&mut cons.walker_type, WalkerType::Delta, "Delta")
                             .on_hover_text("Walker-Delta: planes span 360° RAAN");
@@ -2018,7 +2107,15 @@ impl ViewerState {
                 .filter(|(_, c)| !c.hidden)
                 .map(|(orig_idx, c)| {
                     let wc = c.constellation(planet_radius, planet_mu, planet_j2, planet_eq_radius);
-                    let pos = wc.satellite_positions(self.tabs[tab_idx].settings.time);
+                    let pos = if c.propagator == Propagator::Numerical {
+                        if let Some(ns) = &c.numerical {
+                            numerical_state_to_positions(&wc, ns)
+                        } else {
+                            wc.satellite_positions(self.tabs[tab_idx].settings.time)
+                        }
+                    } else {
+                        wc.satellite_positions(self.tabs[tab_idx].settings.time)
+                    };
                     let name = c.preset_name().to_string();
                     (wc, pos, c.color_offset, 0u8, orig_idx, name)
                 })
@@ -2090,6 +2187,7 @@ impl ViewerState {
                             raan_spacing_deg: None,
                             sat_spacing_km: None,
                             isl_neighbors: 0,
+                            propagator: Propagator::Keplerian,
                             eccentricity: 0.0,
                             arg_periapsis_deg: 0.0,
                             planet_radius,
@@ -2113,6 +2211,7 @@ impl ViewerState {
                         raan_spacing_deg: None,
                         sat_spacing_km: None,
                         isl_neighbors: 0,
+                        propagator: Propagator::Keplerian,
                         eccentricity: 0.0,
                         arg_periapsis_deg: 0.0,
                         planet_radius,
@@ -2195,6 +2294,7 @@ impl ViewerState {
                         raan_spacing_deg: None,
                         sat_spacing_km: None,
                         isl_neighbors: 0,
+                        propagator: Propagator::Keplerian,
                         eccentricity: 0.0,
                         arg_periapsis_deg: 0.0,
                         planet_radius,

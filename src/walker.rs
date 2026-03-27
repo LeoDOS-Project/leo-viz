@@ -3,6 +3,8 @@
 //! Implements Walker Delta and Walker Star satellite constellation patterns,
 //! computing orbital positions, RAAN drift, and inter-satellite neighbor links.
 
+use crate::config::{NumericalSatState, NumericalState, Propagator};
+
 use std::f64::consts::PI;
 
 #[derive(Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -22,6 +24,7 @@ pub struct WalkerConstellation {
     pub raan_spacing_deg: Option<f64>,
     pub sat_spacing_km: Option<f64>,
     pub isl_neighbors: usize,
+    pub propagator: Propagator,
     pub eccentricity: f64,
     pub arg_periapsis_deg: f64,
     pub planet_radius: f64,
@@ -165,8 +168,6 @@ impl WalkerConstellation {
         let period = 2.0 * PI * (semi_major.powi(3) / self.planet_mu).sqrt();
         let mean_motion = 2.0 * PI / period;
         let inc = self.inclination_deg.to_radians();
-        let inc_cos = inc.cos();
-        let inc_sin = inc.sin();
         let raan_step = self.raan_step();
         let raan_offset = -self.raan_offset_deg.to_radians();
         let sat_step = self.sat_step();
@@ -174,9 +175,6 @@ impl WalkerConstellation {
         let omega = self.arg_periapsis_deg.to_radians();
 
         let phase_step = self.phasing * 2.0 * PI / self.total_sats as f64;
-
-        let r_ratio = self.planet_equatorial_radius / semi_major;
-        let raan_drift_rate = -1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion * inc_cos;
 
         let center_offset = if self.partial_coverage() {
             raan_step * (self.num_planes - 1) as f64 / 2.0
@@ -189,31 +187,147 @@ impl WalkerConstellation {
             0.0
         };
         let dead = self.altitude_km < 100.0;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let use_lib42 = self.propagator == Propagator::Lib42;
+        #[cfg(target_arch = "wasm32")]
+        let use_lib42 = false;
+
+        if use_lib42 {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // 42 uses meters internally
+                let sma_m = semi_major * 1000.0;
+                let mu_m = self.planet_mu * 1e9; // km³/s² → m³/s²
+                let re_m = self.planet_equatorial_radius * 1000.0;
+                let j2 = self.planet_j2;
+                let slr_m = sma_m * (1.0 - ecc * ecc);
+                let re_slr = re_m / slr_m;
+                let n = (mu_m / (sma_m * sma_m * sma_m)).sqrt();
+                let j2_rw2bya = j2 * re_m * re_m / sma_m;
+
+                // J2 secular drift rates (same as 42's formulas)
+                let raan_dot = -1.5 * j2 * re_slr * re_slr * n * inc.cos();
+                let argp_dot = 1.5 * j2 * re_slr * re_slr * n * (2.0 - 2.5 * inc.sin().powi(2));
+
+                for plane in 0..self.num_planes {
+                    let raan_initial = raan_offset + raan_step * plane as f64 - center_offset;
+                    let phase_offset = phase_step * plane as f64;
+
+                    for sat in 0..sats_per_plane {
+                        let m0 = sat_step * sat as f64 - sat_center_offset + phase_offset;
+
+                        let mut orb = leodos_lib42::sim::OrbitType::default();
+                        orb.Regime = 2; // ORB_CENTRAL
+                        orb.World = 3;  // EARTH
+                        orb.Exists = 1;
+                        orb.mu = mu_m;
+                        orb.SMA = sma_m;
+                        orb.MeanSMA = sma_m;
+                        orb.ecc = ecc;
+                        orb.inc = inc;
+                        orb.RAAN = raan_initial;
+                        orb.RAAN0 = raan_initial;
+                        orb.ArgP = omega;
+                        orb.ArgP0 = omega;
+                        orb.MeanAnom = m0;
+                        orb.MeanAnom0 = m0;
+                        orb.MeanMotion = n;
+                        orb.Period = 2.0 * PI / n;
+                        orb.SLR = slr_m;
+                        orb.alpha = 1.0 / sma_m;
+                        orb.rmin = sma_m * (1.0 - ecc);
+                        orb.Epoch = 0.0;
+                        orb.J2DriftEnabled = if dead { 0 } else { 1 };
+                        orb.RAANdot = raan_dot;
+                        orb.ArgPdot = argp_dot;
+                        orb.J2Rw2bya = j2_rw2bya;
+
+                        // DynTime = simulation time in seconds
+                        leodos_lib42::orbit::mean_eph_to_rv(&mut orb, time);
+
+                        // PosN is in meters, convert to km
+                        // 42 uses ECI: x,y equatorial, z north
+                        // Walker uses: x,z equatorial, y north
+                        let x = orb.PosN[0] / 1000.0;
+                        let y = orb.PosN[2] / 1000.0;
+                        let z = -orb.PosN[1] / 1000.0;
+
+                        let r = (x * x + y * y + z * z).sqrt();
+                        let ascending = (orb.anom + orb.ArgP).cos() > 0.0;
+                        let lat = (y / r).asin().to_degrees();
+                        let lon = -z.atan2(x).to_degrees();
+
+                        positions.push(SatelliteState {
+                            plane,
+                            sat_index: sat,
+                            x, y, z,
+                            lat, lon,
+                            ascending,
+                            neighbors: Vec::new(),
+                            name: None,
+                            tle_inclination_deg: None,
+                            tle_mean_motion: None,
+                        });
+                    }
+                }
+            }
+        } else {
+        let inc_cos = inc.cos();
+        let inc_sin = inc.sin();
+        let r_ratio = self.planet_equatorial_radius / semi_major;
+        let use_j2 = self.propagator == Propagator::J2;
+
+        // J2 secular perturbation rates
+        let e2 = ecc * ecc;
+        let one_minus_e2 = 1.0 - e2;
+        let p_factor = one_minus_e2 * one_minus_e2;
+        let j2_coeff = 1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion;
+
+        let raan_rate = if use_j2 {
+            -j2_coeff * inc_cos / p_factor
+        } else {
+            -j2_coeff * inc_cos
+        };
+        let omega_rate = if use_j2 {
+            j2_coeff * (2.0 - 2.5 * inc_sin * inc_sin) / p_factor
+        } else {
+            0.0
+        };
+        let m_dot = if use_j2 {
+            mean_motion + 0.75 * self.planet_j2 * r_ratio * r_ratio * mean_motion
+                * (3.0 * inc_cos * inc_cos - 1.0) * one_minus_e2.sqrt() / p_factor
+        } else {
+            mean_motion
+        };
+
         for plane in 0..self.num_planes {
             let raan_initial = raan_offset + raan_step * plane as f64 - center_offset;
-            let raan = raan_initial + if dead { 0.0 } else { raan_drift_rate * time };
+            let raan = raan_initial + if dead { 0.0 } else { raan_rate * time };
             let raan_cos = raan.cos();
             let raan_sin = raan.sin();
+            let omega_t = omega + if dead { 0.0 } else { omega_rate * time };
             let phase_offset = phase_step * plane as f64;
 
             for sat in 0..sats_per_plane {
-                let mean_anomaly = sat_step * sat as f64 - sat_center_offset + if dead { 0.0 } else { mean_motion * time } + phase_offset;
+                let mean_anomaly = sat_step * sat as f64 - sat_center_offset
+                    + if dead { 0.0 } else { m_dot * time } + phase_offset;
 
                 let true_anomaly = if ecc < 1e-8 {
                     mean_anomaly
                 } else {
                     let mut ea = mean_anomaly;
                     for _ in 0..10 {
-                        ea = ea - (ea - ecc * ea.sin() - mean_anomaly) / (1.0 - ecc * ea.cos());
+                        ea -= (ea - ecc * ea.sin() - mean_anomaly) / (1.0 - ecc * ea.cos());
                     }
                     2.0 * ((1.0 + ecc).sqrt() * (ea / 2.0).sin())
                         .atan2((1.0 - ecc).sqrt() * (ea / 2.0).cos())
                 };
 
                 let r = semi_major * (1.0 - ecc * ecc) / (1.0 + ecc * true_anomaly.cos());
-                let ascending = (true_anomaly + omega).cos() > 0.0;
+                let ascending = (true_anomaly + omega_t).cos() > 0.0;
 
-                let angle = true_anomaly + omega;
+                let angle = true_anomaly + omega_t;
                 let x_orbital = r * angle.cos();
                 let y_orbital = -r * angle.sin();
 
@@ -227,11 +341,8 @@ impl WalkerConstellation {
                 positions.push(SatelliteState {
                     plane,
                     sat_index: sat,
-                    x,
-                    y,
-                    z,
-                    lat,
-                    lon,
+                    x, y, z,
+                    lat, lon,
                     ascending,
                     neighbors: Vec::new(),
                     name: None,
@@ -239,6 +350,7 @@ impl WalkerConstellation {
                     tle_mean_motion: None,
                 });
             }
+        }
         }
 
         let no_plane_wrap = is_star || self.partial_coverage();
@@ -322,4 +434,224 @@ impl WalkerConstellation {
             })
             .collect()
     }
+
+    /// Initialize numerical state from Keplerian elements at given time.
+    pub fn initialize_numerical_state(&self, time: f64, config_hash: u64) -> NumericalState {
+        let sats_per_plane = self.sats_per_plane();
+        let perigee_radius = self.planet_radius + self.altitude_km;
+        let ecc = self.eccentricity;
+        let semi_major = perigee_radius / (1.0 - ecc);
+        let period = 2.0 * PI * (semi_major.powi(3) / self.planet_mu).sqrt();
+        let mean_motion = 2.0 * PI / period;
+        let inc = self.inclination_deg.to_radians();
+        let inc_cos = inc.cos();
+        let inc_sin = inc.sin();
+        let raan_step = self.raan_step();
+        let raan_offset = -self.raan_offset_deg.to_radians();
+        let sat_step = self.sat_step();
+        let omega = self.arg_periapsis_deg.to_radians();
+        let phase_step = self.phasing * 2.0 * PI / self.total_sats as f64;
+        let mu = self.planet_mu;
+        let p = semi_major * (1.0 - ecc * ecc);
+
+        let r_ratio = self.planet_equatorial_radius / semi_major;
+        let e2 = ecc * ecc;
+        let p_factor = (1.0 - e2) * (1.0 - e2);
+        let j2_coeff = 1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion;
+        let raan_rate = -j2_coeff * inc_cos / p_factor;
+        let omega_rate = j2_coeff * (2.0 - 2.5 * inc_sin * inc_sin) / p_factor;
+        let m_dot = mean_motion + 0.75 * self.planet_j2 * r_ratio * r_ratio * mean_motion
+            * (3.0 * inc_cos * inc_cos - 1.0) * (1.0 - e2).sqrt() / p_factor;
+
+        let center_offset = if self.partial_coverage() {
+            raan_step * (self.num_planes - 1) as f64 / 2.0
+        } else {
+            0.0
+        };
+        let sat_center_offset = if self.partial_sat_coverage() {
+            sat_step * (sats_per_plane - 1) as f64 / 2.0
+        } else {
+            0.0
+        };
+        let dead = self.altitude_km < 100.0;
+
+        let mut sats = Vec::with_capacity(self.total_sats);
+        for plane in 0..self.num_planes {
+            let raan_initial = raan_offset + raan_step * plane as f64 - center_offset;
+            let raan = raan_initial + if dead { 0.0 } else { raan_rate * time };
+            let raan_cos = raan.cos();
+            let raan_sin = raan.sin();
+            let omega_t = omega + if dead { 0.0 } else { omega_rate * time };
+            let phase_offset = phase_step * plane as f64;
+
+            for sat in 0..sats_per_plane {
+                let mean_anomaly = sat_step * sat as f64 - sat_center_offset
+                    + if dead { 0.0 } else { m_dot * time } + phase_offset;
+
+                let true_anomaly = if ecc < 1e-8 {
+                    mean_anomaly
+                } else {
+                    let mut ea = mean_anomaly;
+                    for _ in 0..10 {
+                        ea -= (ea - ecc * ea.sin() - mean_anomaly) / (1.0 - ecc * ea.cos());
+                    }
+                    2.0 * ((1.0 + ecc).sqrt() * (ea / 2.0).sin())
+                        .atan2((1.0 - ecc).sqrt() * (ea / 2.0).cos())
+                };
+
+                let r = semi_major * (1.0 - ecc * ecc) / (1.0 + ecc * true_anomaly.cos());
+                let u = true_anomaly + omega_t;
+
+                // Position in orbital frame
+                let x_o = r * u.cos();
+                let y_o = -r * u.sin();
+
+                // Position in walker coords
+                let x = x_o * raan_cos - y_o * inc_cos * raan_sin;
+                let z = x_o * raan_sin + y_o * inc_cos * raan_cos;
+                let y = -y_o * inc_sin;
+
+                // Velocity in orbital frame
+                let h = (mu * p).sqrt();
+                let r_dot = (mu / p).sqrt() * ecc * true_anomaly.sin();
+                let u_dot = h / (r * r);
+                let vx_o = r_dot * u.cos() - r * u_dot * u.sin();
+                let vy_o = -(r_dot * u.sin() + r * u_dot * u.cos());
+
+                // Velocity in walker coords (same rotation)
+                let vx = vx_o * raan_cos - vy_o * inc_cos * raan_sin;
+                let vz = vx_o * raan_sin + vy_o * inc_cos * raan_cos;
+                let vy = -vy_o * inc_sin;
+
+                sats.push(NumericalSatState {
+                    pos: [x, y, z],
+                    vel: [vx, vy, vz],
+                });
+            }
+        }
+
+        NumericalState { sats, time, config_hash }
+    }
+}
+
+/// J2 gravitational acceleration in walker coords (y = polar axis).
+fn j2_acceleration(pos: &[f64; 3], mu: f64, j2: f64, re: f64) -> [f64; 3] {
+    let x = pos[0];
+    let y = pos[1]; // polar
+    let z = pos[2];
+    let r2 = x * x + y * y + z * z;
+    let r = r2.sqrt();
+    let r5 = r2 * r2 * r;
+    let factor = -1.5 * j2 * mu * re * re / r5;
+    let y2_r2 = 5.0 * y * y / r2;
+    [
+        factor * x * (1.0 - y2_r2),
+        factor * y * (3.0 - y2_r2),
+        factor * z * (1.0 - y2_r2),
+    ]
+}
+
+/// Compute total acceleration (two-body + J2).
+fn acceleration(pos: &[f64; 3], mu: f64, j2: f64, re: f64) -> [f64; 3] {
+    let r2 = pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2];
+    let r = r2.sqrt();
+    let r3 = r2 * r;
+    let mu_r3 = -mu / r3;
+    let j2a = j2_acceleration(pos, mu, j2, re);
+    [
+        mu_r3 * pos[0] + j2a[0],
+        mu_r3 * pos[1] + j2a[1],
+        mu_r3 * pos[2] + j2a[2],
+    ]
+}
+
+/// RK4 step for a single satellite. Updates pos and vel in-place.
+fn rk4_step(
+    pos: &mut [f64; 3],
+    vel: &mut [f64; 3],
+    dt: f64,
+    mu: f64,
+    j2: f64,
+    re: f64,
+) {
+    let p0 = *pos;
+    let v0 = *vel;
+    let a0 = acceleration(&p0, mu, j2, re);
+
+    let p1 = [
+        p0[0] + 0.5 * dt * v0[0],
+        p0[1] + 0.5 * dt * v0[1],
+        p0[2] + 0.5 * dt * v0[2],
+    ];
+    let v1 = [
+        v0[0] + 0.5 * dt * a0[0],
+        v0[1] + 0.5 * dt * a0[1],
+        v0[2] + 0.5 * dt * a0[2],
+    ];
+    let a1 = acceleration(&p1, mu, j2, re);
+
+    let p2 = [
+        p0[0] + 0.5 * dt * v1[0],
+        p0[1] + 0.5 * dt * v1[1],
+        p0[2] + 0.5 * dt * v1[2],
+    ];
+    let v2 = [
+        v0[0] + 0.5 * dt * a1[0],
+        v0[1] + 0.5 * dt * a1[1],
+        v0[2] + 0.5 * dt * a1[2],
+    ];
+    let a2 = acceleration(&p2, mu, j2, re);
+
+    let p3 = [
+        p0[0] + dt * v2[0],
+        p0[1] + dt * v2[1],
+        p0[2] + dt * v2[2],
+    ];
+    let v3 = [
+        v0[0] + dt * a2[0],
+        v0[1] + dt * a2[1],
+        v0[2] + dt * a2[2],
+    ];
+    let a3 = acceleration(&p3, mu, j2, re);
+
+    for i in 0..3 {
+        pos[i] = p0[i] + dt / 6.0 * (v0[i] + 2.0 * v1[i] + 2.0 * v2[i] + v3[i]);
+        vel[i] = v0[i] + dt / 6.0 * (a0[i] + 2.0 * a1[i] + 2.0 * a2[i] + a3[i]);
+    }
+}
+
+/// Step all satellites in a numerical state by sim_seconds.
+/// Uses sub-steps of at most `max_step` seconds (10s for LEO).
+/// Returns false if reinit is needed (time jump too large).
+pub fn step_numerical_state(
+    state: &mut NumericalState,
+    sim_seconds: f64,
+    mu: f64,
+    j2: f64,
+    re: f64,
+) -> bool {
+    if sim_seconds.abs() < 1e-12 {
+        return true;
+    }
+
+    // For reverse time, signal reinit needed
+    if sim_seconds < 0.0 {
+        return false;
+    }
+
+    let max_step = 10.0; // seconds
+    let max_total_steps = 10_000;
+    let n_steps = ((sim_seconds / max_step).ceil() as usize).max(1);
+    if n_steps > max_total_steps {
+        return false; // time jump too large, need reinit
+    }
+    let dt = sim_seconds / n_steps as f64;
+
+    for sat in &mut state.sats {
+        for _ in 0..n_steps {
+            rk4_step(&mut sat.pos, &mut sat.vel, dt, mu, j2, re);
+        }
+    }
+    state.time += sim_seconds;
+    true
 }
