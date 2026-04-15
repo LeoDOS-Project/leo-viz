@@ -2105,6 +2105,18 @@ pub fn draw_3d_view(
                     .color(egui::Color32::from_rgb(255, 100, 255))
                     .width(1.5),
             );
+            let label_offset = axis_len * 1.15;
+            let (gmn_x, gmn_y, _) = rotate_point_matrix(
+                mx * label_offset, my * label_offset, mz * label_offset,
+                &surface_rotation,
+            );
+            let (gms_x, gms_y, _) = rotate_point_matrix(
+                -mx * label_offset, -my * label_offset, -mz * label_offset,
+                &surface_rotation,
+            );
+            let mag_color = egui::Color32::from_rgb(255, 150, 255);
+            plot_ui.text(Text::new("", PlotPoint::new(gmn_x, gmn_y), "GM-N").color(mag_color));
+            plot_ui.text(Text::new("", PlotPoint::new(gms_x, gms_y), "GM-S").color(mag_color));
         }
 
         if show_orbits {
@@ -2650,12 +2662,19 @@ pub fn draw_3d_view(
 
                     if is_kessler {
                         if hide_behind_earth && !in_front { continue; }
-                        let alpha = if in_front { 220u8 } else { 80 };
+                        let alpha = if in_front { 220u8 } else { 100 };
                         let c = egui::Color32::from_rgba_unmultiplied(255, 60, 60, alpha);
-                        let r = scaled_sat_radius * 0.75;
-                        plot_ui.points(
-                            Points::new("", PlotPoints::new(vec![[rx, ry]]))
-                                .color(c).radius(r).filled(true),
+                        // Same cross rendering as TLE debris, so Kessler
+                        // fragments read as "debris" at a glance.
+                        let d = scaled_sat_radius as f64 * 1.5 * margin / (width as f64 * 0.5);
+                        let w = if in_front { 1.5 } else { 0.8 };
+                        plot_ui.line(
+                            egui_plot::Line::new("", PlotPoints::new(vec![[rx - d, ry - d], [rx + d, ry + d]]))
+                                .color(c).width(w),
+                        );
+                        plot_ui.line(
+                            egui_plot::Line::new("", PlotPoints::new(vec![[rx - d, ry + d], [rx + d, ry - d]]))
+                                .color(c).width(w),
                         );
                         continue;
                     }
@@ -3236,6 +3255,20 @@ pub fn draw_3d_view(
             if !seen.insert((name.as_str(), *color_offset)) { continue; }
             let color = if *tle_kind == 3 {
                 egui::Color32::from_rgb(255, 60, 60)
+            } else if *tle_kind == 2 {
+                // Mirror the debris X palette defined in the satellite rendering
+                // block so the legend swatch matches the on-globe colour.
+                if name.starts_with("Fengyun") {
+                    egui::Color32::from_rgb(255, 70, 70)
+                } else if name.starts_with("Cosmos 2251") {
+                    egui::Color32::from_rgb(70, 230, 90)
+                } else if name.starts_with("Iridium 33") {
+                    egui::Color32::from_rgb(90, 160, 255)
+                } else if name.starts_with("Cosmos 1408") {
+                    egui::Color32::from_rgb(255, 220, 70)
+                } else {
+                    plane_color(*color_offset)
+                }
             } else {
                 plane_color(*color_offset)
             };
@@ -4763,12 +4796,15 @@ pub fn plane_color(plane: usize) -> egui::Color32 {
     if plane < COLORS.len() {
         return COLORS[plane];
     }
-    // Beyond the base palette, generate distinct colors using golden-ratio hue spacing
+    // Beyond the base palette, generate distinct colors using golden-ratio
+    // hue spacing. Saturation and value are kept high so generated colors
+    // stay readable on dark backgrounds (the old formula could drop value
+    // to ~0.7, producing near-black purples and blues).
     let golden = 0.6180339887498949_f32;
     let hue = ((plane as f32) * golden).fract();
-    let sat = 0.7 + 0.3 * (((plane / COLORS.len()) as f32) * golden).fract();
-    let val = 0.85 + 0.15 * ((((plane / (COLORS.len() * 3)) as f32) * golden).fract() - 0.5) * 2.0;
-    hsv_to_color32(hue, sat, val.clamp(0.6, 1.0))
+    let sat = 0.65 + 0.2 * (((plane / COLORS.len()) as f32) * golden).fract();
+    let val = 0.9 + 0.1 * (((plane / (COLORS.len() * 3)) as f32) * golden).fract();
+    hsv_to_color32(hue, sat, val.clamp(0.85, 1.0))
 }
 
 fn hsv_to_color32(h: f32, s: f32, v: f32) -> egui::Color32 {
@@ -4797,7 +4833,7 @@ pub const COLORS: [egui::Color32; 16] = [
     egui::Color32::from_rgb(238, 130, 238),
     egui::Color32::from_rgb(0, 206, 209),
     egui::Color32::from_rgb(255, 140, 0),
-    egui::Color32::from_rgb(147, 112, 219),
+    egui::Color32::from_rgb(190, 150, 255),
     egui::Color32::from_rgb(0, 255, 127),
     egui::Color32::from_rgb(255, 105, 180),
     egui::Color32::from_rgb(100, 149, 237),

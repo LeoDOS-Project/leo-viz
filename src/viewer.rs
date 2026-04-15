@@ -196,6 +196,7 @@ pub(crate) struct ViewerState {
     pub(crate) view_width: f32,
     pub(crate) view_height: f32,
     pub(crate) solar_system_handles: HashMap<CelestialBody, egui::TextureHandle>,
+    pub(crate) planet_sizes_handles: HashMap<CelestialBody, egui::TextureHandle>,
     pub(crate) ss_last_render_instant: Option<web_time::Instant>,
     pub(crate) planet_sizes_t: f64,
     pub(crate) planet_sizes_auto_zoom: bool,
@@ -236,20 +237,33 @@ impl TabViewer for ViewerState {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         if *tab < self.tabs.len() {
             if self.prev_active_tab_idx != *tab && self.prev_active_tab_idx < self.tabs.len() {
-                if self.tabs[*tab].settings.reset_time_on_switch {
-                    self.tabs[*tab].settings.time = 0.0;
-                    for planet in &mut self.tabs[*tab].planets {
-                        for cons in &mut planet.constellations {
-                            cons.numerical = None;
-                        }
-                    }
-                } else {
-                    let prev_time = self.tabs[self.prev_active_tab_idx].settings.time;
-                    self.tabs[*tab].settings.time = prev_time;
+                // Full reset on tab switch so each demo opens in its designed
+                // initial state, regardless of whatever state the previous tab
+                // accumulated.
+                let tab_mut = &mut self.tabs[*tab];
+                tab_mut.settings.time = 0.0;
+                tab_mut.settings.auto_zoom_time = 0.0;
+                if let Some(init) = tab_mut.settings.initial_rotation {
+                    tab_mut.settings.rotation = init;
                 }
-                // Tab changed — restart the auto-cycle countdown from zero so
-                // switching tabs gives a full interval on the new tab.
+                for planet in &mut tab_mut.planets {
+                    planet.ground_track_history.clear();
+                    planet.conjunction_prev_positions.clear();
+                    planet.kessler.collided_pairs.clear();
+                    planet.kessler.debris.clear();
+                    planet.kessler.collision_count = 0;
+                    planet.kessler.collision_id_counter = 0;
+                    planet.kessler.active_corrections.clear();
+                    planet.kessler.corrections_made = 0;
+                    for cons in &mut planet.constellations {
+                        cons.numerical = None;
+                        cons.physics_state.clear();
+                    }
+                }
+                // Auto-cycle countdown restarts so the new tab gets a full interval.
                 self.last_cycle_time = 0.0;
+                self.ss_auto_zoom_time = 0.0;
+                self.planet_sizes_auto_time = 0.0;
             }
             self.prev_active_tab_idx = *tab;
             self.active_tab_idx = *tab;
@@ -1578,7 +1592,17 @@ impl ViewerState {
                                         let is_clustered_selected = split_active && selected_loaded.contains(preset);
                                         ui.horizontal(|ui| {
                                             if !split_active {
-                                                let color = plane_color(preset.color_index());
+                                                // Debris presets render with the dedicated bright
+                                                // X palette in drawing.rs; mirror that here so the
+                                                // legend swatch matches what the user sees on the
+                                                // globe.
+                                                let color = match preset {
+                                                    TlePreset::Fengyun1cDebris => egui::Color32::from_rgb(255, 70, 70),
+                                                    TlePreset::Cosmos2251Debris => egui::Color32::from_rgb(70, 230, 90),
+                                                    TlePreset::Iridium33Debris => egui::Color32::from_rgb(90, 160, 255),
+                                                    TlePreset::Cosmos1408Debris => egui::Color32::from_rgb(255, 220, 70),
+                                                    _ => plane_color(preset.color_index()),
+                                                };
                                                 let rect = ui.allocate_space(egui::vec2(10.0, 10.0)).1;
                                                 ui.painter().rect_filled(rect, 2.0, color);
                                                 ui.painter().rect_filled(rect.shrink(2.5), 1.0, egui::Color32::BLACK);
@@ -3626,6 +3650,11 @@ impl ViewerState {
                                 } else {
                                     1.0 - (t - 2.0 * stay - scroll) / scroll
                                 };
+                                // Classic smoothstep: 3t^2 - 2t^3.
+                                // Gentler ease than t^3/(t^3+(1-t)^3) — avoids
+                                // the "slow-fast-slow" feel of sharper curves.
+                                let s = frac;
+                                let frac = s * s * (3.0 - 2.0 * s);
 
                                 let half = (start + (end - start) * frac).exp();
 
@@ -3728,7 +3757,7 @@ impl ViewerState {
                         };
                         if let Some(body) = crate::solar_system::draw_planet_sizes(
                             ui,
-                            &self.solar_system_handles,
+                            &self.planet_sizes_handles,
                             &mut self.planet_sizes_t,
                             &mut az,
                         ) {

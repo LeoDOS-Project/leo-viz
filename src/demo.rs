@@ -226,7 +226,6 @@ fn ground_track_demo(v: &mut ViewerState) {
     tab.settings.show_links = false;
     tab.settings.show_orbits = false;
     tab.settings.show_ground_tracks = true;
-    tab.settings.show_inclination_bounds = true;
     tab.settings.earth_fixed_camera = true;
     tab.settings.speed = 1000.0;
     tab.settings.rotation = crate::math::lat_lon_to_matrix(0.0, 0.0);
@@ -534,7 +533,7 @@ fn kessler_demo(v: &mut ViewerState) {
     tab.settings.show_links = false;
     tab.settings.speed = 50.0;
     tab.settings.single_color = true;
-    for (alt_diff, thresh, label) in [(5.0, 20.0, "Crossing"), (500.0, 20.0, "Separated")] {
+    for (alt_diff, thresh, label) in [(15.0, 20.0, "Crossing"), (500.0, 20.0, "Separated")] {
         tab.planet_counter += 1;
         let mut planet = PlanetConfig::new(format!("Earth ({})", label));
         planet.celestial_body = CelestialBody::Earth;
@@ -557,6 +556,11 @@ fn kessler_demo(v: &mut ViewerState) {
         cons2.altitude_km = 550.0 + alt_diff;
         cons2.walker_type = WalkerType::Star;
         cons2.phasing = 0.5;
+        // Offset the second constellation in RAAN and argument of periapsis so
+        // its satellites don't start at the same longitudes/phases as the
+        // first — prevents t=0 pairs from spawning right on top of each other.
+        cons2.raan_offset = 12.0;
+        cons2.arg_periapsis = 17.0;
         planet.constellations.push(cons2);
         tab.planets.push(planet);
     }

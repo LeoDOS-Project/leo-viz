@@ -282,6 +282,7 @@ impl App {
                 view_width: 800.0,
                 view_height: 600.0,
                 solar_system_handles: HashMap::new(),
+                planet_sizes_handles: HashMap::new(),
                 ss_last_render_instant: None,
                 planet_sizes_t: 0.0,
                 planet_sizes_auto_zoom: false,
@@ -1280,10 +1281,6 @@ impl eframe::App for App {
                 .unwrap_or(crate::config::ViewMode::Planet);
             let show_ss = vm == crate::config::ViewMode::SolarSystem;
             let show_planet_sizes = vm == crate::config::ViewMode::PlanetSizes;
-            let tab_time = v.tabs.get(active_tab_idx)
-                .map(|t| t.settings.time)
-                .unwrap_or(0.0);
-
             if show_ss || show_planet_sizes {
                 #[cfg(not(target_arch = "wasm32"))]
                 for &body in &CelestialBody::ALL {
@@ -1344,9 +1341,48 @@ impl eframe::App for App {
                     ));
                 }
 
-                let needs_render = v.solar_system_handles.is_empty();
+                let pending_bodies: Vec<CelestialBody> = {
+                    let handles = if show_planet_sizes {
+                        &v.planet_sizes_handles
+                    } else {
+                        &v.solar_system_handles
+                    };
+                    CelestialBody::ALL.iter()
+                        .copied()
+                        .filter(|b| !handles.contains_key(b))
+                        .collect()
+                };
+                let needs_render = !pending_bodies.is_empty();
+                // Amortize the initial render burst across frames: each frame
+                // renders at most one body, so the 14-body population cost is
+                // spread over ~14 frames instead of producing a single spike.
+                // Solar System and Planet Sizes don't rotate bodies, so the
+                // cached image never needs re-rendering after first creation.
+                let per_frame_cap: usize = 1;
                 if needs_render {
+                    ctx.request_repaint();
                     v.ss_last_render_instant = Some(web_time::Instant::now());
+                    // For Planet Sizes, eagerly load the 2K source texture for every
+                    // body so smaller planets (Haumea, Pluto, Makemake, etc.) don't
+                    // render from the 512-px default, which is visibly pixelated
+                    // once the body is stretched to the focused on-screen size.
+                    // Load high-res source textures only for the bodies we
+                    // are about to render this frame to avoid a large disk
+                    // I/O burst on initial entry.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if show_planet_sizes {
+                        for body in pending_bodies.iter().take(per_frame_cap).copied() {
+                            let key = (body, Skin::Default, TextureResolution::R2048);
+                            if v.planet_textures.contains_key(&key) { continue; }
+                            if let Some(path) = Skin::Default.filename(body, TextureResolution::R2048) {
+                                if let Ok(bytes) = std::fs::read(crate::texture::asset_path(path)) {
+                                    if let Ok(tex) = crate::texture::EarthTexture::from_bytes(&bytes) {
+                                        v.planet_textures.insert(key, std::sync::Arc::new(tex));
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let tilt = 30.0_f64.to_radians();
                     let cos_t = tilt.cos();
                     let sin_t = tilt.sin();
@@ -1360,7 +1396,11 @@ impl eframe::App for App {
                     sorted_bodies.sort_by(|a, b| b.radius_km().partial_cmp(&a.radius_km()).unwrap());
                     let focus_idx = (v.planet_sizes_t as usize).min(sorted_bodies.len().saturating_sub(1));
                     let focus_radius = sorted_bodies[focus_idx].radius_km();
-                    let max_render = if show_planet_sizes { 256 } else { 128 };
+                    // Planet Sizes view stretches planets to large on-screen sizes when
+                    // zoomed in, so we need a higher render resolution than the solar
+                    // system overview. The old 256-px cap produced a visibly pixelated
+                    // Jupiter/Sun when focused on small bodies like Mercury.
+                    let max_render = if show_planet_sizes { 1024 } else { 128 };
 
                     let gpu_ok = cfg!(not(target_arch = "wasm32")) && v.render_state.is_some();
                     if gpu_ok {
@@ -1369,23 +1409,61 @@ impl eframe::App for App {
                             let rs = v.render_state.as_ref().unwrap();
                             let mut wr = rs.renderer.write();
                             let gpu = wr.callback_resources.get_mut::<GpuResources>().unwrap();
+                            // Prefer a higher-resolution source texture for the Planet
+                            // Sizes view since the rendered sphere can fill much of
+                            // the screen when zoomed in on the largest bodies.
+                            let source_res = if show_planet_sizes {
+                                let r2 = (CelestialBody::Earth, Skin::Default, TextureResolution::R2048);
+                                if v.planet_textures.contains_key(&r2) { TextureResolution::R2048 }
+                                else {
+                                    let r1 = (CelestialBody::Earth, Skin::Default, TextureResolution::R1024);
+                                    if v.planet_textures.contains_key(&r1) { TextureResolution::R1024 }
+                                    else { TextureResolution::R512 }
+                                }
+                            } else {
+                                TextureResolution::R512
+                            };
                             for body in CelestialBody::ALL {
-                                let key = (body, Skin::Default, TextureResolution::R512);
+                                let key = (body, Skin::Default, source_res);
                                 if let Some(tex) = v.planet_textures.get(&key) {
                                     gpu.upload_texture(&rs.device, &rs.queue, key, tex);
+                                } else {
+                                    // Fall back to 512 for bodies that haven't loaded at higher res yet.
+                                    let fb_key = (body, Skin::Default, TextureResolution::R512);
+                                    if let Some(tex) = v.planet_textures.get(&fb_key) {
+                                        gpu.upload_texture(&rs.device, &rs.queue, fb_key, tex);
+                                    }
                                 }
                                 if let Some(ring_tex) = v.ring_textures.get(&body) {
                                     gpu.upload_ring_texture(&rs.device, &rs.queue, body, ring_tex);
                                 }
                             }
                             let mut requests = Vec::new();
-                            for body in CelestialBody::ALL {
-                                let key = (body, Skin::Default, TextureResolution::R512);
+                            for body in pending_bodies.iter().take(per_frame_cap).copied() {
+                                let body_key_hi = (body, Skin::Default, source_res);
+                                let key = if v.planet_textures.contains_key(&body_key_hi) {
+                                    body_key_hi
+                                } else {
+                                    (body, Skin::Default, TextureResolution::R512)
+                                };
                                 let ratio = (body.radius_km() / focus_radius).min(1.0);
                                 let body_max = if body == CelestialBody::Sun { max_render * 2 } else { max_render };
-                                let body_render_size = if ratio > 0.1 { body_max } else { ((body_max as f64 * ratio * 10.0) as usize).clamp(32, body_max) };
-                                let body_rot = body_rotation_angle(body, tab_time, v.current_gmst)
-                                    + 30.0_f64.to_radians();
+                                // For Planet Sizes always render at full body_max so
+                                // any body can be focused at high resolution. The
+                                // ratio-based downsizing is only applied in the
+                                // Solar System overview where bodies stay small on
+                                // screen at all times.
+                                let body_render_size = if show_planet_sizes {
+                                    body_max
+                                } else if ratio > 0.1 {
+                                    body_max
+                                } else {
+                                    ((body_max as f64 * ratio * 10.0) as usize).clamp(64, body_max)
+                                };
+                                // Static rotation: 0 rotation + 30° tilt, so the
+                                // cached image never depends on time and is rendered
+                                // exactly once per body.
+                                let body_rot = 30.0_f64.to_radians();
                                 let cos_a = body_rot.cos();
                                 let sin_a = body_rot.sin();
                                 let y_rot = Matrix3::new(
@@ -1399,26 +1477,35 @@ impl eframe::App for App {
                             }
                             let images = gpu.render_batch_to_images(&rs.device, &rs.queue, &requests);
                             for (body, image) in images {
-                                if let Some(handle) = v.solar_system_handles.get_mut(&body) {
+                                let handles = if show_planet_sizes {
+                                    &mut v.planet_sizes_handles
+                                } else {
+                                    &mut v.solar_system_handles
+                                };
+                                if let Some(handle) = handles.get_mut(&body) {
                                     handle.set(image, egui::TextureOptions::LINEAR);
                                 } else {
+                                    let label = if show_planet_sizes { "ps" } else { "ss" };
                                     let handle = ctx.load_texture(
-                                        format!("ss_{:?}", body),
+                                        format!("{}_{:?}", label, body),
                                         image,
                                         egui::TextureOptions::LINEAR,
                                     );
-                                    v.solar_system_handles.insert(body, handle);
+                                    handles.insert(body, handle);
                                 }
                             }
                         }
                     } else {
-                        for body in CelestialBody::ALL {
+                        for body in pending_bodies.iter().take(per_frame_cap).copied() {
                             let key = (body, Skin::Default, TextureResolution::R512);
                             if let Some(texture) = v.planet_textures.get(&key) {
                                 let ratio = (body.radius_km() / focus_radius).min(1.0);
-                                let body_render_size = ((max_render as f64 * ratio) as usize).clamp(32, max_render);
-                                let body_rot = body_rotation_angle(body, tab_time, v.current_gmst)
-                                    + 30.0_f64.to_radians();
+                                let body_render_size = if show_planet_sizes {
+                                    max_render
+                                } else {
+                                    ((max_render as f64 * ratio) as usize).clamp(32, max_render)
+                                };
+                                let body_rot = 30.0_f64.to_radians();
                                 let cos_a = body_rot.cos();
                                 let sin_a = body_rot.sin();
                                 let y_rot = Matrix3::new(
@@ -1427,19 +1514,29 @@ impl eframe::App for App {
                                     -sin_a, 0.0, cos_a,
                                 );
                                 let combined = tilt_mat * y_rot;
-                                let ring_tex = v.ring_textures.get(&body).map(|r| r.as_ref());
+                                let ring_tex = if show_planet_sizes {
+                                    None
+                                } else {
+                                    v.ring_textures.get(&body).map(|r| r.as_ref())
+                                };
                                 let image = texture.render_sphere_with_rings(
                                     body_render_size, &combined, body.flattening(), body, ring_tex,
                                 );
-                                if let Some(handle) = v.solar_system_handles.get_mut(&body) {
+                                let handles = if show_planet_sizes {
+                                    &mut v.planet_sizes_handles
+                                } else {
+                                    &mut v.solar_system_handles
+                                };
+                                if let Some(handle) = handles.get_mut(&body) {
                                     handle.set(image, egui::TextureOptions::LINEAR);
                                 } else {
+                                    let label = if show_planet_sizes { "ps" } else { "ss" };
                                     let handle = ctx.load_texture(
-                                        format!("ss_{:?}", body),
+                                        format!("{}_{:?}", label, body),
                                         image,
                                         egui::TextureOptions::LINEAR,
                                     );
-                                    v.solar_system_handles.insert(body, handle);
+                                    handles.insert(body, handle);
                                 }
                             }
                         }
@@ -1732,6 +1829,17 @@ impl eframe::App for App {
                             ).wrap_mode(egui::TextWrapMode::Truncate));
                             if button.clicked() {
                                 ui.memory_mut(|m| m.toggle_popup(popup_id));
+                            }
+                            if ui.small_button("⏭").on_hover_text("Next tab").clicked() {
+                                // Advance to the next tab in dock order, wrapping around.
+                                let active_pos = tab_data.iter().position(|&(_, _, i)| i == active);
+                                if let Some(pos) = active_pos {
+                                    let next_pos = (pos + 1) % tab_data.len().max(1);
+                                    if let Some(&(s, n, next_idx)) = tab_data.get(next_pos) {
+                                        self.dock_state.set_active_tab((s, n, egui_dock::TabIndex(next_pos)));
+                                        self.viewer.active_tab_idx = next_idx;
+                                    }
+                                }
                             }
                             let mut selected: Option<(egui_dock::SurfaceIndex, egui_dock::NodeIndex, usize, usize)> = None;
                             let mut demo_requested = false;

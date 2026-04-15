@@ -941,12 +941,10 @@ pub fn draw_solar_system_view(
             points.push(scale_position(ox, oy, log_power));
         }
 
-        // All planet orbits drawn white; the focused body still gets a
-        // slightly thicker line so it stands out.
         let orbit_color = if dark_mode {
-            eframe::egui::Color32::WHITE
+            eframe::egui::Color32::from_rgb(80, 220, 120)
         } else {
-            eframe::egui::Color32::BLACK
+            eframe::egui::Color32::from_rgb(30, 140, 60)
         };
         let orbit_width = if body == focused_body { 5.0 } else { 4.0 };
 
@@ -1036,7 +1034,7 @@ pub fn draw_solar_system_view(
         }
         // Belt label, placed just outside the outer edge on the +y axis so it
         // doesn't overlap with Ceres' orbit (which lies inside the belt).
-        let label_size = (90.0 / view_size.max(0.01)).clamp(12.0, 22.0) as f32;
+        let label_size = ((90.0 / view_size.max(0.01)).clamp(12.0, 22.0) as f32).round();
         plot_ui.text(
             Text::new(
                 "",
@@ -1091,7 +1089,11 @@ pub fn draw_solar_system_view(
         draw_circular_calendar(plot_ui, j2000_days, log_power, dark_mode);
     }
 
-    let base_label_size = (90.0 / view_size.max(0.01)).clamp(12.0, 22.0) as f32;
+    // Snap label size so the glyph atlas stays hot while view_size sweeps
+    // continuously during auto-zoom — otherwise each frame asks egui to
+    // rasterize a slightly-different pixel size and the CPU glyph-cache
+    // churn shows up as per-frame lag spikes.
+    let base_label_size = ((90.0 / view_size.max(0.01)).clamp(12.0, 22.0) as f32).round();
 
     for &(body, x, y, visual_radius) in &bodies {
         // In `hide_bodies` mode every planet body image is skipped — only the
@@ -1127,7 +1129,7 @@ pub fn draw_solar_system_view(
 
             let dist_from_center = (x * x + y * y).sqrt();
             let edge_frac = (dist_from_center / (view_size * 0.45)).clamp(0.0, 1.0) as f32;
-            let label_font_size = base_label_size + edge_frac * 4.0;
+            let label_font_size = (base_label_size + edge_frac * 4.0).round();
 
             let label_text = if body != CelestialBody::Sun {
                 let offset_p = SCALE_OFFSET.powf(log_power);
@@ -1446,15 +1448,19 @@ pub fn draw_planet_sizes(
             let stay = auto_zoom.stay_duration as f64;
             let cycle = 2.0 * (stay + scroll);
             let t = auto_zoom.time % cycle;
-            let target = if t < stay {
+            let frac = if t < stay {
                 0.0
             } else if t < stay + scroll {
-                (t - stay) / scroll * total
+                (t - stay) / scroll
             } else if t < 2.0 * stay + scroll {
-                total
+                1.0
             } else {
-                (2.0 - (t - 2.0 * stay) / scroll) * total
+                1.0 - (t - 2.0 * stay - scroll) / scroll
             };
+            // Classic smoothstep: 3t^2 - 2t^3. Gentler than the rational ease.
+            let s = frac;
+            let eased = s * s * (3.0 - 2.0 * s);
+            let target = eased * total;
 
             let seg = cum.partition_point(|&d| d <= target)
                 .saturating_sub(1).min(n - 2);
@@ -1510,19 +1516,24 @@ pub fn draw_planet_sizes(
 
             if r_px > 3.0 {
                 let decay = ((*zoom_t - j as f64) * 0.3).exp() as f32;
-                let name_size = (base_name * decay).max(7.0);
-                let km_size = (base_km * decay).max(5.0);
-                let sub_size = (base_km * decay * 0.9).max(5.0);
+                // Smooth scaling: rasterize each label once at the max font
+                // size (base_name / base_km) and then scale the tessellated
+                // mesh by `decay`. The glyph atlas stays hot across frames
+                // and the GPU interpolates between frames — no per-frame
+                // rasterization wobble.
+                let scale = decay.clamp(0.2, 1.0);
                 let vert_extent = r_px;
-                let mut label_y = center_y + vert_extent + 8.0;
-                painter.text(
-                    egui::Pos2::new(cx, label_y),
-                    egui::Align2::CENTER_TOP,
-                    body.label(),
-                    egui::FontId::proportional(name_size),
-                    text_color,
-                );
-                label_y += name_size + 2.0;
+                // If the body's labels would fall below the view (e.g. Sun
+                // focused with r_px > half view), anchor the label stack
+                // inside the body so it stays visible.
+                let total_label_h = (base_name + base_km * 0.9 + base_km + 6.0) * scale;
+                let below_y = center_y + vert_extent + 8.0;
+                let label_y_start = if below_y + total_label_h > rect.bottom() - 4.0 {
+                    (rect.bottom() - total_label_h - 4.0).max(center_y)
+                } else {
+                    below_y
+                };
+
                 let subtitle = if let Some(parent) = body.parent_body() {
                     Some(format!("Moon of {}", parent.label()))
                 } else {
@@ -1532,23 +1543,44 @@ pub fn draw_planet_sizes(
                         _ => None,
                     }
                 };
+
+                let mut entries: Vec<(String, f32, egui::Color32)> = Vec::new();
+                entries.push((body.label().to_string(), base_name, text_color));
                 if let Some(sub) = subtitle {
-                    painter.text(
-                        egui::Pos2::new(cx, label_y),
-                        egui::Align2::CENTER_TOP,
-                        sub,
-                        egui::FontId::proportional(sub_size),
-                        weak_color,
-                    );
-                    label_y += sub_size + 2.0;
+                    entries.push((sub, base_km * 0.9, weak_color));
                 }
-                painter.text(
-                    egui::Pos2::new(cx, label_y),
-                    egui::Align2::CENTER_TOP,
-                    format!("{:.0} km", body.radius_km()),
-                    egui::FontId::proportional(km_size),
-                    weak_color,
+                entries.push((format!("{:.0} km", body.radius_km()), base_km, weak_color));
+
+                let ppp = ui.ctx().pixels_per_point();
+                let font_tex_size = ui.ctx().fonts(|f| f.font_image_size());
+                let mut tess = egui::epaint::Tessellator::new(
+                    ppp,
+                    egui::epaint::TessellationOptions::default(),
+                    font_tex_size,
+                    Vec::new(),
                 );
+
+                let mut local_y = 0.0f32;
+                for (text, size, color) in entries {
+                    let galley = painter.layout_no_wrap(text, egui::FontId::proportional(size), color);
+                    let gw = galley.size().x;
+                    let gh = galley.size().y;
+                    let text_shape = egui::epaint::TextShape::new(
+                        egui::Pos2::new(-gw * 0.5, local_y),
+                        galley,
+                        color,
+                    );
+                    let mut mesh = egui::epaint::Mesh::default();
+                    tess.tessellate_text(&text_shape, &mut mesh);
+                    for v in &mut mesh.vertices {
+                        v.pos = egui::Pos2::new(
+                            cx + v.pos.x * scale,
+                            label_y_start + v.pos.y * scale,
+                        );
+                    }
+                    painter.add(egui::Shape::Mesh(std::sync::Arc::new(mesh)));
+                    local_y += gh + 2.0;
+                }
             }
         }
 

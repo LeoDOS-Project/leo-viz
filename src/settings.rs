@@ -504,8 +504,8 @@ impl ViewerState {
             ui.indent("body_opts", |ui| {
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_axes, "Show axes"))
                     .on_hover_text("Display X/Y/Z coordinate axes");
-                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_magnetic_axis, "Show magnetic axis"))
-                    .on_hover_text("Show the magnetic dipole axis");
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_magnetic_axis, "Show geomagnetic axis"))
+                    .on_hover_text("Best-fit dipole axis of Earth's magnetic field (GM-N / GM-S)");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_terminator, "Show sunrise/sunset circle"))
                     .on_hover_text("Draw the day-night terminator line");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_eclipse, "Show eclipsed satellites"))
