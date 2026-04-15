@@ -96,14 +96,13 @@ pub struct GpuResources {
     pub _target_format: wgpu::TextureFormat,
 
     pub sun_ub: wgpu::Buffer,
-    pub map_ub: wgpu::Buffer,
     pub planet_bg_queue: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     pub planet_bg_paint_idx: std::sync::atomic::AtomicUsize,
     pub heatmap_bg_queue: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     pub heatmap_bg_paint_idx: std::sync::atomic::AtomicUsize,
+    pub map_bg_queue: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+    pub map_bg_paint_idx: std::sync::atomic::AtomicUsize,
     pub sun_bg: Option<wgpu::BindGroup>,
-    pub map_bg: Option<wgpu::BindGroup>,
-    pub map_bg_key: u64,
     pub texture_gen: u64,
 
     pub rad_trace_pipeline: wgpu::ComputePipeline,
@@ -329,7 +328,6 @@ impl GpuResources {
             mapped_at_creation: false,
         });
         let sun_ub = make_ub("sun_ub", std::mem::size_of::<SunUniforms>() as u64);
-        let map_ub = make_ub("map_ub", std::mem::size_of::<MapUniforms>() as u64);
 
         let sun_bg = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sun_bg"),
@@ -485,11 +483,12 @@ impl GpuResources {
             dummy_view,
             _dummy_view_rgba: dummy_view_rgba,
             _target_format: format,
-            sun_ub, map_ub,
+            sun_ub,
             planet_bg_queue: Vec::new(), planet_bg_paint_idx: std::sync::atomic::AtomicUsize::new(0),
             heatmap_bg_queue: Vec::new(), heatmap_bg_paint_idx: std::sync::atomic::AtomicUsize::new(0),
-            sun_bg, map_bg: None,
-            map_bg_key: 0, texture_gen: 0,
+            map_bg_queue: Vec::new(), map_bg_paint_idx: std::sync::atomic::AtomicUsize::new(0),
+            sun_bg,
+            texture_gen: 0,
             rad_trace_pipeline, rad_blur_pipeline, rad_reduce_pipeline, rad_finalize_pipeline,
             rad_compute_bgl, rad_bg_ab, rad_bg_ba,
             rad_params_buf, rad_aep8_buf, rad_grid_a, rad_grid_b, rad_max_buf,
@@ -1083,6 +1082,15 @@ impl MapPaintCallback {
 impl CallbackTrait for MapPaintCallback {
     fn prepare(&self, device: &wgpu::Device, queue: &wgpu::Queue, _sd: &ScreenDescriptor, _enc: &mut wgpu::CommandEncoder, res: &mut CallbackResources) -> Vec<wgpu::CommandBuffer> {
         let gpu = res.get_mut::<GpuResources>().unwrap();
+        // Reset the queue when the paint index has caught up (start of a new
+        // frame). Otherwise multiple map views in the same frame would share
+        // a single uniform buffer and all end up rendering with the last
+        // projection that got prepared.
+        let paint_idx = gpu.map_bg_paint_idx.load(std::sync::atomic::Ordering::Relaxed);
+        if paint_idx >= gpu.map_bg_queue.len() {
+            gpu.map_bg_queue.clear();
+            gpu.map_bg_paint_idx.store(0, std::sync::atomic::Ordering::Relaxed);
+        }
         let [bx0, bx1, by0, by1] = *self.shared_bounds.lock();
         let (peirce, inv_scale) = if self.proj_shader_id == 10 {
             let c = crate::projection::peirce_const();
@@ -1095,27 +1103,31 @@ impl CallbackTrait for MapPaintCallback {
             peirce,
             proj_invscale: [self.proj_shader_id as f32, inv_scale, 0.0, 0.0],
         };
-        queue.write_buffer(&gpu.map_ub, 0, bytemuck::bytes_of(&uniforms));
-        let gen = gpu.texture_gen;
-        if gpu.map_bg.is_none() || gpu.map_bg_key != gen {
-            let earth_v = gpu.map_texture_view.as_ref().unwrap_or(&gpu.dummy_view);
-            gpu.map_bg = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("map_bg"),
-                layout: &gpu.map_bgl,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: gpu.map_ub.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&gpu.sampler_repeat) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(earth_v) },
-                ],
-            }));
-            gpu.map_bg_key = gen;
-        }
+        let ub = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("map_ub_inst"),
+            size: std::mem::size_of::<MapUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&ub, 0, bytemuck::bytes_of(&uniforms));
+        let earth_v = gpu.map_texture_view.as_ref().unwrap_or(&gpu.dummy_view);
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("map_bg_inst"),
+            layout: &gpu.map_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: ub.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&gpu.sampler_repeat) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(earth_v) },
+            ],
+        });
+        gpu.map_bg_queue.push((ub, bg));
         Vec::new()
     }
 
     fn paint(&self, _info: egui::PaintCallbackInfo, render_pass: &mut wgpu::RenderPass<'static>, res: &CallbackResources) {
         let gpu = res.get::<GpuResources>().unwrap();
-        if let Some(ref bg) = gpu.map_bg {
+        let idx = gpu.map_bg_paint_idx.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some((_, ref bg)) = gpu.map_bg_queue.get(idx) {
             render_pass.set_pipeline(&gpu.map_pipeline);
             render_pass.set_bind_group(0, bg, &[]);
             render_pass.draw(0..4, 0..1);

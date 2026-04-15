@@ -500,7 +500,12 @@ impl eframe::App for App {
                 }
                 gpu.evict_unused_textures(&bodies_needed);
                 let needs_map_texture = v.tabs.get(active_tab_idx)
-                    .map(|t| t.settings.planet_projection != crate::projection::ProjectionKind::Orthographic)
+                    .map(|t| {
+                        // Tab-level projection is non-orthographic, or ANY planet
+                        // has a per-planet override that isn't orthographic.
+                        t.settings.planet_projection != crate::projection::ProjectionKind::Orthographic
+                            || t.planets.iter().any(|p| matches!(p.projection_override, Some(pk) if pk != crate::projection::ProjectionKind::Orthographic))
+                    })
                     .unwrap_or(false);
                 if needs_map_texture {
                     for (body, skin, res) in &bodies_needed {
@@ -589,7 +594,10 @@ impl eframe::App for App {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let need_geo = v.show_borders || v.show_cities
-                || v.tabs.iter().any(|t| t.settings.planet_projection != crate::projection::ProjectionKind::Orthographic);
+                || v.tabs.iter().any(|t| {
+                    t.settings.planet_projection != crate::projection::ProjectionKind::Orthographic
+                        || t.planets.iter().any(|p| matches!(p.projection_override, Some(pk) if pk != crate::projection::ProjectionKind::Orthographic))
+                });
             if need_geo && matches!(v.geo_data, GeoLoadState::NotLoaded) {
                 let (tx, rx) = mpsc::channel();
                 v.geo_fetch_rx = Some(rx);

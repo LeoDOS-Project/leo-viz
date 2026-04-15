@@ -520,6 +520,8 @@ impl ViewerState {
                     .on_hover_text("Draw latitude/longitude grid lines");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_ground_tracks, "Show ground tracks"))
                     .on_hover_text("Plot sub-satellite points for camera-tracked satellites");
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_inclination_bounds, "Inclination bounds"))
+                    .on_hover_text("Draw latitude circles at ±i for each constellation to show its maximum coverage");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_crosshairs, "Show crosshairs"))
                     .on_hover_text("Draw crosshair lines at the view center");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_day_night, "Show day/night"))

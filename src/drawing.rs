@@ -586,7 +586,7 @@ pub fn draw_3d_view(
         color_descending,
         color_links,
         show_sat_labels,
-        show_altitude_lines, altitude_line_width, render_planet, fixed_sizes, show_sat_border, show_polar_circle,
+        show_altitude_lines, altitude_line_width, show_inclination_bounds, render_planet, fixed_sizes, show_sat_border, show_polar_circle,
         show_equator, show_graticule, show_crosshairs, show_terminator, show_eclipse, show_sun, earth_fixed_camera, use_gpu_rendering,
         show_clouds, show_day_night, show_city_lights, show_stars, show_borders, show_cities,
         trackpad_rotate,
@@ -1589,6 +1589,67 @@ pub fn draw_3d_view(
                 if !back_seg.is_empty() && !hide_behind_earth {
                     plot_ui.line(Line::new("", PlotPoints::new(back_seg))
                         .color(grat_dim).width(0.5));
+                }
+            }
+        }
+
+        if show_inclination_bounds {
+            // Draw the two latitude circles at ±inclination for each non-TLE
+            // constellation, using that constellation's colour. This visualises
+            // the maximum latitude reachable by satellites in that orbit.
+            let n_pts = 200;
+            for (_, _, color_offset, tle_kind, _, _) in constellations {
+                if *tle_kind != 0 { continue; }
+                let inc = match constellations.iter()
+                    .find(|(_, _, co, _, _, _)| co == color_offset)
+                    .map(|(c, _, _, _, _, _)| c.inclination_deg.abs().min(90.0))
+                {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let base_color = plane_color(*color_offset);
+                let dim_color = egui::Color32::from_rgba_unmultiplied(
+                    base_color.r(), base_color.g(), base_color.b(), 90,
+                );
+                for sign in [1.0_f64, -1.0_f64] {
+                    let lat = (sign * inc).to_radians();
+                    let cos_lat = lat.cos();
+                    let sin_lat = lat.sin();
+                    let mut front_seg: Vec<[f64; 2]> = Vec::new();
+                    let mut back_seg: Vec<[f64; 2]> = Vec::new();
+                    for i in 0..=n_pts {
+                        let theta = 2.0 * PI * i as f64 / n_pts as f64;
+                        let x = planet_radius * cos_lat * theta.cos();
+                        let y = planet_radius * sin_lat;
+                        let z = planet_radius * cos_lat * theta.sin();
+                        let (rx, ry, rz) = rotate_point_matrix(x, y, z, &surface_rotation);
+                        let occluded = rz < 0.0 && (rx * rx + ry * ry) < earth_r_sq;
+                        if occluded {
+                            if !front_seg.is_empty() {
+                                plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut front_seg)))
+                                    .color(base_color).width(2.0));
+                            }
+                            back_seg.push([rx, ry]);
+                        } else {
+                            if !back_seg.is_empty() {
+                                if !hide_behind_earth {
+                                    plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut back_seg)))
+                                        .color(dim_color).width(1.0));
+                                } else {
+                                    back_seg.clear();
+                                }
+                            }
+                            front_seg.push([rx, ry]);
+                        }
+                    }
+                    if !front_seg.is_empty() {
+                        plot_ui.line(Line::new("", PlotPoints::new(front_seg))
+                            .color(base_color).width(2.0));
+                    }
+                    if !back_seg.is_empty() && !hide_behind_earth {
+                        plot_ui.line(Line::new("", PlotPoints::new(back_seg))
+                            .color(dim_color).width(1.0));
+                    }
                 }
             }
         }

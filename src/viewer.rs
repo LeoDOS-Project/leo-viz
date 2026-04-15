@@ -467,17 +467,29 @@ impl ViewerState {
         let num_planets = self.tabs[tab_idx].planets.len();
         let available_rect = ui.available_rect_before_wrap();
         let gap = 4.0;
-        let total_gap = gap * (num_planets.saturating_sub(1)) as f32;
-        let planet_width = (available_rect.width() - total_gap) / num_planets as f32;
+        // Up to 3 planets share a single row; 4+ planets break into a 3-column
+        // grid that wraps onto additional rows.
+        let cols = num_planets.min(3);
+        let rows = (num_planets + cols - 1) / cols.max(1);
+        let col_gap_total = gap * (cols.saturating_sub(1)) as f32;
+        let row_gap_total = gap * (rows.saturating_sub(1)) as f32;
+        let cell_width = (available_rect.width() - col_gap_total) / cols.max(1) as f32;
+        let cell_height = (available_rect.height() - row_gap_total) / rows.max(1) as f32;
 
         let mut add_planet = false;
         let mut planet_to_remove: Option<usize> = None;
 
         for planet_idx in 0..num_planets {
-            let x_offset = planet_idx as f32 * (planet_width + gap);
+            let col = planet_idx % cols;
+            let row = planet_idx / cols;
+            let x_offset = col as f32 * (cell_width + gap);
+            let y_offset = row as f32 * (cell_height + gap);
             let planet_rect = egui::Rect::from_min_size(
-                egui::pos2(available_rect.min.x + x_offset, available_rect.min.y),
-                egui::vec2(planet_width, available_rect.height()),
+                egui::pos2(
+                    available_rect.min.x + x_offset,
+                    available_rect.min.y + y_offset,
+                ),
+                egui::vec2(cell_width, cell_height),
             );
 
             ui.scope_builder(egui::UiBuilder::new().max_rect(planet_rect), |ui| {
@@ -486,12 +498,24 @@ impl ViewerState {
                 if should_remove { planet_to_remove = Some(planet_idx); }
             });
 
-            if planet_idx < num_planets - 1 {
-                let sep_x = available_rect.min.x + x_offset + planet_width + gap * 0.5;
+            // Vertical separator between columns within the same row.
+            if col < cols - 1 {
+                let sep_x = available_rect.min.x + x_offset + cell_width + gap * 0.5;
                 ui.painter().line_segment(
                     [
-                        egui::pos2(sep_x, available_rect.min.y),
-                        egui::pos2(sep_x, available_rect.max.y),
+                        egui::pos2(sep_x, planet_rect.min.y),
+                        egui::pos2(sep_x, planet_rect.max.y),
+                    ],
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 80)),
+                );
+            }
+            // Horizontal separator between rows.
+            if row < rows - 1 && col == cols - 1 {
+                let sep_y = available_rect.min.y + y_offset + cell_height + gap * 0.5;
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(available_rect.min.x, sep_y),
+                        egui::pos2(available_rect.max.x, sep_y),
                     ],
                     egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 80)),
                 );
@@ -2157,7 +2181,13 @@ impl ViewerState {
                 .collect()
         };
 
-        if planet.show_tle_window {
+        // Render any selected TLE preset regardless of whether the TLE sidebar
+        // is open — this lets demos include live satellites without forcing
+        // the sidebar UI to be visible.
+        let any_tle_selected = planet.tle_selections
+            .iter()
+            .any(|(_, (selected, _, _))| *selected);
+        if planet.show_tle_window || any_tle_selected {
             let propagation_minutes = self.start_timestamp.timestamp() as f64 / 60.0 + self.tabs[tab_idx].settings.time / 60.0;
             for preset in TlePreset::ALL.iter() {
                 let Some((selected, state, shells)) = planet.tle_selections.get(preset) else { continue };
@@ -3009,7 +3039,11 @@ impl ViewerState {
         let view_mode = settings.view_mode;
         let render_planet = view_mode == crate::config::ViewMode::Planet;
         let show_torus = settings.show_torus && render_planet;
-        let planet_projection = settings.planet_projection;
+        // Projection can be overridden per-planet; fall back to the tab-wide
+        // setting when no override is set.
+        let planet_projection = self.tabs[tab_idx].planets[planet_idx]
+            .projection_override
+            .unwrap_or(settings.planet_projection);
         let show_solar_system = view_mode == crate::config::ViewMode::SolarSystem;
         let show_planet_sizes = view_mode == crate::config::ViewMode::PlanetSizes;
         let show_orbits = settings.show_orbits;
@@ -3099,6 +3133,7 @@ impl ViewerState {
         let show_sat_labels = settings.show_sat_labels;
         let show_altitude_lines = settings.show_altitude_lines;
         let altitude_line_width = settings.altitude_line_width;
+        let show_inclination_bounds = settings.show_inclination_bounds;
         let show_ground_tracks = settings.show_ground_tracks;
         let tex_res = self.texture_resolution;
         let planet_handle = self.planet_image_handles.get(&(celestial_body, skin, tex_res));
@@ -3216,7 +3251,7 @@ impl ViewerState {
                             color_descending,
                             color_links,
                             show_sat_labels,
-                            show_altitude_lines, altitude_line_width, render_planet, fixed_sizes, show_sat_border, show_polar_circle,
+                            show_altitude_lines, altitude_line_width, show_inclination_bounds, render_planet, fixed_sizes, show_sat_border, show_polar_circle,
                             show_equator, show_graticule, show_crosshairs, show_terminator, show_eclipse, show_sun, earth_fixed_camera,
                             use_gpu_rendering: self.use_gpu_rendering, show_clouds, show_day_night, show_city_lights,
                             show_stars, show_borders, show_cities,

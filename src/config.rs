@@ -246,6 +246,9 @@ pub struct PlanetConfig {
     /// Accumulated sub-satellite points per tracked satellite, keyed by
     /// (constellation_idx, plane, sat_index). Stored as (lat_deg, lon_deg, sim_time_s).
     pub ground_track_history: HashMap<(usize, usize, usize), Vec<(f64, f64, f64)>>,
+    /// Optional per-planet projection override. When `None`, the tab's
+    /// `TabSettings.planet_projection` is used.
+    pub projection_override: Option<crate::projection::ProjectionKind>,
 }
 
 impl PlanetConfig {
@@ -291,6 +294,7 @@ impl PlanetConfig {
             moon_inclination_override: None,
             auto_cluster_tle: false,
             ground_track_history: HashMap::new(),
+            projection_override: None,
         }
     }
 
@@ -324,6 +328,7 @@ pub struct View3DFlags {
     pub show_sat_labels: bool,
     pub show_altitude_lines: bool,
     pub altitude_line_width: f32,
+    pub show_inclination_bounds: bool,
     pub render_planet: bool,
     pub fixed_sizes: bool,
     pub show_sat_border: bool,
@@ -459,6 +464,7 @@ pub struct TabSettings {
     pub sun_fixed_camera: bool,
     pub show_ground_tracks: bool,
     pub altitude_line_width: f32,
+    pub show_inclination_bounds: bool,
 }
 
 impl Default for TabSettings {
@@ -542,6 +548,7 @@ impl Default for TabSettings {
             sun_fixed_camera: false,
             show_ground_tracks: false,
             altitude_line_width: 0.5,
+            show_inclination_bounds: false,
         }
     }
 }

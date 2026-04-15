@@ -92,7 +92,7 @@ fn coverage_demo(v: &mut ViewerState) {
     tab.settings.rotation = crate::math::lat_lon_to_matrix(45.0_f64.to_radians(), 0.0);
     for (alt, label) in [(300.0, "300 km"), (600.0, "600 km")] {
         tab.planet_counter += 1;
-        let mut planet = PlanetConfig::new(format!("Earth ({})", label));
+        let mut planet = PlanetConfig::new(format!("Earth ({}, 50° half-cone)", label));
         planet.celestial_body = CelestialBody::Earth;
         let mut cons = ConstellationConfig::new(0);
         cons.sats_per_plane = 20;
@@ -226,9 +226,10 @@ fn ground_track_demo(v: &mut ViewerState) {
     tab.settings.show_links = false;
     tab.settings.show_orbits = false;
     tab.settings.show_ground_tracks = true;
+    tab.settings.show_inclination_bounds = true;
     tab.settings.earth_fixed_camera = true;
     tab.settings.speed = 1000.0;
-    tab.settings.rotation = crate::math::lat_lon_to_matrix(30.0_f64.to_radians(), 0.0);
+    tab.settings.rotation = crate::math::lat_lon_to_matrix(0.0, 0.0);
     tab.planet_counter += 1;
     let mut planet = PlanetConfig::new("Earth".to_string());
     planet.celestial_body = CelestialBody::Earth;
@@ -876,6 +877,80 @@ fn all_tle_demo(v: &mut ViewerState) {
     v.tabs.push(tab);
 }
 
+fn projections_demo(v: &mut ViewerState) {
+    v.tab_counter += 1;
+    let mut tab = TabConfig::new_empty("Map Projections".to_string());
+    tab.title = "Map Projections".to_string();
+    tab.description = indoc::indoc! {"
+            Real Starlink satellites rendered in six different **map projections** side by side.
+
+            Every map projection distorts the Earth's spherical surface in some way to fit it on a flat (or near-flat) canvas, and different projections preserve different properties.
+
+            • **Orthographic** shows a hemisphere as seen from infinity. Shapes near the limb are compressed but the view is intuitive.
+            • **Mercator** preserves angles and shapes locally (conformal), so compass directions are straight lines. Area explodes near the poles (Greenland looks huge).
+            • **Mollweide** is equal-area; country areas are proportional to reality, at the cost of distorting shapes.
+            • **Azimuthal Equidistant** preserves distance from the center; common for polar and radio-range maps, famously used on the UN flag.
+            • **HEALPix** tiles the sphere into equal-area pixels along four rhombic slices; common in cosmology for all-sky survey data.
+            • **Sinusoidal** is equal-area with straight parallels; the outer profile is a pair of sine curves.
+        "}.to_string();
+    tab.settings.sat_radius = 0.5;
+    tab.settings.earth_fixed_camera = true;
+    tab.settings.zoom = 1.0;
+    let projections = [
+        (crate::projection::ProjectionKind::Orthographic, "Orthographic"),
+        (crate::projection::ProjectionKind::Mercator, "Mercator"),
+        (crate::projection::ProjectionKind::Mollweide, "Mollweide"),
+        (crate::projection::ProjectionKind::AzimuthalEquidistant, "Azimuthal Equidistant"),
+        (crate::projection::ProjectionKind::HEALPix, "HEALPix"),
+        (crate::projection::ProjectionKind::Sinusoidal, "Sinusoidal"),
+    ];
+    for (proj, label) in projections {
+        tab.planet_counter += 1;
+        let mut planet = PlanetConfig::new(label.to_string());
+        planet.celestial_body = CelestialBody::Earth;
+        planet.projection_override = Some(proj);
+        planet.show_tle_window = false;
+        planet.auto_cluster_tle = true;
+        planet
+            .tle_selections
+            .insert(TlePreset::Starlink, (true, TleLoadState::NotLoaded, None));
+        tab.planets.push(planet);
+    }
+    v.tabs.push(tab);
+}
+
+fn all_tle_map_demo(v: &mut ViewerState) {
+    v.tab_counter += 1;
+    let mut tab = TabConfig::new_empty("Live data of all constellations (map)".to_string());
+    tab.title = "Live data of all constellations (map)".to_string();
+    tab.description = indoc::indoc! {"
+            The same live TLE catalogue, projected onto an equirectangular world map.
+
+            An **equirectangular projection** lays longitude and latitude on perpendicular axes, so each satellite's instantaneous sub-satellite point is plotted directly. Distances are distorted (badly at the poles), but the layout makes it easy to read which constellations sit at which altitudes and inclinations.
+
+            The sinusoidal bands traced by each orbital plane are the familiar **ground-track waves**. Altitude shells show up as distinct horizontal bands; polar-orbit constellations fill wide latitude ranges, while low-inclination shells stay near the equator.
+        "}.to_string();
+    tab.settings.sat_radius = 1.5;
+    tab.settings.planet_projection = crate::projection::ProjectionKind::Equirectangular;
+    tab.settings.earth_fixed_camera = true;
+    tab.settings.zoom = 1.0;
+    tab.planet_counter += 1;
+    let mut planet = PlanetConfig::new("Earth".to_string());
+    planet.celestial_body = CelestialBody::Earth;
+    planet.show_tle_window = true;
+    for preset in TlePreset::ALL {
+        let selected = !matches!(
+            preset,
+            TlePreset::Last30Days | TlePreset::Brightest100 | TlePreset::ActiveSats
+        );
+        planet
+            .tle_selections
+            .insert(preset, (selected, TleLoadState::NotLoaded, None));
+    }
+    tab.planets.push(planet);
+    v.tabs.push(tab);
+}
+
 fn debris_demo(v: &mut ViewerState) {
     v.tab_counter += 1;
     let mut tab = TabConfig::new_empty("Live data of debris".to_string());
@@ -1057,6 +1132,8 @@ impl App {
         starlink_iris_demo(v);
         starlink_tle_demo(v);
         all_tle_demo(v);
+        all_tle_map_demo(v);
+        projections_demo(v);
         iss_demo(v);
         // Context & scale
         solar_system_demo(v);
