@@ -259,13 +259,52 @@ pub fn parse_tle_data(data: &str) -> Result<Vec<TleSatellite>, String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn tle_cache_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tle_cache")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn tle_cache_path(url: &str) -> std::path::PathBuf {
+    let hash = url.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+    let cache_dir = tle_cache_dir();
+    let _ = std::fs::create_dir_all(&cache_dir);
+    cache_dir.join(format!("{:016x}.tle", hash))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn fetch_tle_data(url: &str) -> Result<Vec<TleSatellite>, String> {
-    let response = ureq::get(url)
-        .call()
-        .map_err(|e| format!("HTTP error: {}", e))?;
+    let cache_path = tle_cache_path(url);
+    let max_age = std::time::Duration::from_secs(24 * 3600);
+    let cache_exists = cache_path.exists();
+    if cache_exists {
+        if let Ok(meta) = std::fs::metadata(&cache_path) {
+            if let Ok(modified) = meta.modified() {
+                if modified.elapsed().unwrap_or(max_age) < max_age {
+                    if let Ok(body) = std::fs::read_to_string(&cache_path) {
+                        return parse_tle_data(&body);
+                    }
+                }
+            }
+        }
+    }
+
+    let response = match ureq::get(url).call() {
+        Ok(r) => r,
+        Err(e) => {
+            // Network failed — fall back to stale cache if available
+            if cache_exists {
+                if let Ok(body) = std::fs::read_to_string(&cache_path) {
+                    return parse_tle_data(&body);
+                }
+            }
+            return Err(format!("HTTP error: {}", e));
+        }
+    };
 
     let body = response.into_string()
         .map_err(|e| format!("Read error: {}", e))?;
+
+    let _ = std::fs::write(&cache_path, &body);
 
     parse_tle_data(&body)
 }

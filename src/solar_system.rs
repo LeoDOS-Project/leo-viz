@@ -425,7 +425,7 @@ pub fn draw_circular_calendar(
             label_screen,
             eframe::egui::Align2::CENTER_CENTER,
             month_names[m],
-            eframe::egui::FontId::proportional(9.0),
+            eframe::egui::FontId::proportional(16.0),
             label_color,
         );
     }
@@ -881,6 +881,7 @@ pub fn draw_solar_system_view(
     _asteroid_sprite: Option<&eframe::egui::TextureHandle>,
     show_labels: bool,
     show_calendar: bool,
+    hide_bodies: bool,
 ) -> Option<CelestialBody> {
     let j2000_days = (timestamp - *J2000_EPOCH).num_seconds() as f64 / 86400.0;
 
@@ -940,12 +941,14 @@ pub fn draw_solar_system_view(
             points.push(scale_position(ox, oy, log_power));
         }
 
-        let orbit_color = if body == focused_body {
-            body.display_color()
+        // All planet orbits drawn white; the focused body still gets a
+        // slightly thicker line so it stands out.
+        let orbit_color = if dark_mode {
+            eframe::egui::Color32::WHITE
         } else {
-            body.display_color().gamma_multiply(0.4)
+            eframe::egui::Color32::BLACK
         };
-        let orbit_width = if body == focused_body { 2.0 } else { 1.0 };
+        let orbit_width = if body == focused_body { 5.0 } else { 4.0 };
 
         plot_ui.line(
             Line::new("", points)
@@ -984,54 +987,143 @@ pub fn draw_solar_system_view(
         }
     }
 
-    let mut ast_positions: Vec<(usize, f64, f64)> = Vec::new();
-    if !asteroids.is_empty() {
-        let belt_scaled = (3.0 + SCALE_OFFSET).powf(log_power) - SCALE_OFFSET.powf(log_power);
-        let alpha = ((belt_scaled / view_size * 4.0).clamp(0.0, 1.0).powi(2) * 255.0) as u8;
-        let asteroid_color = if dark_mode {
-            eframe::egui::Color32::from_rgba_unmultiplied(180, 160, 140, alpha.min(120))
+    // Asteroid belt rendered as a filled annulus between 2.2 AU and 3.3 AU
+    // (the canonical inner/outer edges of the main belt). Built from triangle
+    // strips because egui_plot Polygons don't support holes. Edges are outlined
+    // for clarity.
+    {
+        let fill_color = if dark_mode {
+            eframe::egui::Color32::from_rgba_unmultiplied(210, 190, 160, 70)
         } else {
-            eframe::egui::Color32::from_rgba_unmultiplied(120, 100, 80, alpha.min(140))
+            eframe::egui::Color32::from_rgba_unmultiplied(110, 85, 55, 90)
         };
-        let mut pts: Vec<[f64; 2]> = Vec::with_capacity(asteroids.len());
-        for (idx, ast) in asteroids.iter().enumerate() {
-            let pos = asteroid_position(ast, j2000_days);
-            let scaled = scale_position(pos[0], pos[1], log_power);
-            ast_positions.push((idx, scaled[0], scaled[1]));
-            pts.push([scaled[0], scaled[1]]);
+        let edge_color = if dark_mode {
+            eframe::egui::Color32::from_rgba_unmultiplied(220, 200, 170, 200)
+        } else {
+            eframe::egui::Color32::from_rgba_unmultiplied(110, 85, 55, 220)
+        };
+        let inner_scaled = (2.2_f64 + SCALE_OFFSET).powf(log_power) - SCALE_OFFSET.powf(log_power);
+        let outer_scaled = (3.3_f64 + SCALE_OFFSET).powf(log_power) - SCALE_OFFSET.powf(log_power);
+        let segments = 128;
+        for i in 0..segments {
+            let t0 = 2.0 * std::f64::consts::PI * i as f64 / segments as f64;
+            let t1 = 2.0 * std::f64::consts::PI * (i + 1) as f64 / segments as f64;
+            let quad: Vec<[f64; 2]> = vec![
+                [inner_scaled * t0.cos(), inner_scaled * t0.sin()],
+                [outer_scaled * t0.cos(), outer_scaled * t0.sin()],
+                [outer_scaled * t1.cos(), outer_scaled * t1.sin()],
+                [inner_scaled * t1.cos(), inner_scaled * t1.sin()],
+            ];
+            plot_ui.polygon(
+                egui_plot::Polygon::new("", egui_plot::PlotPoints::new(quad))
+                    .fill_color(fill_color)
+                    .stroke(eframe::egui::Stroke::NONE),
+            );
         }
-        let ast_radius = (belt_scaled / view_size * 6.0).clamp(0.5, 4.0) as f32;
-        plot_ui.points(
-            egui_plot::Points::new("", pts)
-                .color(asteroid_color)
-                .radius(ast_radius),
+        // Inner and outer edge outlines.
+        for edge in [inner_scaled, outer_scaled] {
+            let pts: Vec<[f64; 2]> = (0..=segments)
+                .map(|i| {
+                    let t = 2.0 * std::f64::consts::PI * i as f64 / segments as f64;
+                    [edge * t.cos(), edge * t.sin()]
+                })
+                .collect();
+            plot_ui.line(
+                Line::new("", pts)
+                    .color(edge_color)
+                    .width(1.5),
+            );
+        }
+        // Belt label, placed just outside the outer edge on the +y axis so it
+        // doesn't overlap with Ceres' orbit (which lies inside the belt).
+        let label_size = (90.0 / view_size.max(0.01)).clamp(12.0, 22.0) as f32;
+        plot_ui.text(
+            Text::new(
+                "",
+                PlotPoint::new(0.0, outer_scaled + view_size * 0.03),
+                eframe::egui::RichText::new("Asteroid Belt").size(label_size),
+            )
+            .color(label_color),
         );
+    }
+
+    let mut ast_positions: Vec<(usize, f64, f64)> = Vec::new();
+    if !asteroids.is_empty() && !hide_bodies {
+        let belt_scaled = (3.0 + SCALE_OFFSET).powf(log_power) - SCALE_OFFSET.powf(log_power);
+        // Opaque from normal-zoom down to moderate zoom-out, then fade to zero
+        // when the view reaches outer-planet scales (Uranus ~19 AU, Neptune
+        // ~30 AU), so the belt doesn't clutter wide-system views. `ratio` is
+        // the fraction of the view that the belt occupies; 1.0 = belt fills
+        // the view, small values = zoomed way out.
+        let ratio = (belt_scaled / view_size) as f32;
+        let alpha_f = ((ratio - 0.06) / 0.10).clamp(0.0, 1.0);
+        if alpha_f > 0.0 {
+            let alpha = (alpha_f * 255.0) as u8;
+            let asteroid_color = if dark_mode {
+                eframe::egui::Color32::from_rgba_unmultiplied(230, 210, 180, alpha)
+            } else {
+                eframe::egui::Color32::from_rgba_unmultiplied(90, 70, 50, alpha)
+            };
+            let mut pts: Vec<[f64; 2]> = Vec::with_capacity(asteroids.len());
+            for (idx, ast) in asteroids.iter().enumerate() {
+                let pos = asteroid_position(ast, j2000_days);
+                let scaled = scale_position(pos[0], pos[1], log_power);
+                ast_positions.push((idx, scaled[0], scaled[1]));
+                pts.push([scaled[0], scaled[1]]);
+            }
+            let ast_radius = (ratio * 6.0).clamp(1.2, 5.0);
+            plot_ui.points(
+                egui_plot::Points::new("", pts)
+                    .color(asteroid_color)
+                    .radius(ast_radius),
+            );
+        } else {
+            // Still collect positions for hover/picking even when not drawn.
+            for (idx, ast) in asteroids.iter().enumerate() {
+                let pos = asteroid_position(ast, j2000_days);
+                let scaled = scale_position(pos[0], pos[1], log_power);
+                ast_positions.push((idx, scaled[0], scaled[1]));
+            }
+        }
     }
 
     if show_calendar {
         draw_circular_calendar(plot_ui, j2000_days, log_power, dark_mode);
     }
 
-    let base_label_size = (90.0 / view_size.max(0.01)).clamp(8.0, 16.0) as f32;
+    let base_label_size = (90.0 / view_size.max(0.01)).clamp(12.0, 22.0) as f32;
 
     for &(body, x, y, visual_radius) in &bodies {
-        if let Some(handle) = sphere_handles.get(&body) {
-            let ring_scale = body.ring_params().map(|(_, _, o)| o as f64).unwrap_or(1.0).max(1.0);
-            let img_size = (visual_radius * 2.0 * ring_scale) as f32;
-            plot_ui.image(PlotImage::new(
-                "",
-                handle.id(),
-                PlotPoint::new(x, y),
-                [img_size, img_size],
-            ));
+        // In `hide_bodies` mode every planet body image is skipped — only the
+        // Sun's texture is drawn. Orbits and labels remain so you can still
+        // see where each planet is without the rendered sphere.
+        let draw_body = !hide_bodies || body == CelestialBody::Sun;
+        if draw_body {
+            if let Some(handle) = sphere_handles.get(&body) {
+                let ring_scale = body.ring_params().map(|(_, _, o)| o as f64).unwrap_or(1.0).max(1.0);
+                let img_size = (visual_radius * 2.0 * ring_scale) as f32;
+                plot_ui.image(PlotImage::new(
+                    "",
+                    handle.id(),
+                    PlotPoint::new(x, y),
+                    [img_size, img_size],
+                ));
+            }
+        } else if body != CelestialBody::Sun && body.parent_body().is_none() {
+            // Mark the planet's position with a small filled dot so the viewer
+            // can still see where it is (same style as satellite markers).
+            plot_ui.points(
+                egui_plot::Points::new("", vec![[x, y]])
+                    .color(label_color)
+                    .radius(4.0)
+                    .filled(true),
+            );
         }
 
         if show_labels && (body.parent_body().is_none() || body == focused_body) {
-            let name_color = if body == focused_body {
-                body.display_color()
-            } else {
-                label_color
-            };
+            // Use the same label color for every planet (including the focused
+            // one) so Earth doesn't end up tinted blue when it's the focus.
+            let name_color = label_color;
 
             let dist_from_center = (x * x + y * y).sqrt();
             let edge_frac = (dist_from_center / (view_size * 0.45)).clamp(0.0, 1.0) as f32;
@@ -1378,8 +1470,8 @@ pub fn draw_planet_sizes(
         let layout_b = compute_layout((i + 1).min(n - 1));
         let center_y = rect.center().y;
 
-        let base_name = (view_h as f32 * 0.04).clamp(14.0, 36.0);
-        let base_km = (view_h as f32 * 0.03).clamp(10.0, 27.0);
+        let base_name = (view_h as f32 * 0.06).clamp(18.0, 48.0);
+        let base_km = (view_h as f32 * 0.045).clamp(14.0, 36.0);
 
         let mut screen_bodies: Vec<(CelestialBody, f32, f32)> = Vec::new();
 

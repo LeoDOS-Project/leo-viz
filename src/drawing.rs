@@ -19,7 +19,7 @@ use crate::texture::EarthTexture;
 use crate::walker::{WalkerType, WalkerConstellation, SatelliteState};
 use eframe::egui;
 use egui::mutex::Mutex;
-use egui_plot::{Line, MarkerShape, Plot, PlotImage, PlotPoint, PlotPoints, Points, Polygon, Text};
+use egui_plot::{Line, Plot, PlotImage, PlotPoint, PlotPoints, Points, Polygon, Text};
 use nalgebra::{Matrix3, Vector3};
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
@@ -27,8 +27,6 @@ use std::sync::Arc;
 
 use crate::EARTH_VISUAL_SCALE;
 
-pub const COLOR_ASCENDING: egui::Color32 = egui::Color32::from_rgb(200, 120, 50);
-pub const COLOR_DESCENDING: egui::Color32 = egui::Color32::from_rgb(50, 100, 180);
 
 fn normalize_field_nt(f: f64, r_earth_radii: f64) -> f64 {
     let ref_field = 30000.0 / r_earth_radii.powi(3);
@@ -113,6 +111,7 @@ pub fn draw_satellite_camera(
     coverage_angle: f64,
     earth_texture: &EarthTexture,
     planet_radius: f64,
+    heading_rad: f64,
 ) {
     let size = ui.available_size();
     let img_size = size.x.min(size.y - 40.0) as usize;
@@ -122,11 +121,15 @@ pub fn draw_satellite_camera(
 
     let lat_rad = lat.to_radians();
     let lon_rad = lon.to_radians();
-    let cone_half_angle = coverage_angle.to_radians();
+    let cone_half_angle = (coverage_angle / 2.0).to_radians();
     let orbit_radius = planet_radius + altitude_km;
     let max_earth_angle = (planet_radius / orbit_radius).acos();
-    let earth_central_angle = (orbit_radius * cone_half_angle.sin() / planet_radius).asin();
-    let angular_radius = earth_central_angle.min(max_earth_angle);
+    let sin_beta = orbit_radius * cone_half_angle.sin() / planet_radius;
+    let angular_radius = if sin_beta >= 1.0 {
+        max_earth_angle
+    } else {
+        (sin_beta.asin() - cone_half_angle).min(max_earth_angle)
+    };
 
     let mut pixels = vec![egui::Color32::BLACK; img_size * img_size];
 
@@ -141,7 +144,7 @@ pub fn draw_satellite_camera(
             }
 
             let angle_from_nadir = dist * angular_radius;
-            let azimuth = ny.atan2(nx);
+            let azimuth = -heading_rad - nx.atan2(-ny);
 
             let clat = (lat_rad.sin() * angle_from_nadir.cos()
                 + lat_rad.cos() * angle_from_nadir.sin() * (-azimuth).cos())
@@ -205,25 +208,60 @@ pub fn compute_manhattan_path(
     dst_plane: usize, dst_sat: usize,
     num_planes: usize, sats_per_plane: usize,
     is_star: bool,
+    positions: &[SatelliteState],
 ) -> Vec<(usize, usize)> {
-    let mut path = vec![(src_plane, src_sat)];
-
     let (plane_dir, plane_steps) = compute_path_direction(src_plane, dst_plane, num_planes, is_star);
     let (sat_dir, sat_steps) = compute_path_direction(src_sat, dst_sat, sats_per_plane, false);
 
-    let mut cur_plane = src_plane;
-    for _ in 0..plane_steps {
-        cur_plane = wrap_index(cur_plane, plane_dir, num_planes);
-        path.push((cur_plane, src_sat));
-    }
+    let build_path = |planes_first: bool| -> Vec<(usize, usize)> {
+        let mut p = vec![(src_plane, src_sat)];
+        if planes_first {
+            let mut cur = src_plane;
+            for _ in 0..plane_steps {
+                cur = wrap_index(cur, plane_dir, num_planes);
+                p.push((cur, src_sat));
+            }
+            let mut cur = src_sat;
+            for _ in 0..sat_steps {
+                cur = wrap_index(cur, sat_dir, sats_per_plane);
+                p.push((dst_plane, cur));
+            }
+        } else {
+            let mut cur = src_sat;
+            for _ in 0..sat_steps {
+                cur = wrap_index(cur, sat_dir, sats_per_plane);
+                p.push((src_plane, cur));
+            }
+            let mut cur = src_plane;
+            for _ in 0..plane_steps {
+                cur = wrap_index(cur, plane_dir, num_planes);
+                p.push((cur, dst_sat));
+            }
+        }
+        p
+    };
 
-    let mut cur_sat = src_sat;
-    for _ in 0..sat_steps {
-        cur_sat = wrap_index(cur_sat, sat_dir, sats_per_plane);
-        path.push((dst_plane, cur_sat));
-    }
+    let path_distance = |path: &[(usize, usize)]| -> f64 {
+        path.windows(2).map(|w| {
+            let a = positions.iter().find(|s| s.plane == w[0].0 && s.sat_index == w[0].1);
+            let b = positions.iter().find(|s| s.plane == w[1].0 && s.sat_index == w[1].1);
+            match (a, b) {
+                (Some(a), Some(b)) => {
+                    let dx = a.x - b.x;
+                    let dy = a.y - b.y;
+                    let dz = a.z - b.z;
+                    (dx * dx + dy * dy + dz * dz).sqrt()
+                }
+                _ => 0.0,
+            }
+        }).sum()
+    };
 
-    path
+    let planes_first = build_path(true);
+    let sats_first = build_path(false);
+    let d1 = path_distance(&planes_first);
+    let d2 = path_distance(&sats_first);
+    if d1 >= d2 { planes_first } else { sats_first }
 }
 
 pub fn compute_shortest_path(
@@ -233,10 +271,12 @@ pub fn compute_shortest_path(
     positions: &[SatelliteState],
     is_star: bool,
 ) -> Vec<(usize, usize)> {
-    let mut path = vec![(src_plane, src_sat)];
+    use std::collections::BinaryHeap;
 
-    let (plane_dir, mut plane_steps_remaining) = compute_path_direction(src_plane, dst_plane, num_planes, is_star);
-    let (sat_dir, mut sat_steps_remaining) = compute_path_direction(src_sat, dst_sat, sats_per_plane, false);
+    let n = num_planes * sats_per_plane;
+    let node = |p: usize, s: usize| p * sats_per_plane + s;
+    let src = node(src_plane, src_sat);
+    let dst = node(dst_plane, dst_sat);
 
     let get_pos = |plane: usize, sat_idx: usize| -> Option<(f64, f64, f64)> {
         positions.iter()
@@ -244,59 +284,78 @@ pub fn compute_shortest_path(
             .map(|s| (s.x, s.y, s.z))
     };
 
-    let distance = |p1: (f64, f64, f64), p2: (f64, f64, f64)| -> f64 {
-        let dx = p1.0 - p2.0;
-        let dy = p1.1 - p2.1;
-        let dz = p1.2 - p2.2;
+    let dist3d = |a: (f64, f64, f64), b: (f64, f64, f64)| -> f64 {
+        let dx = a.0 - b.0;
+        let dy = a.1 - b.1;
+        let dz = a.2 - b.2;
         (dx * dx + dy * dy + dz * dz).sqrt()
     };
 
-    let mut cur_plane = src_plane;
-    let mut cur_sat = src_sat;
+    let mut cost = vec![f64::INFINITY; n];
+    let mut prev = vec![usize::MAX; n];
+    cost[src] = 0.0;
 
-    while plane_steps_remaining > 0 || sat_steps_remaining > 0 {
-        if plane_steps_remaining == 0 {
-            cur_sat = wrap_index(cur_sat, sat_dir, sats_per_plane);
-            sat_steps_remaining -= 1;
-            path.push((cur_plane, cur_sat));
-            continue;
+    #[derive(PartialEq)]
+    struct State(f64, usize);
+    impl Eq for State {}
+    impl PartialOrd for State {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) }
+    }
+    impl Ord for State {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            other.0.partial_cmp(&self.0).unwrap_or(std::cmp::Ordering::Equal)
         }
-        if sat_steps_remaining == 0 {
-            cur_plane = wrap_index(cur_plane, plane_dir, num_planes);
-            plane_steps_remaining -= 1;
-            path.push((cur_plane, cur_sat));
-            continue;
-        }
-
-        let next_plane = wrap_index(cur_plane, plane_dir, num_planes);
-        let next_sat = wrap_index(cur_sat, sat_dir, sats_per_plane);
-
-        let cur_pos = get_pos(cur_plane, cur_sat);
-        let cross_plane_pos = get_pos(next_plane, cur_sat);
-        let within_plane_pos = get_pos(cur_plane, next_sat);
-        let cross_plane_after_within = get_pos(next_plane, next_sat);
-
-        match (cur_pos, cross_plane_pos, within_plane_pos, cross_plane_after_within) {
-            (Some(cur), Some(cross), Some(within), Some(cross_after)) => {
-                let cross_now = distance(cur, cross);
-                let cross_after_within = distance(within, cross_after);
-
-                if cross_now <= cross_after_within {
-                    cur_plane = next_plane;
-                    plane_steps_remaining -= 1;
-                } else {
-                    cur_sat = next_sat;
-                    sat_steps_remaining -= 1;
-                }
-            }
-            _ => {
-                cur_plane = next_plane;
-                plane_steps_remaining -= 1;
-            }
-        }
-        path.push((cur_plane, cur_sat));
     }
 
+    let mut heap: BinaryHeap<State> = BinaryHeap::new();
+    heap.push(State(0.0, src));
+
+    while let Some(State(c, u)) = heap.pop() {
+        if u == dst { break; }
+        if c > cost[u] { continue; }
+
+        let up = u / sats_per_plane;
+        let us = u % sats_per_plane;
+        let cur_pos = match get_pos(up, us) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        let mut neighbors = Vec::with_capacity(4);
+        neighbors.push((up, (us + 1) % sats_per_plane));
+        neighbors.push((up, (us + sats_per_plane - 1) % sats_per_plane));
+        let fwd_plane = (up + 1) % num_planes;
+        let bck_plane = (up + num_planes - 1) % num_planes;
+        if !is_star || fwd_plane != 0 || up != num_planes - 1 {
+            neighbors.push((fwd_plane, us));
+        }
+        if !is_star || up != 0 || bck_plane != num_planes - 1 {
+            neighbors.push((bck_plane, us));
+        }
+
+        for (np, ns) in neighbors {
+            let v = node(np, ns);
+            if let Some(npos) = get_pos(np, ns) {
+                let new_cost = cost[u] + dist3d(cur_pos, npos);
+                if new_cost < cost[v] {
+                    cost[v] = new_cost;
+                    prev[v] = u;
+                    heap.push(State(new_cost, v));
+                }
+            }
+        }
+    }
+
+    let mut path = Vec::new();
+    let mut cur = dst;
+    while cur != usize::MAX {
+        let p = cur / sats_per_plane;
+        let s = cur % sats_per_plane;
+        path.push((p, s));
+        if cur == src { break; }
+        cur = prev[cur];
+    }
+    path.reverse();
     path
 }
 
@@ -508,39 +567,52 @@ pub fn draw_3d_view(
     conjunction_lines: &[(ConjunctionInfo, f64)],
     conjunction_heatmap: &[(ConjunctionInfo, f64)],
     correcting_sats: &HashSet<String>,
+    hit_sats: &HashSet<String>,
     radiation: Option<&RadiationConfig>,
     moon_handles: &HashMap<CelestialBody, egui::TextureHandle>,
     context_menu_request: &mut Option<(egui::Pos2, f64, f64)>,
     label_click_request: &mut Option<(bool, usize, egui::Pos2)>,
     physics_colors: &HashMap<(usize, usize), egui::Color32>,
     physics_info: &HashMap<(usize, usize), (f64, f64, bool)>,
+    ground_tracks: &[Vec<(f64, f64)>],
 ) -> (Matrix3<f64>, f64) {
     let View3DFlags {
         show_orbits, show_axes, show_magnetic_axis, show_coverage, show_links,
         hide_behind_earth, single_color, dark_mode, show_routing_paths,
         show_manhattan_path, show_shortest_path, show_radiation_path, radiation_weight,
+        routing_width, routing_node_scale,
         show_asc_desc_colors,
-        show_altitude_lines, render_planet, fixed_sizes, show_sat_border, show_polar_circle,
+        color_ascending,
+        color_descending,
+        color_links,
+        show_sat_labels,
+        show_altitude_lines, altitude_line_width, render_planet, fixed_sizes, show_sat_border, show_polar_circle,
         show_equator, show_graticule, show_crosshairs, show_terminator, show_eclipse, show_sun, earth_fixed_camera, use_gpu_rendering,
         show_clouds, show_day_night, show_city_lights, show_stars, show_borders, show_cities,
         trackpad_rotate,
         north_up,
         ref enabled_moons,
+        moon_inclination_override,
         show_moon_orbits,
         show_moon_lines,
         show_moon_labels,
         moon_camera_distance_km,
+        tle_monochrome,
+        show_ground_tracks,
     } = flags;
     let max_altitude = constellations.iter()
         .map(|(c, _, _, _, _, _)| c.altitude_km)
         .fold(550.0_f64, |a, b| a.max(b));
     let orbit_radius = planet_radius + max_altitude;
+    let has_simulated = constellations.iter().any(|(_, _, _, tk, _, _)| *tk == 0);
     let axis_len = orbit_radius * 1.05;
     let planet_view_reference = planet_radius * 1.15;
     let margin = planet_view_reference / zoom;
     let zoom_factor = if fixed_sizes { 1.0 } else { zoom as f32 };
     let scaled_sat_radius = sat_radius * zoom_factor;
     let scaled_link_width = (link_width * zoom_factor).max(0.5);
+    let scaled_routing_width = (routing_width * zoom_factor).max(1.0);
+    let active_sat_radius = if show_routing_paths { scaled_sat_radius * routing_node_scale } else { scaled_sat_radius };
 
     let use_gpu = gpu_available && render_planet && use_gpu_rendering;
 
@@ -561,7 +633,7 @@ pub fn draw_3d_view(
         let key = body_key;
         let scale = (planet_radius / margin) as f32;
         let atmosphere = match body_key.0 {
-            CelestialBody::Earth => 1.0_f32,
+            CelestialBody::Earth if body_key.1 != crate::celestial::Skin::Abstract => 1.0_f32,
             _ => 0.0,
         };
 
@@ -709,6 +781,7 @@ pub fn draw_3d_view(
     let egui_ctx = ui.ctx().clone();
     let mut surface_labels: Vec<([f64; 2], String, egui::Color32, bool, usize)> = Vec::new();
     let mut device_cluster_labels: Vec<([f64; 2], usize, egui::Color32)> = Vec::new();
+    let mut spacecomp_role_labels: Vec<([f64; 2], &'static str, egui::Color32)> = Vec::new();
 
     let response = plot.show(ui, |plot_ui| {
         let ground_stations = &*ground_stations;
@@ -926,19 +999,53 @@ pub fn draw_3d_view(
                 } else {
                     rotation * *body_rotation
                 };
-                let terminator_pts: PlotPoints = (0..=100)
+
+                // Build the terminator great circle as (x, y, is_front) samples,
+                // then split into contiguous front/back segments so we can render
+                // the hidden half dimmer (or skip it entirely when
+                // hide_behind_earth is set).
+                const TERM_SEGMENTS: usize = 200;
+                let pts: Vec<(f64, f64, bool)> = (0..TERM_SEGMENTS)
                     .map(|i| {
-                        let theta = 2.0 * PI * i as f64 / 100.0;
+                        let theta = 2.0 * PI * i as f64 / TERM_SEGMENTS as f64;
                         let x = planet_radius * (u.x * theta.cos() + v.x * theta.sin());
                         let y = planet_radius * (u.y * theta.cos() + v.y * theta.sin());
                         let z = planet_radius * (u.z * theta.cos() + v.z * theta.sin());
-                        let (sx, sy, _) = rotate_point_matrix(x, y, z, &term_rotation);
-                        [sx, sy]
+                        let (sx, sy, sz) = rotate_point_matrix(x, y, z, &term_rotation);
+                        (sx, sy, sz >= 0.0)
                     })
                     .collect();
-                plot_ui.line(Line::new("", terminator_pts)
-                    .color(egui::Color32::from_rgb(255, 180, 0))
-                    .width(2.0));
+
+                let bright = egui::Color32::from_rgb(255, 180, 0);
+                let dim = egui::Color32::from_rgba_unmultiplied(255, 180, 0, 70);
+
+                let mut seg: Vec<[f64; 2]> = Vec::new();
+                let mut seg_front = pts[0].2;
+                let flush = |plot_ui: &mut egui_plot::PlotUi, seg: &mut Vec<[f64; 2]>, front: bool| {
+                    if seg.len() >= 2 {
+                        let color = if front { bright } else if !hide_behind_earth { dim } else { return };
+                        plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(seg)))
+                            .color(color)
+                            .width(2.0));
+                    } else {
+                        seg.clear();
+                    }
+                };
+                // Iterate through the loop including a wrap back to index 0 so
+                // the final segment closes cleanly.
+                for i in 0..=TERM_SEGMENTS {
+                    let (sx, sy, in_front) = pts[i % TERM_SEGMENTS];
+                    if in_front != seg_front && !seg.is_empty() {
+                        // Boundary crossing — emit the accumulated segment and
+                        // start a new one. Append the boundary point to both
+                        // sides so segments meet at the earth limb.
+                        seg.push([sx, sy]);
+                        flush(plot_ui, &mut seg, seg_front);
+                        seg_front = in_front;
+                    }
+                    seg.push([sx, sy]);
+                }
+                flush(plot_ui, &mut seg, seg_front);
             }
         }
 
@@ -1279,10 +1386,14 @@ pub fn draw_3d_view(
         if show_coverage {
             for (constellation, positions, color_offset, _tle_kind, _, _) in constellations {
                 let orbit_radius = planet_radius + constellation.altitude_km;
-                let cone_half_angle = coverage_angle.to_radians();
+                let cone_half_angle = (coverage_angle / 2.0).to_radians();
                 let max_earth_angle = (planet_radius / orbit_radius).acos();
-                let earth_central_angle = (orbit_radius * cone_half_angle.sin() / planet_radius).asin();
-                let angular_radius = earth_central_angle.min(max_earth_angle);
+                let sin_beta = orbit_radius * cone_half_angle.sin() / planet_radius;
+                let angular_radius = if sin_beta >= 1.0 {
+                    max_earth_angle
+                } else {
+                    (sin_beta.asin() - cone_half_angle).min(max_earth_angle)
+                };
                 for sat in positions {
                     let lat = sat.lat.to_radians();
                     let lon = sat.lon.to_radians();
@@ -1301,7 +1412,7 @@ pub fn draw_3d_view(
 
                             let x = planet_radius * clat.cos() * clon.cos();
                             let y = planet_radius * clat.sin();
-                            let z = planet_radius * clat.cos() * clon.sin();
+                            let z = -planet_radius * clat.cos() * clon.sin();
 
                             let (rx, ry, rz) = rotate_point_matrix(x, y, z, &satellite_rotation);
                             ([rx, ry], rz >= 0.0)
@@ -1479,6 +1590,77 @@ pub fn draw_3d_view(
                     plot_ui.line(Line::new("", PlotPoints::new(back_seg))
                         .color(grat_dim).width(0.5));
                 }
+            }
+        }
+
+        if show_ground_tracks {
+            // Ground tracks live in Earth-fixed lat/lon, so they're drawn with
+            // the surface rotation (which rotates with the body). Consecutive
+            // points whose longitude jumps by more than 180° are a wrap around
+            // the ±180° meridian — we break the segment there so the line
+            // doesn't cut straight across the globe.
+            for (track_idx, track) in ground_tracks.iter().enumerate() {
+                if track.len() < 2 { continue; }
+                let base_color = plane_color(track_idx);
+                let dim_color = egui::Color32::from_rgba_unmultiplied(
+                    base_color.r(), base_color.g(), base_color.b(), 90,
+                );
+                let mut front_seg: Vec<[f64; 2]> = Vec::new();
+                let mut back_seg: Vec<[f64; 2]> = Vec::new();
+                let mut last_lon: Option<f64> = None;
+                let flush_segs = |plot_ui: &mut egui_plot::PlotUi,
+                                  front: &mut Vec<[f64; 2]>,
+                                  back: &mut Vec<[f64; 2]>| {
+                    if front.len() >= 2 {
+                        plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(front)))
+                            .color(base_color).width(2.0));
+                    } else {
+                        front.clear();
+                    }
+                    if back.len() >= 2 && !hide_behind_earth {
+                        plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(back)))
+                            .color(dim_color).width(1.0));
+                    } else {
+                        back.clear();
+                    }
+                };
+                for &(lat_deg, lon_deg) in track {
+                    // Break segment on longitude wrap (>180° jump).
+                    if let Some(prev) = last_lon {
+                        if (lon_deg - prev).abs() > 180.0 {
+                            flush_segs(plot_ui, &mut front_seg, &mut back_seg);
+                        }
+                    }
+                    last_lon = Some(lon_deg);
+                    let lat = lat_deg.to_radians();
+                    let lon = lon_deg.to_radians();
+                    // Surface point in body frame using the same convention as the
+                    // satellite positions: lon = -atan2(z, x), so x = R*cos(lat)*cos(-lon),
+                    // z = R*cos(lat)*sin(-lon).
+                    let x = planet_radius * lat.cos() * (-lon).cos();
+                    let y = planet_radius * lat.sin();
+                    let z = planet_radius * lat.cos() * (-lon).sin();
+                    let (rx, ry, rz) = rotate_point_matrix(x, y, z, &surface_rotation);
+                    let occluded = rz < 0.0 && (rx * rx + ry * ry) < earth_r_sq;
+                    if occluded {
+                        if !front_seg.is_empty() {
+                            plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut front_seg)))
+                                .color(base_color).width(2.0));
+                        }
+                        back_seg.push([rx, ry]);
+                    } else {
+                        if !back_seg.is_empty() {
+                            if !hide_behind_earth {
+                                plot_ui.line(Line::new("", PlotPoints::new(std::mem::take(&mut back_seg)))
+                                    .color(dim_color).width(1.0));
+                            } else {
+                                back_seg.clear();
+                            }
+                        }
+                        front_seg.push([rx, ry]);
+                    }
+                }
+                flush_segs(plot_ui, &mut front_seg, &mut back_seg);
             }
         }
 
@@ -1870,7 +2052,7 @@ pub fn draw_3d_view(
                 for plane in 0..constellation.num_planes {
                     let orbit_pts = constellation.orbit_points_3d(plane, time);
                     let color = if show_routing_paths || show_asc_desc_colors {
-                        egui::Color32::from_rgb(80, 80, 80)
+                        color_links
                     } else {
                         plane_color(if single_color { *color_offset } else { plane + color_offset })
                     };
@@ -1902,7 +2084,7 @@ pub fn draw_3d_view(
 
         if show_links {
             let base_link_color = if show_routing_paths || show_asc_desc_colors {
-                egui::Color32::from_rgb(80, 80, 80)
+                color_links
             } else {
                 egui::Color32::from_rgb(200, 200, 200)
             };
@@ -2019,11 +2201,11 @@ pub fn draw_3d_view(
                                 src.plane, src.sat_index,
                                 dst.plane, dst.sat_index,
                                 num_planes, sats_per_plane,
-                                is_star,
+                                is_star, positions,
                             );
                             draw_routing_path(
                                 plot_ui, &path, positions, &satellite_rotation,
-                                manhattan_color, (scaled_link_width + 3.0).max(3.0), hide_behind_earth, earth_r_sq,
+                                manhattan_color, scaled_routing_width, hide_behind_earth, earth_r_sq,
                             );
                         }
 
@@ -2037,7 +2219,7 @@ pub fn draw_3d_view(
                             );
                             draw_routing_path(
                                 plot_ui, &path, positions, &satellite_rotation,
-                                shortest_color, (scaled_link_width + 3.0).max(3.0), hide_behind_earth, earth_r_sq,
+                                shortest_color, scaled_routing_width, hide_behind_earth, earth_r_sq,
                             );
                         }
 
@@ -2054,7 +2236,7 @@ pub fn draw_3d_view(
                             );
                             draw_routing_path(
                                 plot_ui, &path, positions, &satellite_rotation,
-                                radiation_color, (scaled_link_width + 3.0).max(3.0), hide_behind_earth, earth_r_sq,
+                                radiation_color, scaled_routing_width, hide_behind_earth, earth_r_sq,
                             );
                         }
                     }
@@ -2116,7 +2298,7 @@ pub fn draw_3d_view(
                             Some((aoi_cidx, _, _, aoi_sat))) = (gs_result, aoi_result)
                     {
                         let path_color = egui::Color32::from_rgb(255, 255, 0);
-                        let routing_width = (scaled_link_width + 3.0).max(3.0);
+                        let routing_width = scaled_routing_width;
 
                         if gs_cidx == aoi_cidx {
                             let path = compute_shortest_path(
@@ -2157,7 +2339,7 @@ pub fn draw_3d_view(
                     }
                     }
                     AoiJobMode::SpaceComp => {
-                        let routing_width = (scaled_link_width + 3.0).max(3.0);
+                        let routing_width = scaled_routing_width;
                         let color_collector = egui::Color32::from_rgb(100, 200, 255);
                         let color_mapper = egui::Color32::from_rgb(255, 165, 0);
                         let color_reducer = egui::Color32::from_rgb(220, 50, 220);
@@ -2354,6 +2536,34 @@ pub fn draw_3d_view(
                                 );
                             }
 
+                            let push_label = |labels: &mut Vec<([f64; 2], &'static str, egui::Color32)>,
+                                              pos: &SatelliteState, text: &'static str, color: egui::Color32| {
+                                let (rx, ry, _) = rotate_point_matrix(pos.x, pos.y, pos.z, &satellite_rotation);
+                                labels.push(([rx, ry], text, color));
+                            };
+                            for &(cp, cs) in &job.collectors {
+                                if let Some(s) = positions.iter().find(|s| s.plane == cp && s.sat_index == cs) {
+                                    push_label(&mut spacecomp_role_labels, s, "Collector", color_collector);
+                                }
+                            }
+                            for &(mp, ms) in &job.mappers {
+                                if let Some(s) = positions.iter().find(|s| s.plane == mp && s.sat_index == ms) {
+                                    push_label(&mut spacecomp_role_labels, s, "Mapper", color_mapper);
+                                }
+                            }
+                            {
+                                let (rp, rs) = job.reducer;
+                                if let Some(s) = positions.iter().find(|s| s.plane == rp && s.sat_index == rs) {
+                                    push_label(&mut spacecomp_role_labels, s, "Reducer", color_reducer);
+                                }
+                            }
+                            {
+                                let (gp, gsi) = job.gs_sat;
+                                if let Some(s) = positions.iter().find(|s| s.plane == gp && s.sat_index == gsi) {
+                                    push_label(&mut spacecomp_role_labels, s, "Line of Sight", color_gs);
+                                }
+                            }
+
                             break;
                         }
                     }
@@ -2369,7 +2579,7 @@ pub fn draw_3d_view(
             None
         };
 
-        for (constellation, positions, color_offset, tle_kind, orig_idx, cons_label) in constellations {
+        for (ci, (constellation, positions, color_offset, tle_kind, orig_idx, cons_label)) in constellations.iter().enumerate() {
             if *tle_kind != 0 {
                 let is_tle_debris = *tle_kind == 2;
                 let is_kessler = *tle_kind == 3;
@@ -2381,16 +2591,32 @@ pub fn draw_3d_view(
                         if hide_behind_earth && !in_front { continue; }
                         let alpha = if in_front { 220u8 } else { 80 };
                         let c = egui::Color32::from_rgba_unmultiplied(255, 60, 60, alpha);
-                        let r = scaled_sat_radius * 0.6;
+                        let r = scaled_sat_radius * 0.75;
                         plot_ui.points(
                             Points::new("", PlotPoints::new(vec![[rx, ry]]))
-                                .color(c).radius(r).shape(MarkerShape::Cross).filled(true),
+                                .color(c).radius(r).filled(true),
                         );
                         continue;
                     }
 
                     let mut color = if let Some(&pc) = physics_colors.get(&(*orig_idx, sat.plane * constellation.sats_per_plane() + sat.sat_index)) {
                         pc
+                    } else if is_tle_debris {
+                        // Bright, distinct palette for debris X marks. Order:
+                        // Fengyun 1C = red, Cosmos 2251 = green, Iridium 33 =
+                        // blue, Cosmos 1408 = yellow. Anything else falls back
+                        // to the normal plane color.
+                        if cons_label.starts_with("Fengyun") {
+                            egui::Color32::from_rgb(255, 70, 70)
+                        } else if cons_label.starts_with("Cosmos 2251") {
+                            egui::Color32::from_rgb(70, 230, 90)
+                        } else if cons_label.starts_with("Iridium 33") {
+                            egui::Color32::from_rgb(90, 160, 255)
+                        } else if cons_label.starts_with("Cosmos 1408") {
+                            egui::Color32::from_rgb(255, 220, 70)
+                        } else {
+                            plane_color(color_offset + sat.plane)
+                        }
                     } else {
                         plane_color(color_offset + sat.plane)
                     };
@@ -2468,9 +2694,11 @@ pub fn draw_3d_view(
                     };
 
                     if is_tle_debris {
-                        let d = scaled_sat_radius as f64 * 1.5 * margin / (width as f64 * 0.5);
+                        let size_mul = if tle_monochrome { 2.2 } else { 1.5 };
+                        let d = scaled_sat_radius as f64 * size_mul * margin / (width as f64 * 0.5);
                         let c = if in_front { color } else if !hide_behind_earth { dim_col } else { continue };
-                        let w = if in_front { 1.0 } else { 0.5 };
+                        let w_base = if tle_monochrome { 2.5 } else { 1.0 };
+                        let w = if in_front { w_base } else { w_base * 0.5 };
                         plot_ui.line(
                             egui_plot::Line::new("", PlotPoints::new(vec![[rx - d, ry - d], [rx + d, ry + d]]))
                                 .color(c).width(w),
@@ -2487,12 +2715,14 @@ pub fn draw_3d_view(
                                     .radius(scaled_sat_radius * 0.8)
                                     .filled(true),
                             );
-                            plot_ui.points(
-                                Points::new("", PlotPoints::new(vec![[rx, ry]]))
-                                    .color(bg_color)
-                                    .radius(scaled_sat_radius * 0.4)
-                                    .filled(true),
-                            );
+                            if has_simulated {
+                                plot_ui.points(
+                                    Points::new("", PlotPoints::new(vec![[rx, ry]]))
+                                        .color(bg_color)
+                                        .radius(scaled_sat_radius * 0.4)
+                                        .filled(true),
+                                );
+                            }
                         }
                         if in_front {
                             plot_ui.points(
@@ -2501,12 +2731,14 @@ pub fn draw_3d_view(
                                     .radius(scaled_sat_radius)
                                     .filled(true),
                             );
-                            plot_ui.points(
-                                Points::new("", PlotPoints::new(vec![[rx, ry]]))
-                                    .color(bg_color)
-                                    .radius(scaled_sat_radius * 0.5)
-                                    .filled(true),
-                            );
+                            if has_simulated {
+                                plot_ui.points(
+                                    Points::new("", PlotPoints::new(vec![[rx, ry]]))
+                                        .color(bg_color)
+                                        .radius(scaled_sat_radius * 0.5)
+                                        .filled(true),
+                                );
+                            }
                         }
                     }
                 }
@@ -2516,20 +2748,11 @@ pub fn draw_3d_view(
                 let base_color = plane_color(if single_color { *color_offset } else { plane + color_offset });
 
                 for sat in positions.iter().filter(|s| s.plane == plane) {
-                    let is_tracked = satellite_cameras.iter().any(|c|
-                        c.constellation_idx == *orig_idx && c.plane == sat.plane && c.sat_index == sat.sat_index
-                    );
                     let flat_idx = sat.plane * constellation.sats_per_plane() + sat.sat_index;
                     let color = if let Some(&pc) = physics_colors.get(&(*orig_idx, flat_idx)) {
                         pc
                     } else if show_asc_desc_colors {
-                        if is_tracked {
-                            if sat.ascending { COLOR_ASCENDING } else { COLOR_DESCENDING }
-                        } else if sat.ascending {
-                            egui::Color32::from_rgb(180, 140, 80)
-                        } else {
-                            egui::Color32::from_rgb(80, 120, 180)
-                        }
+                        if sat.ascending { color_ascending } else { color_descending }
                     } else {
                         base_color
                     };
@@ -2618,21 +2841,21 @@ pub fn draw_3d_view(
                             plot_ui.points(
                                 Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                     .color(bg_color)
-                                    .radius(scaled_sat_radius * 0.8 + 1.0)
+                                    .radius(active_sat_radius * 0.8 + 1.0)
                                     .filled(false),
                             );
                         }
                         plot_ui.points(
                             Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                 .color(dim_col)
-                                .radius(scaled_sat_radius * 0.8)
+                                .radius(active_sat_radius * 0.8)
                                 .filled(true),
                         );
-                        if *tle_kind != 0 {
+                        if *tle_kind != 0 && has_simulated {
                             plot_ui.points(
                                 Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                     .color(bg_color)
-                                    .radius(scaled_sat_radius * 0.4)
+                                    .radius(active_sat_radius * 0.4)
                                     .filled(true),
                             );
                         }
@@ -2642,21 +2865,21 @@ pub fn draw_3d_view(
                             plot_ui.points(
                                 Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                     .color(bg_color)
-                                    .radius(scaled_sat_radius + 1.0)
+                                    .radius(active_sat_radius + 1.0)
                                     .filled(false),
                             );
                         }
                         plot_ui.points(
                             Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                 .color(color)
-                                .radius(scaled_sat_radius)
+                                .radius(active_sat_radius)
                                 .filled(true),
                         );
-                        if *tle_kind != 0 {
+                        if *tle_kind != 0 && has_simulated {
                             plot_ui.points(
                                 Points::new("", PlotPoints::new(vec![[rx, ry]]))
                                     .color(bg_color)
-                                    .radius(scaled_sat_radius * 0.5)
+                                    .radius(active_sat_radius * 0.5)
                                     .filled(true),
                             );
                         }
@@ -2664,7 +2887,7 @@ pub fn draw_3d_view(
 
                     if in_front && !correcting_sats.is_empty() {
                         let sat_name = sat.name.clone().unwrap_or_else(|| {
-                            format!("{} P{}:S{}", cons_label, sat.plane, sat.sat_index)
+                            format!("{}#{} P{}:S{}", cons_label, ci, sat.plane, sat.sat_index)
                         });
                         if correcting_sats.contains(&sat_name) {
                             let green = egui::Color32::from_rgb(0, 255, 120);
@@ -2673,6 +2896,25 @@ pub fn draw_3d_view(
                                     .color(green)
                                     .radius(scaled_sat_radius * 2.0)
                                     .filled(false),
+                            );
+                        }
+                    }
+
+                    if (in_front || !hide_behind_earth) && !hit_sats.is_empty() {
+                        let sat_name = sat.name.clone().unwrap_or_else(|| {
+                            format!("{}#{} P{}:S{}", cons_label, ci, sat.plane, sat.sat_index)
+                        });
+                        if hit_sats.contains(&sat_name) {
+                            let d = scaled_sat_radius as f64 * 3.0 * margin / (width as f64 * 0.5);
+                            let red = egui::Color32::from_rgb(255, 60, 60);
+                            let w = if in_front { 2.5 * zoom_factor } else { 1.5 * zoom_factor };
+                            plot_ui.line(
+                                egui_plot::Line::new("", PlotPoints::new(vec![[rx - d, ry - d], [rx + d, ry + d]]))
+                                    .color(red).width(w),
+                            );
+                            plot_ui.line(
+                                egui_plot::Line::new("", PlotPoints::new(vec![[rx - d, ry + d], [rx + d, ry - d]]))
+                                    .color(red).width(w),
                             );
                         }
                     }
@@ -2696,11 +2938,11 @@ pub fn draw_3d_view(
                         let r = (sat.x * sat.x + sat.y * sat.y + sat.z * sat.z).sqrt();
                         let scale = planet_radius / r;
                         let (gx, gy, _) = rotate_point_matrix(sat.x * scale, sat.y * scale, sat.z * scale, &satellite_rotation);
-                        let alt_color = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 100);
+                        let alt_color = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 180);
                         plot_ui.line(
                             egui_plot::Line::new("", PlotPoints::new(vec![[rx, ry], [gx, gy]]))
                                 .color(alt_color)
-                                .width(0.5 * zoom_factor),
+                                .width(altitude_line_width * zoom_factor),
                         );
                     }
                 }
@@ -2743,10 +2985,11 @@ pub fn draw_3d_view(
         let px_per_km = width as f64 * 0.5 / margin;
         let camera_alt = moon_camera_distance_km;
         let earth_r_sq = planet_radius * planet_radius;
-        for &(moon_body, orbit_km, period_days, incl_rad) in body_key.0.moons() {
+        for &(moon_body, orbit_km, period_days, default_incl_rad) in body_key.0.moons() {
             if !enabled_moons.contains(&moon_body) {
                 continue;
             }
+            let incl_rad = moon_inclination_override.map(|d| d.to_radians()).unwrap_or(default_incl_rad);
             let color = moon_body.display_color();
 
             let moon_r_km = moon_body.radius_km();
@@ -2863,7 +3106,7 @@ pub fn draw_3d_view(
                 let label_a = (255.0 * fade) as u8;
                 let label_color = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), label_a);
                 let font = egui::FontId::proportional(11.0);
-                let galley = ui.painter().layout_no_wrap(moon_body.label().to_string(), font, label_color);
+                let galley = ui.painter().layout_no_wrap(format!("{} ({:.0} km)", moon_body.label(), orbit_km), font, label_color);
                 let text_pos = sp + egui::Vec2::new(dot_r + 4.0, -galley.size().y * 0.5);
                 let bg_a = (160.0 * fade) as u8;
                 let bg = egui::Rect::from_min_size(text_pos, galley.size()).expand(2.0);
@@ -2888,6 +3131,20 @@ pub fn draw_3d_view(
         ui.painter().rect_filled(bg_rect, 3.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180));
         ui.painter().galley(text_pos, galley, *color);
         label_rects.push((bg_rect, *is_gs, *idx));
+    }
+
+    for (pos, text, color) in &spacecomp_role_labels {
+        let plot_pt = egui_plot::PlotPoint::new(pos[0], pos[1]);
+        let screen_pos = response.transform.position_from_point(&plot_pt);
+        let galley = ui.painter().layout_no_wrap(
+            text.to_string(),
+            egui::FontId::proportional(12.0),
+            egui::Color32::WHITE,
+        );
+        let text_pos = screen_pos + egui::Vec2::new(scaled_sat_radius * 3.0, -galley.size().y / 2.0);
+        let bg_rect = egui::Rect::from_min_size(text_pos, galley.size()).expand(4.0);
+        ui.painter().rect_filled(bg_rect, 4.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200));
+        ui.painter().galley(text_pos, galley, *color);
     }
 
     for (pos, count, color) in &device_cluster_labels {
@@ -2917,7 +3174,7 @@ pub fn draw_3d_view(
         for (_, _, color_offset, tle_kind, _, name) in constellations {
             if !seen.insert((name.as_str(), *color_offset)) { continue; }
             let color = if *tle_kind == 3 {
-                egui::Color32::from_rgb(200, 200, 200)
+                egui::Color32::from_rgb(255, 60, 60)
             } else {
                 plane_color(*color_offset)
             };
@@ -2978,50 +3235,55 @@ pub fn draw_3d_view(
                         egui::Stroke::new(2.0, color),
                     );
 
-                    let r = (sat.x * sat.x + sat.y * sat.y + sat.z * sat.z).sqrt();
-                    let alt_km = r - constellation.planet_radius;
-                    let vel_km_s = (constellation.planet_mu / r).sqrt();
-                    let inv_body = body_rotation.transpose();
-                    let body_pos = inv_body * Vector3::new(sat.x, sat.y, sat.z);
-                    let ground_lat = (body_pos.y / r).asin().to_degrees();
-                    let ground_lon = (-body_pos.z).atan2(body_pos.x).to_degrees();
-                    let id = match &sat.name {
-                        Some(name) => name.clone(),
-                        None => format!("P{}S{}", sat.plane, sat.sat_index),
-                    };
-                    let mut text = if let (Some(inc), Some(mm)) = (sat.tle_inclination_deg, sat.tle_mean_motion) {
-                        let revs_per_day = mm;
-                        let period_min = 1440.0 / revs_per_day;
-                        format!(
-                            "{}  {:.1}° {:.1}°\n{:.0} km  {:.2} km/s\nInc {:.1}°  {:.2} rev/day\nPeriod {:.1} min",
-                            id,
-                            ground_lat, ground_lon,
-                            alt_km, vel_km_s,
-                            inc, revs_per_day,
-                            period_min,
-                        )
-                    } else {
-                        format!(
-                            "{}  {:.1}° {:.1}°\n{:.0} km  {:.2} km/s",
-                            id,
-                            ground_lat, ground_lon,
-                            alt_km, vel_km_s,
-                        )
-                    };
-                    let flat_idx = sat.plane * constellation.sats_per_plane() + sat.sat_index;
-                    if let Some(&(soc, temp_k, is_dead)) = physics_info.get(&(*orig_idx, flat_idx)) {
-                        if is_dead {
-                            text.push_str("\n⚠ DEAD");
+                    if show_sat_labels {
+                        let r = (sat.x * sat.x + sat.y * sat.y + sat.z * sat.z).sqrt();
+                        let alt_km = r - constellation.planet_radius;
+                        let vel_km_s = (constellation.planet_mu / r).sqrt();
+                        let inv_body = body_rotation.transpose();
+                        let body_pos = inv_body * Vector3::new(sat.x, sat.y, sat.z);
+                        let ground_lat = (body_pos.y / r).asin().to_degrees();
+                        let ground_lon = (-body_pos.z).atan2(body_pos.x).to_degrees();
+                        let id = if !cam.label.is_empty() {
+                            cam.label.clone()
+                        } else if let Some(name) = &sat.name {
+                            name.clone()
                         } else {
-                            text.push_str(&format!("\nBattery: {:.0}%  T: {:.0} K", soc * 100.0, temp_k));
+                            format!("P{}S{}", sat.plane, sat.sat_index)
+                        };
+                        let mut text = if let (Some(inc), Some(mm)) = (sat.tle_inclination_deg, sat.tle_mean_motion) {
+                            let revs_per_day = mm;
+                            let period_min = 1440.0 / revs_per_day;
+                            format!(
+                                "{}  {:.1}° {:.1}°\n{:.0} km  {:.2} km/s\nInc {:.1}°  {:.2} rev/day\nPeriod {:.1} min",
+                                id,
+                                ground_lat, ground_lon,
+                                alt_km, vel_km_s,
+                                inc, revs_per_day,
+                                period_min,
+                            )
+                        } else {
+                            format!(
+                                "{}  {:.1}° {:.1}°\n{:.0} km  {:.2} km/s",
+                                id,
+                                ground_lat, ground_lon,
+                                alt_km, vel_km_s,
+                            )
+                        };
+                        let flat_idx = sat.plane * constellation.sats_per_plane() + sat.sat_index;
+                        if let Some(&(soc, temp_k, is_dead)) = physics_info.get(&(*orig_idx, flat_idx)) {
+                            if is_dead {
+                                text.push_str("\n⚠ DEAD");
+                            } else {
+                                text.push_str(&format!("\nBattery: {:.0}%  T: {:.0} K", soc * 100.0, temp_k));
+                            }
                         }
+                        let font = egui::FontId::proportional(12.0);
+                        let galley = ui.painter().layout_no_wrap(text, font, egui::Color32::WHITE);
+                        let text_pos = screen_pos + egui::Vec2::new(scaled_sat_radius * 3.0, -galley.size().y / 2.0);
+                        let bg_rect = egui::Rect::from_min_size(text_pos, galley.size()).expand(4.0);
+                        ui.painter().rect_filled(bg_rect, 4.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200));
+                        ui.painter().galley(text_pos, galley, egui::Color32::WHITE);
                     }
-                    let font = egui::FontId::proportional(12.0);
-                    let galley = ui.painter().layout_no_wrap(text, font, egui::Color32::WHITE);
-                    let text_pos = screen_pos + egui::Vec2::new(scaled_sat_radius * 3.0, -galley.size().y / 2.0);
-                    let bg_rect = egui::Rect::from_min_size(text_pos, galley.size()).expand(4.0);
-                    ui.painter().rect_filled(bg_rect, 4.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200));
-                    ui.painter().galley(text_pos, galley, egui::Color32::WHITE);
                 }
             }
         }
@@ -3051,43 +3313,45 @@ pub fn draw_3d_view(
                         scaled_sat_radius * 2.0,
                         egui::Stroke::new(2.0, color),
                     );
-                    let id = match &sat.name {
-                        Some(name) => name.clone(),
-                        None => format!("P{}S{}", sat.plane, sat.sat_index),
-                    };
-                    let r = (sat.x * sat.x + sat.y * sat.y + sat.z * sat.z).sqrt();
-                    let alt_km = r - planet_radius;
-                    let vel_km_s = (constellation.planet_mu / r).sqrt();
-                    let inv_body = body_rotation.transpose();
-                    let body_pos = inv_body * Vector3::new(sat.x, sat.y, sat.z);
-                    let ground_lat = (body_pos.y / r).asin().to_degrees();
-                    let ground_lon = (-body_pos.z).atan2(body_pos.x).to_degrees();
-                    let mut tip = if let (Some(inc), Some(mm)) = (sat.tle_inclination_deg, sat.tle_mean_motion) {
-                        let period_min = 1440.0 / mm;
-                        format!(
-                            "{}  {:.1}° {:.1}°\n{:.0} km  {:.2} km/s\nInc {:.1}°  {:.2} rev/day\nPeriod {:.1} min",
-                            id, ground_lat, ground_lon, alt_km, vel_km_s, inc, mm, period_min,
-                        )
-                    } else {
-                        format!(
-                            "{}  {:.1}° {:.1}°\n{:.0} km  {:.2} km/s",
-                            id, ground_lat, ground_lon, alt_km, vel_km_s,
-                        )
-                    };
-                    let flat_idx = sat.plane * constellation.sats_per_plane() + sat.sat_index;
-                    if let Some(&(soc, temp_k, is_dead)) = physics_info.get(&(*orig_idx, flat_idx)) {
-                        if is_dead {
-                            tip.push_str("\n⚠ DEAD");
+                    if show_sat_labels {
+                        let id = match &sat.name {
+                            Some(name) => name.clone(),
+                            None => format!("P{}S{}", sat.plane, sat.sat_index),
+                        };
+                        let r = (sat.x * sat.x + sat.y * sat.y + sat.z * sat.z).sqrt();
+                        let alt_km = r - planet_radius;
+                        let vel_km_s = (constellation.planet_mu / r).sqrt();
+                        let inv_body = body_rotation.transpose();
+                        let body_pos = inv_body * Vector3::new(sat.x, sat.y, sat.z);
+                        let ground_lat = (body_pos.y / r).asin().to_degrees();
+                        let ground_lon = (-body_pos.z).atan2(body_pos.x).to_degrees();
+                        let mut tip = if let (Some(inc), Some(mm)) = (sat.tle_inclination_deg, sat.tle_mean_motion) {
+                            let period_min = 1440.0 / mm;
+                            format!(
+                                "{}  {:.1}° {:.1}°\n{:.0} km  {:.2} km/s\nInc {:.1}°  {:.2} rev/day\nPeriod {:.1} min",
+                                id, ground_lat, ground_lon, alt_km, vel_km_s, inc, mm, period_min,
+                            )
                         } else {
-                            tip.push_str(&format!("\nBattery: {:.0}%  T: {:.0} K", soc * 100.0, temp_k));
+                            format!(
+                                "{}  {:.1}° {:.1}°\n{:.0} km  {:.2} km/s",
+                                id, ground_lat, ground_lon, alt_km, vel_km_s,
+                            )
+                        };
+                        let flat_idx = sat.plane * constellation.sats_per_plane() + sat.sat_index;
+                        if let Some(&(soc, temp_k, is_dead)) = physics_info.get(&(*orig_idx, flat_idx)) {
+                            if is_dead {
+                                tip.push_str("\n⚠ DEAD");
+                            } else {
+                                tip.push_str(&format!("\nBattery: {:.0}%  T: {:.0} K", soc * 100.0, temp_k));
+                            }
                         }
+                        let font = egui::FontId::proportional(12.0);
+                        let galley = ui.painter().layout_no_wrap(tip, font, egui::Color32::WHITE);
+                        let tip_pos = screen_pt - egui::Vec2::new(galley.size().x * 0.5, galley.size().y + scaled_sat_radius * 2.0 + 8.0);
+                        let rect = egui::Rect::from_min_size(tip_pos, galley.size()).expand(4.0);
+                        ui.painter().rect_filled(rect, 3.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200));
+                        ui.painter().galley(tip_pos, galley, egui::Color32::WHITE);
                     }
-                    let font = egui::FontId::proportional(12.0);
-                    let galley = ui.painter().layout_no_wrap(tip, font, egui::Color32::WHITE);
-                    let tip_pos = screen_pt - egui::Vec2::new(galley.size().x * 0.5, galley.size().y + scaled_sat_radius * 2.0 + 8.0);
-                    let rect = egui::Rect::from_min_size(tip_pos, galley.size()).expand(4.0);
-                    ui.painter().rect_filled(rect, 3.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200));
-                    ui.painter().galley(tip_pos, galley, egui::Color32::WHITE);
                     hovering_satellite = true;
                     break 'hover;
                 }
@@ -3834,10 +4098,14 @@ pub fn draw_map_view(
 
             if show_coverage {
                 let orbit_radius = planet_radius + constellation.altitude_km;
-                let cone_half_angle = coverage_angle.to_radians();
+                let cone_half_angle = (coverage_angle / 2.0).to_radians();
                 let max_earth_angle = (planet_radius / orbit_radius).acos();
-                let earth_central_angle = (orbit_radius * cone_half_angle.sin() / planet_radius).asin();
-                let angular_radius = earth_central_angle.min(max_earth_angle);
+                let sin_beta = orbit_radius * cone_half_angle.sin() / planet_radius;
+                let angular_radius = if sin_beta >= 1.0 {
+                    max_earth_angle
+                } else {
+                    (sin_beta.asin() - cone_half_angle).min(max_earth_angle)
+                };
 
                 for sat in positions.iter() {
                     let color = plane_color(if single_color { *color_offset } else { sat.plane + color_offset });
@@ -3919,7 +4187,7 @@ pub fn draw_map_view(
                         };
 
                         if show_manhattan_path {
-                            let path = compute_manhattan_path(src.plane, src.sat_index, dst.plane, dst.sat_index, num_planes, sats_per_plane, is_star);
+                            let path = compute_manhattan_path(src.plane, src.sat_index, dst.plane, dst.sat_index, num_planes, sats_per_plane, is_star, positions);
                             for line in draw_path(&path, manhattan_color, 2.5) { plot_ui.line(line); }
                         }
                         if show_shortest_path {
@@ -3960,6 +4228,7 @@ pub fn draw_torus(
     height: f32,
     sat_radius: f32,
     show_links: bool,
+    show_orbits: bool,
     single_color: bool,
     mut zoom: f64,
     satellite_cameras: &mut [SatelliteCamera],
@@ -3969,6 +4238,9 @@ pub fn draw_torus(
     show_radiation_path: bool,
     radiation_weight: f64,
     show_asc_desc_colors: bool,
+    color_ascending: egui::Color32,
+    color_descending: egui::Color32,
+    color_links: egui::Color32,
     planet_radius: f64,
     pending_cameras: &mut Vec<SatelliteCamera>,
     camera_id_counter: &mut usize,
@@ -4039,99 +4311,6 @@ pub fn draw_torus(
             rotate_point_matrix(x, y, z, &display_rotation)
         };
 
-        if let Some((constellation, _, _, _, _, _)) = constellations.first() {
-            let orbit_radius = constellation.planet_radius + constellation.altitude_km;
-            let earth_scale = planet_radius / orbit_radius;
-            let earth_major = major_radius * earth_scale;
-            let earth_minor = minor_radius * earth_scale;
-            let earth_color = egui::Color32::from_rgb(60, 100, 140);
-            let earth_dim = egui::Color32::from_rgba_unmultiplied(40, 70, 100, 150);
-
-            let earth_point = |theta: f64, phi: f64| -> (f64, f64, f64) {
-                let r = earth_major + earth_minor * phi.cos();
-                let y = earth_minor * phi.sin();
-                let x = r * theta.cos();
-                let z = r * theta.sin();
-                rotate_point_matrix(x, y, z, &display_rotation)
-            };
-
-            let earth_facing = |theta: f64, phi: f64| -> bool {
-                let nx = phi.cos() * theta.cos();
-                let ny = phi.sin();
-                let nz = phi.cos() * theta.sin();
-                let (_, _, nz_rot) = rotate_point_matrix(nx, ny, nz, &rotation);
-                nz_rot >= 0.0
-            };
-
-            for ring in 0..12 {
-                let phi = 2.0 * PI * ring as f64 / 12.0;
-                let mut front_segment: Vec<[f64; 2]> = Vec::new();
-                let mut back_segment: Vec<[f64; 2]> = Vec::new();
-                for i in 0..=50 {
-                    let theta = 2.0 * PI * i as f64 / 50.0;
-                    let (rx, ry, _) = earth_point(theta, phi);
-                    let facing = earth_facing(theta, phi);
-                    if facing {
-                        front_segment.push([rx, ry]);
-                        if !back_segment.is_empty() {
-                            plot_ui.line(
-                                Line::new("", PlotPoints::new(std::mem::take(&mut back_segment)))
-                                    .color(earth_dim).width(1.0),
-                            );
-                        }
-                    } else {
-                        back_segment.push([rx, ry]);
-                        if !front_segment.is_empty() {
-                            plot_ui.line(
-                                Line::new("", PlotPoints::new(std::mem::take(&mut front_segment)))
-                                    .color(earth_color).width(1.5),
-                            );
-                        }
-                    }
-                }
-                if !front_segment.is_empty() {
-                    plot_ui.line(Line::new("", PlotPoints::new(front_segment)).color(earth_color).width(1.5));
-                }
-                if !back_segment.is_empty() {
-                    plot_ui.line(Line::new("", PlotPoints::new(back_segment)).color(earth_dim).width(1.0));
-                }
-            }
-
-            for ring in 0..16 {
-                let theta = 2.0 * PI * ring as f64 / 16.0;
-                let mut front_segment: Vec<[f64; 2]> = Vec::new();
-                let mut back_segment: Vec<[f64; 2]> = Vec::new();
-                for i in 0..=50 {
-                    let phi = 2.0 * PI * i as f64 / 50.0;
-                    let (rx, ry, _) = earth_point(theta, phi);
-                    let facing = earth_facing(theta, phi);
-                    if facing {
-                        front_segment.push([rx, ry]);
-                        if !back_segment.is_empty() {
-                            plot_ui.line(
-                                Line::new("", PlotPoints::new(std::mem::take(&mut back_segment)))
-                                    .color(earth_dim).width(1.0),
-                            );
-                        }
-                    } else {
-                        back_segment.push([rx, ry]);
-                        if !front_segment.is_empty() {
-                            plot_ui.line(
-                                Line::new("", PlotPoints::new(std::mem::take(&mut front_segment)))
-                                    .color(earth_color).width(1.5),
-                            );
-                        }
-                    }
-                }
-                if !front_segment.is_empty() {
-                    plot_ui.line(Line::new("", PlotPoints::new(front_segment)).color(earth_color).width(1.5));
-                }
-                if !back_segment.is_empty() {
-                    plot_ui.line(Line::new("", PlotPoints::new(back_segment)).color(earth_dim).width(1.0));
-                }
-            }
-        }
-
         for (constellation, positions, color_offset, _tle_kind, orig_idx, _) in constellations.iter() {
             let sats_per_plane = constellation.total_sats / constellation.num_planes;
             let orbit_radius = constellation.planet_radius + constellation.altitude_km;
@@ -4145,63 +4324,66 @@ pub fn draw_torus(
                 raan_offset + raan_step * plane as f64
             };
 
+            let phase_step = constellation.phasing * 2.0 * PI / constellation.total_sats as f64;
             let torus_pos = |plane: usize, sat_idx: usize| -> (f64, f64, f64) {
                 let angle = plane_theta(plane);
                 let sat_spacing = 2.0 * PI * sat_idx as f64 / sats_per_plane as f64;
-                let phase = sat_spacing + mean_motion * time;
+                let phase = sat_spacing + mean_motion * time + phase_step * plane as f64;
                 torus_point(angle, phase, ecc, omega)
             };
 
-            for plane in 0..constellation.num_planes {
-                let angle = plane_theta(plane);
-                let color = if show_routing_paths || show_asc_desc_colors {
-                    egui::Color32::from_rgb(80, 80, 80)
-                } else {
-                    plane_color(if single_color { *color_offset } else { plane + color_offset })
-                };
-                let dim_col = egui::Color32::from_rgba_unmultiplied(
-                    color.r(), color.g(), color.b(), 180,
-                );
-
-                let mut front_segment: Vec<[f64; 2]> = Vec::new();
-                let mut back_segment: Vec<[f64; 2]> = Vec::new();
-
-                for i in 0..=50 {
-                    let phase = 2.0 * PI * i as f64 / 50.0;
-                    let (rx, ry, _) = torus_point(angle, phase, ecc, omega);
-                    let facing = is_facing_camera(angle, phase);
-
-                    if facing {
-                        front_segment.push([rx, ry]);
-                        if !back_segment.is_empty() {
-                            plot_ui.line(
-                                Line::new("", PlotPoints::new(std::mem::take(&mut back_segment)))
-                                    .color(dim_col)
-                                    .width(scaled_link_width),
-                            );
-                        }
+            if show_orbits {
+                for plane in 0..constellation.num_planes {
+                    let angle = plane_theta(plane);
+                    let color = if show_routing_paths || show_asc_desc_colors {
+                        color_links
                     } else {
-                        back_segment.push([rx, ry]);
-                        if !front_segment.is_empty() {
-                            plot_ui.line(
-                                Line::new("", PlotPoints::new(std::mem::take(&mut front_segment)))
-                                    .color(color)
-                                    .width(scaled_link_width * 1.5),
-                            );
+                        plane_color(if single_color { *color_offset } else { plane + color_offset })
+                    };
+                    let dim_col = egui::Color32::from_rgba_unmultiplied(
+                        color.r(), color.g(), color.b(), 180,
+                    );
+
+                    let mut front_segment: Vec<[f64; 2]> = Vec::new();
+                    let mut back_segment: Vec<[f64; 2]> = Vec::new();
+
+                    for i in 0..=50 {
+                        let phase = 2.0 * PI * i as f64 / 50.0;
+                        let (rx, ry, _) = torus_point(angle, phase, ecc, omega);
+                        let facing = is_facing_camera(angle, phase);
+
+                        if facing {
+                            front_segment.push([rx, ry]);
+                            if !back_segment.is_empty() {
+                                plot_ui.line(
+                                    Line::new("", PlotPoints::new(std::mem::take(&mut back_segment)))
+                                        .color(dim_col)
+                                        .width(scaled_link_width),
+                                );
+                            }
+                        } else {
+                            back_segment.push([rx, ry]);
+                            if !front_segment.is_empty() {
+                                plot_ui.line(
+                                    Line::new("", PlotPoints::new(std::mem::take(&mut front_segment)))
+                                        .color(color)
+                                        .width(scaled_link_width * 1.5),
+                                );
+                            }
                         }
                     }
-                }
-                if !front_segment.is_empty() {
-                    plot_ui.line(Line::new("", PlotPoints::new(front_segment)).color(color).width(scaled_link_width * 1.5));
-                }
-                if !back_segment.is_empty() {
-                    plot_ui.line(Line::new("", PlotPoints::new(back_segment)).color(dim_col).width(scaled_link_width));
+                    if !front_segment.is_empty() {
+                        plot_ui.line(Line::new("", PlotPoints::new(front_segment)).color(color).width(scaled_link_width * 1.5));
+                    }
+                    if !back_segment.is_empty() {
+                        plot_ui.line(Line::new("", PlotPoints::new(back_segment)).color(dim_col).width(scaled_link_width));
+                    }
                 }
             }
 
             if show_links {
                 let base_link_color = if show_routing_paths || show_asc_desc_colors {
-                    egui::Color32::from_rgb(80, 80, 80)
+                    color_links
                 } else {
                     egui::Color32::from_rgb(150, 150, 150)
                 };
@@ -4237,13 +4419,7 @@ pub fn draw_torus(
                         c.constellation_idx == *orig_idx && c.plane == sat.plane && c.sat_index == sat.sat_index
                     );
                     let color = if show_asc_desc_colors {
-                        if is_tracked {
-                            if sat.ascending { COLOR_ASCENDING } else { COLOR_DESCENDING }
-                        } else if sat.ascending {
-                            egui::Color32::from_rgb(180, 140, 80)
-                        } else {
-                            egui::Color32::from_rgb(80, 120, 180)
-                        }
+                        if sat.ascending { color_ascending } else { color_descending }
                     } else {
                         base_color
                     };
@@ -4315,7 +4491,7 @@ pub fn draw_torus(
                                     src.plane, src.sat_index,
                                     dst.plane, dst.sat_index,
                                     num_planes, sats_per_plane,
-                                    is_star,
+                                    is_star, positions,
                                 );
                                 for k in 0..(path.len() - 1) {
                                     let (p1, s1) = path[k];
@@ -4523,7 +4699,33 @@ fn clip_line_to_rect(
 }
 
 pub fn plane_color(plane: usize) -> egui::Color32 {
-    COLORS[plane % COLORS.len()]
+    if plane < COLORS.len() {
+        return COLORS[plane];
+    }
+    // Beyond the base palette, generate distinct colors using golden-ratio hue spacing
+    let golden = 0.6180339887498949_f32;
+    let hue = ((plane as f32) * golden).fract();
+    let sat = 0.7 + 0.3 * (((plane / COLORS.len()) as f32) * golden).fract();
+    let val = 0.85 + 0.15 * ((((plane / (COLORS.len() * 3)) as f32) * golden).fract() - 0.5) * 2.0;
+    hsv_to_color32(hue, sat, val.clamp(0.6, 1.0))
+}
+
+fn hsv_to_color32(h: f32, s: f32, v: f32) -> egui::Color32 {
+    let h = h.fract();
+    let i = (h * 6.0).floor();
+    let f = h * 6.0 - i;
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - f * s);
+    let t = v * (1.0 - (1.0 - f) * s);
+    let (r, g, b) = match i as i32 % 6 {
+        0 => (v, t, p),
+        1 => (q, v, p),
+        2 => (p, v, t),
+        3 => (p, q, v),
+        4 => (t, p, v),
+        _ => (v, p, q),
+    };
+    egui::Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
 }
 
 pub const COLORS: [egui::Color32; 16] = [

@@ -37,6 +37,34 @@ use std::f64::consts::PI;
 use std::sync::{Arc, mpsc};
 use chrono::{Duration, Utc};
 
+fn compute_sat_heading(x: f64, y: f64, z: f64, vx: f64, vy: f64, vz: f64) -> f64 {
+    let r = (x * x + y * y + z * z).sqrt();
+    if r < 1e-9 { return 0.0; }
+    let rx = x / r;
+    let ry = y / r;
+    let rz = z / r;
+    // East basis: cross(north_pole=(0,1,0), r_hat) using this codebase's
+    // convention that lon = atan2(-z, x), i.e. +z is west, -z is east.
+    let ex = rz;
+    let ez = -rx;
+    let en = (ex * ex + ez * ez).sqrt();
+    if en < 1e-9 { return 0.0; }
+    let ex = ex / en;
+    let ez = ez / en;
+    // North basis: cross(r_hat, east)
+    let nx = ry * ez;
+    let ny = rz * ex - rx * ez;
+    let nz = -ry * ex;
+    // Project velocity onto tangent plane (remove radial component)
+    let v_dot_r = vx * rx + vy * ry + vz * rz;
+    let tvx = vx - v_dot_r * rx;
+    let tvy = vy - v_dot_r * ry;
+    let tvz = vz - v_dot_r * rz;
+    let v_east = tvx * ex + tvz * ez;
+    let v_north = tvx * nx + tvy * ny + tvz * nz;
+    v_east.atan2(v_north)
+}
+
 pub(crate) struct App {
     pub(crate) dock_state: DockState<usize>,
     pub(crate) viewer: ViewerState,
@@ -52,11 +80,6 @@ impl App {
             rs.renderer.write().callback_resources.insert(gpu);
         }
 
-        let torus_initial = Matrix3::new(
-            1.0, 0.0, 0.0,
-            0.0, 0.0, -1.0,
-            0.0, 1.0, 0.0,
-        );
         let builtin_texture = Arc::new(load_earth_texture());
         #[cfg(not(target_arch = "wasm32"))]
         let (tle_fetch_tx, tle_fetch_rx) = mpsc::channel();
@@ -81,7 +104,6 @@ impl App {
                 camera_id_counter: 0,
                 tab_counter: 1,
                 torus_zoom: 1.0,
-                torus_rotation: torus_initial,
                 planet_textures: {
                     let mut map = HashMap::new();
                     #[cfg(not(target_arch = "wasm32"))]
@@ -113,11 +135,13 @@ impl App {
                 cycle_interval: 5.0,
                 last_cycle_time: 0.0,
                 slideshow_mode: false,
+                show_tab_info: false,
                 slideshow_fade_alpha: 1.0,
                 use_gpu_rendering: true,
                 show_borders: false,
                 show_cities: false,
                 active_tab_idx: 0,
+                prev_active_tab_idx: 0,
                 #[cfg(not(target_arch = "wasm32"))]
                 geo_data: GeoLoadState::NotLoaded,
                 #[cfg(not(target_arch = "wasm32"))]
@@ -337,11 +361,7 @@ impl eframe::App for App {
 
         ctx.options_mut(|o| o.input_options.max_click_dist = 1.0);
 
-        let focused = self.dock_state.focused_leaf();
-        let active_tab_idx = self.dock_state.iter_all_tabs()
-            .find(|((s, n), _)| focused == Some((*s, *n)))
-            .map(|(_, tab)| *tab)
-            .unwrap_or(0);
+        let active_tab_idx = v.active_tab_idx;
 
         let tex_res = v.texture_resolution;
         let bodies_needed: Vec<(CelestialBody, Skin, TextureResolution)> = {
@@ -352,6 +372,14 @@ impl eframe::App for App {
                 .filter(|key| seen.insert(*key))
                 .collect()
         };
+        for planet in v.tabs.iter_mut().flat_map(|t| t.planets.iter_mut()) {
+            if planet.abstract_colors_dirty {
+                planet.abstract_colors_dirty = false;
+                let key = (planet.celestial_body, planet.skin, tex_res);
+                v.planet_textures.remove(&key);
+                v.planet_image_handles.remove(&key);
+            }
+        }
         for (body, skin, _) in &bodies_needed {
             v.load_texture_for_body(*body, *skin, ctx);
         }
@@ -471,9 +499,14 @@ impl eframe::App for App {
                     gpu.upload_ring_texture(&rs.device, &rs.queue, *body, ring_tex);
                 }
                 gpu.evict_unused_textures(&bodies_needed);
-                for (body, skin, res) in &bodies_needed {
-                    if let Some(tex) = v.planet_textures.get(&(*body, *skin, *res)) {
-                        gpu.upload_map_texture(&rs.device, &rs.queue, (*body, *skin, *res), tex);
+                let needs_map_texture = v.tabs.get(active_tab_idx)
+                    .map(|t| t.settings.planet_projection != crate::projection::ProjectionKind::Orthographic)
+                    .unwrap_or(false);
+                if needs_map_texture {
+                    for (body, skin, res) in &bodies_needed {
+                        if let Some(tex) = v.planet_textures.get(&(*body, *skin, *res)) {
+                            gpu.upload_map_texture(&rs.device, &rs.queue, (*body, *skin, *res), tex);
+                        }
                     }
                 }
             }
@@ -490,7 +523,8 @@ impl eframe::App for App {
         while let Ok((preset, result)) = v.tle_fetch_rx.try_recv() {
             for tab in &mut v.tabs {
                 for planet in &mut tab.planets {
-                    if let Some((_, state, _)) = planet.tle_selections.get_mut(&preset) {
+                    let auto_cluster = planet.auto_cluster_tle;
+                    if let Some((_, state, shells)) = planet.tle_selections.get_mut(&preset) {
                         if matches!(state, TleLoadState::Loading) {
                             *state = match result.clone() {
                                 Ok(satellites) => TleLoadState::Loaded {
@@ -498,6 +532,54 @@ impl eframe::App for App {
                                 },
                                 Err(e) => TleLoadState::Failed(e),
                             };
+                            if auto_cluster {
+                                if let TleLoadState::Loaded { satellites } = state {
+                                    let n = satellites.len();
+                                    let (inc_bin_size, alt_bin_size) = if n < 50 {
+                                        (1.0, 10.0)
+                                    } else if n < 500 {
+                                        (5.0, 50.0)
+                                    } else {
+                                        (5.0, 100.0)
+                                    };
+                                    let mut groups: std::collections::HashMap<(i32, i32), Vec<usize>> = std::collections::HashMap::new();
+                                    for (i, sat) in satellites.iter().enumerate() {
+                                        let alt = crate::tle::mean_motion_to_altitude_km(sat.mean_motion);
+                                        let inc_bin = (sat.inclination_deg / inc_bin_size).round() as i32 * inc_bin_size as i32;
+                                        let alt_bin = (alt / alt_bin_size).round() as i32 * alt_bin_size as i32;
+                                        groups.entry((inc_bin, alt_bin)).or_default().push(i);
+                                    }
+                                    let mut sorted: Vec<_> = groups.into_iter().collect();
+                                    sorted.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+                                    let min_sats = if n < 50 { 1 } else { (n / 50).max(10) };
+                                    let base_color = preset.color_index();
+                                    let mut new_shells = Vec::new();
+                                    let mut other_indices = Vec::new();
+                                    let mut co_counter: usize = 0;
+                                    for ((inc, alt), indices) in sorted {
+                                        if indices.len() < min_sats {
+                                            other_indices.extend(indices);
+                                            continue;
+                                        }
+                                        new_shells.push(crate::tle::TleShell {
+                                            label: format!("{}°/{}km", inc, alt),
+                                            satellite_indices: indices,
+                                            color_offset: base_color + co_counter,
+                                            selected: true,
+                                        });
+                                        co_counter += 1;
+                                    }
+                                    if !other_indices.is_empty() {
+                                        new_shells.push(crate::tle::TleShell {
+                                            label: "Other".to_string(),
+                                            satellite_indices: other_indices,
+                                            color_offset: base_color + co_counter,
+                                            selected: true,
+                                        });
+                                    }
+                                    *shells = Some(new_shells);
+                                }
+                            }
                         }
                     }
                 }
@@ -860,6 +942,36 @@ impl eframe::App for App {
         ctx.request_repaint();
 
         for tab in &mut v.tabs {
+            if tab.settings.auto_rotate {
+                let angle = -tab.settings.auto_rotate_speed.to_radians() * dt;
+                let lat = tab.settings.auto_rotate_axis_lat.to_radians();
+                let lon = tab.settings.auto_rotate_axis_lon.to_radians();
+                let ax = lat.sin() * lon.cos();
+                let ay = lat.cos();
+                let az = lat.sin() * lon.sin();
+                let c = angle.cos();
+                let s = angle.sin();
+                let t = 1.0 - c;
+                let rot = nalgebra::Matrix3::new(
+                    t*ax*ax + c,    t*ax*ay - s*az, t*ax*az + s*ay,
+                    t*ax*ay + s*az, t*ay*ay + c,    t*ay*az - s*ax,
+                    t*ax*az - s*ay, t*ay*az + s*ax, t*az*az + c,
+                );
+                tab.settings.rotation = tab.settings.rotation * rot;
+            }
+            if tab.settings.auto_zoom {
+                tab.settings.auto_zoom_time += dt;
+                let dur = tab.settings.auto_zoom_duration;
+                let cycle = dur * 2.0;
+                let t_raw = (tab.settings.auto_zoom_time % cycle) / dur;
+                let t = if t_raw <= 1.0 { t_raw } else { 2.0 - t_raw };
+                let t_smooth = t.powf(3.0) / (t.powf(3.0) + (1.0 - t).clamp(1e-9, 1.0).powf(3.0));
+                let min_zoom = 10000.0 / tab.settings.auto_zoom_max_alt;
+                let max_zoom = 10000.0 / tab.settings.auto_zoom_min_alt;
+                let log_min = min_zoom.ln();
+                let log_max = max_zoom.ln();
+                tab.settings.zoom = (log_max + (log_min - log_max) * t_smooth).exp();
+            }
             let sim_seconds = if tab.settings.animate {
                 tab.settings.time += dt * tab.settings.speed;
                 dt * tab.settings.speed
@@ -877,11 +989,12 @@ impl eframe::App for App {
                         let scale_height = 60.0;
                         let rho_ref = 2.8e-12;
                         let h_ref = 400.0;
-                        let rho = rho_ref * ((h_ref - h) / scale_height).exp();
+                        let rho = rho_ref * ((h_ref - h) / scale_height).exp().min(1e6);
                         let v_ms = (mu / r).sqrt() * 1000.0;
                         let a_m = r * 1000.0;
                         let dh_ms = -rho * v_ms * a_m / cons.ballistic_coeff;
-                        cons.altitude_km = (h + dh_ms * sim_seconds / 1000.0).max(0.0);
+                        let dh_km = (dh_ms * sim_seconds / 1000.0).max(-h);
+                        cons.altitude_km = (h + dh_km).max(50.0);
                     }
                     if cons.propagator == crate::config::Propagator::Numerical {
                         let j2_val = planet.celestial_body.j2();
@@ -911,6 +1024,7 @@ impl eframe::App for App {
 
         if v.auto_cycle_tabs && v.tabs.len() > 1 {
             v.last_cycle_time += dt;
+            let mut advance_tab = false;
             if v.slideshow_mode {
                 const FADE_DUR: f64 = 0.5;
                 let t = v.last_cycle_time;
@@ -924,24 +1038,39 @@ impl eframe::App for App {
                 } else {
                     v.slideshow_fade_alpha = 0.0;
                     v.last_cycle_time = 0.0;
-                    let tab_data: Vec<(egui_dock::SurfaceIndex, egui_dock::NodeIndex, usize)> = self.dock_state.iter_all_tabs()
-                        .map(|((s, n), &idx)| (s, n, idx))
-                        .collect();
-                    if let Some(current_pos) = tab_data.iter().position(|(_, _, idx)| *idx == active_tab_idx) {
-                        let next_pos = (current_pos + 1) % tab_data.len();
-                        let (surface, node, _) = tab_data[next_pos];
-                        self.dock_state.set_focused_node_and_surface((surface, node));
-                    }
+                    advance_tab = true;
                 }
             } else if v.last_cycle_time >= v.cycle_interval {
                 v.last_cycle_time = 0.0;
+                advance_tab = true;
+            }
+            if advance_tab {
                 let tab_data: Vec<(egui_dock::SurfaceIndex, egui_dock::NodeIndex, usize)> = self.dock_state.iter_all_tabs()
                     .map(|((s, n), &idx)| (s, n, idx))
                     .collect();
                 if let Some(current_pos) = tab_data.iter().position(|(_, _, idx)| *idx == active_tab_idx) {
                     let next_pos = (current_pos + 1) % tab_data.len();
-                    let (surface, node, _) = tab_data[next_pos];
-                    self.dock_state.set_focused_node_and_surface((surface, node));
+                    let (surface, node, next_tab_idx) = tab_data[next_pos];
+                    self.dock_state.set_active_tab((
+                        surface,
+                        node,
+                        egui_dock::TabIndex(next_pos),
+                    ));
+                    if let Some(tab) = v.tabs.get_mut(next_tab_idx) {
+                        tab.settings.auto_zoom_time = 0.0;
+                        if let Some(rot) = tab.settings.initial_rotation {
+                            tab.settings.rotation = rot;
+                        }
+                        for planet in &mut tab.planets {
+                            if planet.kessler.enabled {
+                                planet.kessler.debris.clear();
+                                planet.kessler.collision_count = 0;
+                                planet.kessler.collided_pairs.clear();
+                            }
+                        }
+                    }
+                    v.ss_auto_zoom_time = 0.0;
+                    v.planet_sizes_auto_time = 0.0;
                 }
             }
         }
@@ -1207,9 +1336,7 @@ impl eframe::App for App {
                     ));
                 }
 
-                let render_interval = if show_planet_sizes { 200 } else if v.ss_auto_zoom { 5000 } else { 1000 };
-                let needs_render = v.solar_system_handles.is_empty()
-                    || v.ss_last_render_instant.map_or(true, |t| t.elapsed().as_millis() > render_interval);
+                let needs_render = v.solar_system_handles.is_empty();
                 if needs_render {
                     v.ss_last_render_instant = Some(web_time::Instant::now());
                     let tilt = 30.0_f64.to_radians();
@@ -1225,7 +1352,7 @@ impl eframe::App for App {
                     sorted_bodies.sort_by(|a, b| b.radius_km().partial_cmp(&a.radius_km()).unwrap());
                     let focus_idx = (v.planet_sizes_t as usize).min(sorted_bodies.len().saturating_sub(1));
                     let focus_radius = sorted_bodies[focus_idx].radius_km();
-                    let max_render = if show_planet_sizes { 192 } else { 64 };
+                    let max_render = if show_planet_sizes { 256 } else { 128 };
 
                     let gpu_ok = cfg!(not(target_arch = "wasm32")) && v.render_state.is_some();
                     if gpu_ok {
@@ -1247,7 +1374,8 @@ impl eframe::App for App {
                             for body in CelestialBody::ALL {
                                 let key = (body, Skin::Default, TextureResolution::R512);
                                 let ratio = (body.radius_km() / focus_radius).min(1.0);
-                                let body_render_size = if ratio > 0.1 { max_render } else { ((max_render as f64 * ratio * 10.0) as usize).clamp(32, max_render) };
+                                let body_max = if body == CelestialBody::Sun { max_render * 2 } else { max_render };
+                                let body_render_size = if ratio > 0.1 { body_max } else { ((body_max as f64 * ratio * 10.0) as usize).clamp(32, body_max) };
                                 let body_rot = body_rotation_angle(body, tab_time, v.current_gmst)
                                     + 30.0_f64.to_radians();
                                 let cos_a = body_rot.cos();
@@ -1569,26 +1697,159 @@ impl eframe::App for App {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         ui.add_space(4.0);
-                        ui.strong("Settings");
-                        if ui.button("[Info]").clicked() {
+                        ui.strong("LeoDOS Visualiser").on_hover_text(env!("GIT_HASH"));
+                        if ui.button("[?]").clicked() {
                             self.viewer.show_info = !self.viewer.show_info;
                         }
-                        if ui.button("[Demo]").clicked() {
-                            self.setup_demo();
+                        {
+                            let active = self.viewer.active_tab_idx;
+                            let current_name = self.viewer.tabs.get(active)
+                                .map(|t| t.name.as_str())
+                                .unwrap_or("?");
+                            let max_chars = 12;
+                            let truncated: String = if current_name.chars().count() > max_chars {
+                                let mut s: String = current_name.chars().take(max_chars).collect();
+                                s.push('…');
+                                s
+                            } else {
+                                current_name.to_string()
+                            };
+                            let tab_data: Vec<(egui_dock::SurfaceIndex, egui_dock::NodeIndex, usize)> =
+                                self.dock_state.iter_all_tabs()
+                                    .map(|((s, n), &idx)| (s, n, idx))
+                                    .collect();
+                            let popup_id = ui.make_persistent_id("tab_dropdown_popup");
+                            let button = ui.add(egui::Button::new(
+                                egui::RichText::new(&truncated).small()
+                            ).wrap_mode(egui::TextWrapMode::Truncate));
+                            if button.clicked() {
+                                ui.memory_mut(|m| m.toggle_popup(popup_id));
+                            }
+                            let mut selected: Option<(egui_dock::SurfaceIndex, egui_dock::NodeIndex, usize, usize)> = None;
+                            let mut demo_requested = false;
+                            let mut remove_tab: Option<usize> = None;
+                            let mut add_tab = false;
+                            egui::popup_below_widget(ui, popup_id, &button, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+                                ui.set_min_width(200.0);
+                                for (pos, &(surface, node, tab_idx)) in tab_data.iter().enumerate() {
+                                    let name = self.viewer.tabs.get(tab_idx)
+                                        .map(|t| t.name.as_str())
+                                        .unwrap_or("?");
+                                    ui.horizontal(|ui| {
+                                        if ui.selectable_label(tab_idx == active, name).clicked() {
+                                            selected = Some((surface, node, pos, tab_idx));
+    
+                                        }
+                                        if self.viewer.tabs.len() > 1 {
+                                            if ui.small_button("×").clicked() {
+                                                remove_tab = Some(tab_idx);
+        
+                                            }
+                                        }
+                                    });
+                                }
+                                ui.separator();
+                                if ui.button("+ Add new tab").clicked() {
+                                    add_tab = true;
+                                }
+                                ui.separator();
+                                ui.horizontal(|ui| {
+                                    ui.label("Cycle interval:");
+                                    ui.add(egui::DragValue::new(&mut self.viewer.cycle_interval).range(1.0..=120.0).speed(0.5).suffix("s"));
+                                });
+                                ui.separator();
+                                if ui.button("Load Demo").clicked() {
+                                    demo_requested = true;
+                                }
+                            });
+                            if let Some((surface, node, pos, tab_idx)) = selected {
+                                self.dock_state.set_active_tab((surface, node, egui_dock::TabIndex(pos)));
+                                if let Some(tab) = self.viewer.tabs.get_mut(tab_idx) {
+                                    tab.settings.auto_zoom_time = 0.0;
+                                    if let Some(rot) = tab.settings.initial_rotation {
+                                        tab.settings.rotation = rot;
+                                    }
+                                    for planet in &mut tab.planets {
+                                        if planet.kessler.enabled {
+                                            planet.kessler.debris.clear();
+                                            planet.kessler.collision_count = 0;
+                                            planet.kessler.collided_pairs.clear();
+                                        }
+                                    }
+                                }
+                                self.viewer.ss_auto_zoom_time = 0.0;
+                                self.viewer.planet_sizes_auto_time = 0.0;
+                            }
+                            if let Some(idx) = remove_tab {
+                                if self.viewer.tabs.len() > 1 && idx < self.viewer.tabs.len() {
+                                    self.viewer.tabs.remove(idx);
+                                    let new_active = self.viewer.active_tab_idx.min(self.viewer.tabs.len().saturating_sub(1));
+                                    self.viewer.active_tab_idx = new_active;
+                                    self.dock_state = egui_dock::DockState::new(vec![0]);
+                                    for i in 1..self.viewer.tabs.len() {
+                                        self.dock_state.push_to_focused_leaf(i);
+                                    }
+                                    self.dock_state.set_active_tab((
+                                        egui_dock::SurfaceIndex::main(),
+                                        egui_dock::NodeIndex::root(),
+                                        egui_dock::TabIndex(new_active),
+                                    ));
+                                }
+                            }
+                            if add_tab {
+                                self.viewer.tab_counter += 1;
+                                let mut tab = crate::config::TabConfig::new(format!("View {}", self.viewer.tab_counter));
+                                if let Some(last_tab) = self.viewer.tabs.last() {
+                                    tab.planets = last_tab.planets.clone();
+                                    tab.planet_counter = last_tab.planet_counter;
+                                }
+                                self.viewer.tabs.push(tab);
+                                let new_idx = self.viewer.tabs.len() - 1;
+                                self.viewer.pending_add_tab = Some(new_idx);
+                            }
+                            if demo_requested {
+                                self.setup_demo();
+                            }
                         }
-                        ui.weak(env!("GIT_HASH"));
+                        let play_label = if self.viewer.auto_cycle_tabs { "⏸" } else { "▶" };
+                        if ui.small_button(play_label).on_hover_text("Auto-cycle tabs").clicked() {
+                            self.viewer.auto_cycle_tabs = !self.viewer.auto_cycle_tabs;
+                        }
+                        let pres_label = if self.viewer.show_tab_info { "[P]" } else { "[p]" };
+                        if ui.small_button(pres_label).on_hover_text("Presentation mode").clicked() {
+                            self.viewer.show_tab_info = !self.viewer.show_tab_info;
+                        }
                         if ui.small_button("−").clicked() {
                             self.viewer.show_side_panel = false;
                         }
                     });
                     ui.separator();
-                    let mut scroll = egui::ScrollArea::vertical().id_salt("settings_scroll");
-                    if self.first_frame {
-                        scroll = scroll.vertical_scroll_offset(0.0);
+                    if self.viewer.show_tab_info {
+                        let active = self.viewer.active_tab_idx;
+                        if let Some(tab) = self.viewer.tabs.get(active) {
+                            if !tab.title.is_empty() {
+                                ui.add_space(8.0);
+                                ui.label(egui::RichText::new(&tab.title).strong().size(22.0));
+                            }
+                            if !tab.description.is_empty() {
+                                ui.add_space(6.0);
+                                let job = crate::config::description_layout_job(
+                                    &tab.description,
+                                    16.0,
+                                    egui::Color32::from_rgb(200, 200, 200),
+                                );
+                                ui.label(job);
+                            }
+                        }
+                    } else {
+                        let mut scroll = egui::ScrollArea::vertical().id_salt("settings_scroll");
+                        if self.first_frame {
+                            scroll = scroll.vertical_scroll_offset(0.0);
+                        }
+                        scroll.show(ui, |ui| {
+                            self.viewer.show_settings(ui);
+                        });
                     }
-                    scroll.show(ui, |ui| {
-                        self.viewer.show_settings(ui);
-                    });
                 });
         }
 
@@ -1604,15 +1865,12 @@ impl eframe::App for App {
             true
         };
         self.viewer.ui_visible = ui_visible;
-        if !ui_visible {
-            dock_style.tab_bar.height = 0.0;
-        }
-        let tab_bar_height = dock_style.tab_bar.height;
-        let mut dock = DockArea::new(&mut self.dock_state)
+        dock_style.tab_bar.height = 0.0;
+        dock_style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
+        dock_style.tab_bar.show_scroll_bar_on_overflow = false;
+        let tab_bar_height = 0.0;
+        let dock = DockArea::new(&mut self.dock_state)
             .style(dock_style);
-        if ui_visible {
-            dock = dock.show_add_buttons(true);
-        }
         dock.show(ctx, &mut self.viewer);
 
         if !self.viewer.show_side_panel && ui_visible {
@@ -1660,7 +1918,9 @@ impl eframe::App for App {
             }
         }
 
-        for tab in &self.viewer.tabs {
+        let active_idx = self.viewer.active_tab_idx;
+        for (ti, tab) in self.viewer.tabs.iter().enumerate() {
+            if ti != active_idx { continue; }
             if !tab.settings.show_camera_windows { continue; }
             let tab_time = tab.settings.time;
             let coverage_angle = tab.settings.coverage_angle;
@@ -1675,25 +1935,68 @@ impl eframe::App for App {
                 let cos_a = body_rot.cos();
                 let sin_a = body_rot.sin();
                 for camera in &planet.satellite_cameras {
-                    let sat_data = planet.constellations.get(camera.constellation_idx).and_then(|cons| {
-                        let wc = cons.constellation(pr, pm, pj2, peq);
-                        let positions = wc.satellite_positions(tab_time);
-                        positions.iter()
-                            .find(|s| s.plane == camera.plane && s.sat_index == camera.sat_index)
-                            .map(|s| {
-                                let bx = s.x * cos_a - s.z * sin_a;
-                                let bz = s.x * sin_a + s.z * cos_a;
-                                let ground_lon = (-bz).atan2(bx).to_degrees();
-                                (s.lat, ground_lon, cons.altitude_km, texture, pr)
-                            })
-                    });
+                    let sat_data = if camera.constellation_idx == usize::MAX {
+                        let propagation_minutes = self.viewer.start_timestamp.timestamp() as f64 / 60.0 + tab_time / 60.0;
+                        let mut found = None;
+                        for preset in TlePreset::ALL.iter() {
+                            let Some((selected, state, _)) = planet.tle_selections.get(preset) else { continue };
+                            if !*selected { continue; }
+                            let TleLoadState::Loaded { satellites, .. } = state else { continue };
+                            let Some(sat) = satellites.get(camera.sat_index) else { continue };
+                            let minutes_since_epoch = propagation_minutes - sat.epoch_minutes;
+                            let Ok(prediction) = sat.constants.propagate(sgp4::MinutesSinceEpoch(minutes_since_epoch)) else { continue };
+                            let x = prediction.position[0];
+                            let y = prediction.position[2];
+                            let z = -prediction.position[1];
+                            let vx = prediction.velocity[0];
+                            let vy = prediction.velocity[2];
+                            let vz = -prediction.velocity[1];
+                            let r = (x * x + y * y + z * z).sqrt();
+                            let lat = (y / r).asin().to_degrees();
+                            let bx = x * cos_a - z * sin_a;
+                            let bz = x * sin_a + z * cos_a;
+                            let ground_lon = (-bz).atan2(bx).to_degrees();
+                            let altitude_km = r - pr;
+                            let heading = compute_sat_heading(x, y, z, vx, vy, vz);
+                            found = Some((lat, ground_lon, altitude_km, texture, pr, heading));
+                            break;
+                        }
+                        found
+                    } else {
+                        planet.constellations.get(camera.constellation_idx).and_then(|cons| {
+                            let wc = cons.constellation(pr, pm, pj2, peq);
+                            let positions = wc.satellite_positions(tab_time);
+                            let positions_next = wc.satellite_positions(tab_time + 1.0);
+                            positions.iter()
+                                .find(|s| s.plane == camera.plane && s.sat_index == camera.sat_index)
+                                .map(|s| {
+                                    let bx = s.x * cos_a - s.z * sin_a;
+                                    let bz = s.x * sin_a + s.z * cos_a;
+                                    let ground_lon = (-bz).atan2(bx).to_degrees();
+                                    let heading = positions_next.iter()
+                                        .find(|s2| s2.plane == camera.plane && s2.sat_index == camera.sat_index)
+                                        .map(|s2| compute_sat_heading(s.x, s.y, s.z, s2.x - s.x, s2.y - s.y, s2.z - s.z))
+                                        .unwrap_or(0.0);
+                                    (s.lat, ground_lon, cons.altitude_km, texture, pr, heading)
+                                })
+                        })
+                    };
 
-                    if let Some((lat, lon, altitude_km, texture, planet_radius)) = sat_data {
+                    if let Some((lat, lon, altitude_km, texture, planet_radius, heading)) = sat_data {
+                        let follow_pos = if let Some(screen_pos) = camera.screen_pos {
+                            egui::pos2((screen_pos.x - 280.0).max(20.0), (screen_pos.y - 240.0).max(20.0))
+                        } else {
+                            egui::pos2(20.0, ctx.content_rect().center().y - 110.0)
+                        };
                         let win_response = egui::Window::new(format!("{}: {}", planet.name, camera.label))
                             .id(egui::Id::new(format!("sat_cam_{}_{}", planet.name, camera.id)))
                             .title_bar(true)
                             .collapsible(false)
                             .default_size([200.0, 220.0])
+                            // `current_pos` overrides the egui-persisted window position each
+                            // frame, so the camera window follows the satellite across the
+                            // screen rather than freezing wherever it first appeared.
+                            .current_pos(follow_pos)
                             .show(ctx, |ui| {
                                 if let Some(tex) = texture {
                                     draw_satellite_camera(
@@ -1705,13 +2008,14 @@ impl eframe::App for App {
                                         coverage_angle,
                                         tex,
                                         planet_radius,
+                                        heading,
                                     );
                                 }
                             });
 
                         if let (Some(screen_pos), Some(win_resp)) = (camera.screen_pos, win_response) {
                             let win_rect = win_resp.response.rect;
-                            let win_center = win_rect.left_center();
+                            let win_center = win_rect.right_bottom();
                             ctx.layer_painter(egui::LayerId::new(
                                 egui::Order::Middle,
                                 egui::Id::new("sat_lines"),

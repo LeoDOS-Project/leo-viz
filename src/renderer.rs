@@ -96,13 +96,12 @@ pub struct GpuResources {
     pub _target_format: wgpu::TextureFormat,
 
     pub sun_ub: wgpu::Buffer,
-    pub heatmap_ub: wgpu::Buffer,
     pub map_ub: wgpu::Buffer,
     pub planet_bg_queue: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     pub planet_bg_paint_idx: std::sync::atomic::AtomicUsize,
+    pub heatmap_bg_queue: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+    pub heatmap_bg_paint_idx: std::sync::atomic::AtomicUsize,
     pub sun_bg: Option<wgpu::BindGroup>,
-    pub heatmap_bg: Option<wgpu::BindGroup>,
-    pub heatmap_bg_key: u64,
     pub map_bg: Option<wgpu::BindGroup>,
     pub map_bg_key: u64,
     pub texture_gen: u64,
@@ -330,7 +329,6 @@ impl GpuResources {
             mapped_at_creation: false,
         });
         let sun_ub = make_ub("sun_ub", std::mem::size_of::<SunUniforms>() as u64);
-        let heatmap_ub = make_ub("heatmap_ub", std::mem::size_of::<HeatmapUniforms>() as u64);
         let map_ub = make_ub("map_ub", std::mem::size_of::<MapUniforms>() as u64);
 
         let sun_bg = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -487,10 +485,11 @@ impl GpuResources {
             dummy_view,
             _dummy_view_rgba: dummy_view_rgba,
             _target_format: format,
-            sun_ub, heatmap_ub, map_ub,
+            sun_ub, map_ub,
             planet_bg_queue: Vec::new(), planet_bg_paint_idx: std::sync::atomic::AtomicUsize::new(0),
-            sun_bg, heatmap_bg: None, map_bg: None,
-            heatmap_bg_key: 0, map_bg_key: 0, texture_gen: 0,
+            heatmap_bg_queue: Vec::new(), heatmap_bg_paint_idx: std::sync::atomic::AtomicUsize::new(0),
+            sun_bg, map_bg: None,
+            map_bg_key: 0, texture_gen: 0,
             rad_trace_pipeline, rad_blur_pipeline, rad_reduce_pipeline, rad_finalize_pipeline,
             rad_compute_bgl, rad_bg_ab, rad_bg_ba,
             rad_params_buf, rad_aep8_buf, rad_grid_a, rad_grid_b, rad_max_buf,
@@ -551,7 +550,7 @@ impl GpuResources {
     }
 
     pub fn upload_map_texture(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, key: (CelestialBody, Skin, TextureResolution), earth_tex: &EarthTexture) {
-        if self.map_texture_key == Some(key) { return; }
+        if self.map_texture_key == Some(key) && self.map_texture_view.is_some() { return; }
         let pixels: Vec<u8> = earth_tex.pixels.iter().flat_map(|&[r, g, b]| [r, g, b]).collect();
         self.map_texture_view = Some(upload_rgb_texture(device, queue, earth_tex.width as u32, earth_tex.height as u32, &pixels));
         self.map_texture_key = Some(key);
@@ -1031,29 +1030,38 @@ impl CallbackTrait for HeatmapPaintCallback {
             gpu.upload_heatmap_data(device, queue, key, data, 181, 91);
         }
 
-        queue.write_buffer(&gpu.heatmap_ub, 0, bytemuck::bytes_of(&self.uniforms));
-        let gen = gpu.texture_gen;
-        if gpu.heatmap_bg.is_none() || gpu.heatmap_bg_key != gen {
-            let hd_view = gpu.heatmap_data_view.as_ref().unwrap_or(&gpu.dummy_view);
-            gpu.heatmap_bg = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("heatmap_bg"),
-                layout: &gpu.heatmap_bgl,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: gpu.heatmap_ub.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&gpu.sampler_clamp) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&gpu.heatmap_palette_view) },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(hd_view) },
-                    wgpu::BindGroupEntry { binding: 4, resource: gpu.igrf_coeffs_buf.as_entire_binding() },
-                ],
-            }));
-            gpu.heatmap_bg_key = gen;
+        let paint_idx = gpu.heatmap_bg_paint_idx.load(std::sync::atomic::Ordering::Relaxed);
+        if paint_idx >= gpu.heatmap_bg_queue.len() {
+            gpu.heatmap_bg_queue.clear();
+            gpu.heatmap_bg_paint_idx.store(0, std::sync::atomic::Ordering::Relaxed);
         }
+        let ub = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("heatmap_ub_inst"),
+            size: std::mem::size_of::<HeatmapUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&ub, 0, bytemuck::bytes_of(&self.uniforms));
+        let hd_view = gpu.heatmap_data_view.as_ref().unwrap_or(&gpu.dummy_view);
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("heatmap_bg_inst"),
+            layout: &gpu.heatmap_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: ub.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&gpu.sampler_clamp) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&gpu.heatmap_palette_view) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(hd_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: gpu.igrf_coeffs_buf.as_entire_binding() },
+            ],
+        });
+        gpu.heatmap_bg_queue.push((ub, bg));
         cmds
     }
 
     fn paint(&self, _info: egui::PaintCallbackInfo, render_pass: &mut wgpu::RenderPass<'static>, res: &CallbackResources) {
         let gpu = res.get::<GpuResources>().unwrap();
-        if let Some(ref bg) = gpu.heatmap_bg {
+        let idx = gpu.heatmap_bg_paint_idx.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some((_, ref bg)) = gpu.heatmap_bg_queue.get(idx) {
             render_pass.set_pipeline(&gpu.heatmap_pipeline);
             render_pass.set_bind_group(0, bg, &[]);
             render_pass.draw(0..4, 0..1);

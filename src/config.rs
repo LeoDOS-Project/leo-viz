@@ -65,6 +65,7 @@ pub struct ConstellationConfig {
     pub drag_enabled: bool,
     pub ballistic_coeff: f64,
     pub preset: Preset,
+    pub label: Option<String>,
     pub color_offset: usize,
     pub hidden: bool,
     pub show_physics_ui: bool,
@@ -93,6 +94,7 @@ impl ConstellationConfig {
             drag_enabled: false,
             ballistic_coeff: 100.0,
             preset: Preset::None,
+            label: None,
             color_offset,
             hidden: false,
             show_physics_ui: false,
@@ -119,8 +121,10 @@ impl ConstellationConfig {
         h
     }
 
-    pub fn sso_inclination(altitude_km: f64, eccentricity: f64, planet_mu: f64, planet_j2: f64, planet_eq_radius: f64, planet_year_days: f64) -> Option<f64> {
-        let a = planet_eq_radius + altitude_km;
+    pub fn sso_inclination(altitude_km: f64, eccentricity: f64, planet_mu: f64, planet_j2: f64, planet_mean_radius: f64, planet_eq_radius: f64, planet_year_days: f64) -> Option<f64> {
+        // a uses mean radius (matches walker.rs's semi_major calculation).
+        // The J2 (Re/a)² scaling uses equatorial radius (matches walker.rs's r_ratio).
+        let a = planet_mean_radius + altitude_km;
         let n = (planet_mu / (a * a * a)).sqrt();
         let rate_required = 2.0 * std::f64::consts::PI / (planet_year_days * 86400.0);
         let e2 = 1.0 - eccentricity * eccentricity;
@@ -154,7 +158,10 @@ impl ConstellationConfig {
         }
     }
 
-    pub fn preset_name(&self) -> &'static str {
+    pub fn preset_name(&self) -> &str {
+        if let Some(label) = &self.label {
+            return label;
+        }
         match self.preset {
             Preset::None => "Custom",
             Preset::Starlink => "Starlink",
@@ -210,6 +217,10 @@ pub struct PlanetConfig {
     pub constellation_counter: usize,
     pub celestial_body: CelestialBody,
     pub skin: Skin,
+    pub abstract_ocean: egui::Color32,
+    pub abstract_land: egui::Color32,
+    pub abstract_ice: egui::Color32,
+    pub abstract_colors_dirty: bool,
     pub satellite_cameras: Vec<SatelliteCamera>,
     pub pending_cameras: Vec<SatelliteCamera>,
     pub cameras_to_remove: Vec<usize>,
@@ -230,6 +241,11 @@ pub struct PlanetConfig {
     pub show_radiation_window: bool,
     pub show_moons_window: bool,
     pub enabled_moons: HashSet<CelestialBody>,
+    pub moon_inclination_override: Option<f64>,
+    pub auto_cluster_tle: bool,
+    /// Accumulated sub-satellite points per tracked satellite, keyed by
+    /// (constellation_idx, plane, sat_index). Stored as (lat_deg, lon_deg, sim_time_s).
+    pub ground_track_history: HashMap<(usize, usize, usize), Vec<(f64, f64, f64)>>,
 }
 
 impl PlanetConfig {
@@ -244,6 +260,10 @@ impl PlanetConfig {
             constellation_counter: 0,
             celestial_body: CelestialBody::Earth,
             skin: Skin::Default,
+            abstract_ocean: egui::Color32::from_rgb(25, 40, 80),
+            abstract_land: egui::Color32::from_rgb(60, 75, 85),
+            abstract_ice: egui::Color32::from_rgb(140, 150, 160),
+            abstract_colors_dirty: false,
             satellite_cameras: Vec::new(),
             pending_cameras: Vec::new(),
             cameras_to_remove: Vec::new(),
@@ -268,6 +288,9 @@ impl PlanetConfig {
             show_radiation_window: false,
             show_moons_window: false,
             enabled_moons: HashSet::new(),
+            moon_inclination_override: None,
+            auto_cluster_tle: false,
+            ground_track_history: HashMap::new(),
         }
     }
 
@@ -292,8 +315,15 @@ pub struct View3DFlags {
     pub show_shortest_path: bool,
     pub show_radiation_path: bool,
     pub radiation_weight: f64,
+    pub routing_width: f32,
+    pub routing_node_scale: f32,
     pub show_asc_desc_colors: bool,
+    pub color_ascending: egui::Color32,
+    pub color_descending: egui::Color32,
+    pub color_links: egui::Color32,
+    pub show_sat_labels: bool,
     pub show_altitude_lines: bool,
+    pub altitude_line_width: f32,
     pub render_planet: bool,
     pub fixed_sizes: bool,
     pub show_sat_border: bool,
@@ -315,10 +345,13 @@ pub struct View3DFlags {
     pub trackpad_rotate: bool,
     pub north_up: bool,
     pub enabled_moons: HashSet<CelestialBody>,
+    pub moon_inclination_override: Option<f64>,
     pub show_moon_orbits: bool,
     pub show_moon_lines: bool,
     pub show_moon_labels: bool,
     pub moon_camera_distance_km: f64,
+    pub tle_monochrome: bool,
+    pub show_ground_tracks: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Default)]
@@ -365,7 +398,13 @@ pub struct TabSettings {
     pub show_shortest_path: bool,
     pub show_radiation_path: bool,
     pub radiation_weight: f64,
+    pub routing_width: f32,
+    pub routing_node_scale: f32,
     pub show_asc_desc_colors: bool,
+    pub color_ascending: egui::Color32,
+    pub color_descending: egui::Color32,
+    pub color_links: egui::Color32,
+    pub show_sat_labels: bool,
     pub single_color: bool,
     pub show_torus: bool,
     pub planet_projection: crate::projection::ProjectionKind,
@@ -391,6 +430,7 @@ pub struct TabSettings {
     pub view_mode: ViewMode,
     pub show_hohmann: bool,
     pub show_ss_labels: bool,
+    pub solar_system_hide_bodies: bool,
     pub solar_system_log_power: f64,
     pub sat_radius: f32,
     pub link_width: f32,
@@ -403,6 +443,22 @@ pub struct TabSettings {
     pub show_moon_labels: bool,
     pub moon_camera_distance_km: f64,
     pub show_circular_calendar: bool,
+    pub auto_zoom: bool,
+    pub auto_zoom_min_alt: f64,
+    pub auto_zoom_max_alt: f64,
+    pub auto_zoom_duration: f64,
+    pub auto_zoom_time: f64,
+    pub auto_rotate: bool,
+    pub auto_rotate_speed: f64,
+    pub auto_rotate_axis_lat: f64,
+    pub auto_rotate_axis_lon: f64,
+    pub camera_roll: f64,
+    pub initial_rotation: Option<nalgebra::Matrix3<f64>>,
+    pub tle_monochrome: bool,
+    pub reset_time_on_switch: bool,
+    pub sun_fixed_camera: bool,
+    pub show_ground_tracks: bool,
+    pub altitude_line_width: f32,
 }
 
 impl Default for TabSettings {
@@ -419,13 +475,19 @@ impl Default for TabSettings {
             show_orbits: true,
             show_links: true,
             show_coverage: false,
-            coverage_angle: 25.0,
+            coverage_angle: 50.0,
             show_routing_paths: false,
             show_manhattan_path: true,
             show_shortest_path: true,
             show_radiation_path: false,
             radiation_weight: 5.0,
+            routing_width: 1.5,
+            routing_node_scale: 1.0,
             show_asc_desc_colors: false,
+            color_ascending: egui::Color32::from_rgb(230, 150, 70),
+            color_descending: egui::Color32::from_rgb(70, 130, 210),
+            color_links: egui::Color32::from_rgb(80, 80, 80),
+            show_sat_labels: true,
             single_color: false,
             show_torus: false,
             planet_projection: crate::projection::ProjectionKind::Orthographic,
@@ -451,6 +513,7 @@ impl Default for TabSettings {
             view_mode: ViewMode::Planet,
             show_hohmann: false,
             show_ss_labels: true,
+            solar_system_hide_bodies: false,
             solar_system_log_power: 0.4,
             sat_radius: 1.5,
             link_width: 0.25,
@@ -463,6 +526,22 @@ impl Default for TabSettings {
             show_moon_labels: true,
             moon_camera_distance_km: 1_000_000.0,
             show_circular_calendar: false,
+            auto_zoom: false,
+            auto_zoom_min_alt: 1000.0,
+            auto_zoom_max_alt: 60000.0,
+            auto_zoom_duration: 20.0,
+            auto_zoom_time: 0.0,
+            auto_rotate: false,
+            auto_rotate_speed: 5.0,
+            auto_rotate_axis_lat: 0.0,
+            auto_rotate_axis_lon: 0.0,
+            camera_roll: 0.0,
+            initial_rotation: None,
+            tle_monochrome: false,
+            reset_time_on_switch: false,
+            sun_fixed_camera: false,
+            show_ground_tracks: false,
+            altitude_line_width: 0.5,
         }
     }
 }
@@ -477,6 +556,80 @@ pub struct TabConfig {
     pub show_sat_list: bool,
     pub show_fps: bool,
     pub settings: TabSettings,
+}
+
+/// Build an egui `LayoutJob` from text with `**bold**` markdown inline spans.
+/// Non-bold runs use `base_color`; bold runs are white and bold-weight.
+pub fn description_layout_job(
+    text: &str,
+    font_size: f32,
+    base_color: egui::Color32,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let regular = egui::FontId::proportional(font_size);
+    let bold = egui::FontId::new(font_size, egui::FontFamily::Proportional);
+    let bold_color = egui::Color32::WHITE;
+
+    let mut rest = text;
+    while let Some(start) = rest.find("**") {
+        if start > 0 {
+            job.append(
+                &rest[..start],
+                0.0,
+                egui::TextFormat {
+                    font_id: regular.clone(),
+                    color: base_color,
+                    ..Default::default()
+                },
+            );
+        }
+        let after = &rest[start + 2..];
+        if let Some(end) = after.find("**") {
+            let bold_text = &after[..end];
+            job.append(
+                bold_text,
+                0.0,
+                egui::TextFormat {
+                    font_id: bold.clone(),
+                    color: bold_color,
+                    italics: false,
+                    underline: egui::Stroke::new(1.5, bold_color),
+                    ..Default::default()
+                },
+            );
+            rest = &after[end + 2..];
+        } else {
+            // Unmatched — render as-is.
+            job.append(
+                &rest[start..],
+                0.0,
+                egui::TextFormat {
+                    font_id: regular.clone(),
+                    color: base_color,
+                    ..Default::default()
+                },
+            );
+            rest = "";
+        }
+    }
+    if !rest.is_empty() {
+        job.append(
+            rest,
+            0.0,
+            egui::TextFormat {
+                font_id: regular,
+                color: base_color,
+                ..Default::default()
+            },
+        );
+    }
+    job
+}
+
+/// Strip `**...**` markdown markers from plain text (for renderers that
+/// don't support styled runs).
+pub fn strip_bold_markers(text: &str) -> String {
+    text.replace("**", "")
 }
 
 impl TabConfig {

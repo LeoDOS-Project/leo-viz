@@ -284,10 +284,16 @@ impl WalkerConstellation {
         let p_factor = one_minus_e2 * one_minus_e2;
         let j2_coeff = 1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion;
 
+        // Sign note: with this codebase's convention `lon = -atan2(z, x)`, a
+        // positive rotation of the ascending node around +y corresponds to a
+        // *decreasing* longitude. J2 physically gives prograde RAAN regression
+        // (−cos(i) rate) in standard astronomy; we flip the sign here so the
+        // drift direction matches this code's lon convention — retrograde i
+        // produces RAAN motion eastward (matching the Sun's apparent motion).
         let raan_rate = if use_j2 {
-            -j2_coeff * inc_cos / p_factor
+            j2_coeff * inc_cos / p_factor
         } else {
-            -j2_coeff * inc_cos
+            0.0
         };
         let omega_rate = if use_j2 {
             j2_coeff * (2.0 - 2.5 * inc_sin * inc_sin) / p_factor
@@ -310,8 +316,9 @@ impl WalkerConstellation {
             let phase_offset = phase_step * plane as f64;
 
             for sat in 0..sats_per_plane {
-                let mean_anomaly = sat_step * sat as f64 - sat_center_offset
+                let raw_mean_anomaly = sat_step * sat as f64 - sat_center_offset
                     + if dead { 0.0 } else { m_dot * time } + phase_offset;
+                let mean_anomaly = raw_mean_anomaly.rem_euclid(2.0 * PI);
 
                 let true_anomaly = if ecc < 1e-8 {
                     mean_anomaly
@@ -397,7 +404,15 @@ impl WalkerConstellation {
         let mean_motion = 2.0 * PI / period;
         let r_ratio = self.planet_equatorial_radius / semi_major;
         let inc = self.inclination_deg.to_radians();
-        let raan_drift_rate = -1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion * inc.cos();
+        let use_j2 = self.propagator == Propagator::J2;
+        let raan_drift_rate = if use_j2 {
+            let e2 = ecc * ecc;
+            let one_minus_e2 = 1.0 - e2;
+            let p_factor = one_minus_e2 * one_minus_e2;
+            1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion * inc.cos() / p_factor
+        } else {
+            0.0
+        };
         let omega = self.arg_periapsis_deg.to_radians();
 
         let raan_step = self.raan_step();
@@ -458,7 +473,7 @@ impl WalkerConstellation {
         let e2 = ecc * ecc;
         let p_factor = (1.0 - e2) * (1.0 - e2);
         let j2_coeff = 1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion;
-        let raan_rate = -j2_coeff * inc_cos / p_factor;
+        let raan_rate = j2_coeff * inc_cos / p_factor;
         let omega_rate = j2_coeff * (2.0 - 2.5 * inc_sin * inc_sin) / p_factor;
         let m_dot = mean_motion + 0.75 * self.planet_j2 * r_ratio * r_ratio * mean_motion
             * (3.0 * inc_cos * inc_cos - 1.0) * (1.0 - e2).sqrt() / p_factor;
@@ -485,8 +500,9 @@ impl WalkerConstellation {
             let phase_offset = phase_step * plane as f64;
 
             for sat in 0..sats_per_plane {
-                let mean_anomaly = sat_step * sat as f64 - sat_center_offset
+                let raw_mean_anomaly = sat_step * sat as f64 - sat_center_offset
                     + if dead { 0.0 } else { m_dot * time } + phase_offset;
+                let mean_anomaly = raw_mean_anomaly.rem_euclid(2.0 * PI);
 
                 let true_anomaly = if ecc < 1e-8 {
                     mean_anomaly

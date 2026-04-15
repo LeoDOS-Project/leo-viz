@@ -277,6 +277,10 @@ impl ViewerState {
                             }
                         });
                         ui.horizontal(|ui| {
+                            ui.label("Roll:").on_hover_text("Rotate camera around viewing axis");
+                            ui.add(egui::DragValue::new(&mut s.camera_roll).range(-180.0..=180.0).speed(0.5).suffix("°"));
+                        });
+                        ui.horizontal(|ui| {
                             ui.label("Cam:").on_hover_text("Camera distance for moon/sun perspective");
                             let mut dist_m = s.moon_camera_distance_km / 1_000_000.0;
                             if ui.add(egui::DragValue::new(&mut dist_m)
@@ -287,6 +291,8 @@ impl ViewerState {
                         let was_earth_fixed = s.earth_fixed_camera;
                         ui.checkbox(&mut s.earth_fixed_camera, "Fixed Lat/Lon")
                             .on_hover_text("Lock camera to geographic coordinates");
+                        ui.checkbox(&mut s.sun_fixed_camera, "Fixed to Sun")
+                            .on_hover_text("Lock camera to the Sun direction (terminator stays fixed)");
                         if s.earth_fixed_camera != was_earth_fixed {
                             let cos_a = body_rotation.cos();
                             let sin_a = body_rotation.sin();
@@ -344,6 +350,43 @@ impl ViewerState {
                                 }
                             }
                         });
+                        let was_auto_zoom = s.auto_zoom;
+                        ui.checkbox(&mut s.auto_zoom, "Auto-zoom");
+                        if s.auto_zoom && !was_auto_zoom {
+                            s.auto_zoom_min_alt = 10000.0 / s.zoom;
+                            s.auto_zoom_time = 0.0;
+                        }
+                        if s.auto_zoom {
+                            ui.indent("auto_zoom_opts", |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Min alt:");
+                                    ui.add(egui::DragValue::new(&mut s.auto_zoom_min_alt).range(100.0..=1_000_000.0).speed(100.0).suffix(" km"));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Max alt:");
+                                    ui.add(egui::DragValue::new(&mut s.auto_zoom_max_alt).range(100.0..=1_000_000.0).speed(100.0).suffix(" km"));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Duration:");
+                                    ui.add(egui::DragValue::new(&mut s.auto_zoom_duration).range(2.0..=120.0).speed(0.5).suffix(" s"));
+                                });
+                            });
+                        }
+                        ui.checkbox(&mut s.auto_rotate, "Auto-rotate");
+                        if s.auto_rotate {
+                            ui.indent("auto_rotate_opts", |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Speed:");
+                                    ui.add(egui::DragValue::new(&mut s.auto_rotate_speed).range(-90.0..=90.0).speed(0.5).suffix("°/s"));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Axis lat:");
+                                    ui.add(egui::DragValue::new(&mut s.auto_rotate_axis_lat).range(-90.0..=90.0).speed(0.5).suffix("°"));
+                                    ui.label("lon:");
+                                    ui.add(egui::DragValue::new(&mut s.auto_rotate_axis_lon).range(-180.0..=180.0).speed(0.5).suffix("°"));
+                                });
+                            });
+                        }
                     });
                     });
                 }
@@ -364,7 +407,7 @@ impl ViewerState {
                         ui.horizontal(|ui| {
                             ui.label("Angle:");
                             ui.add(egui::DragValue::new(&mut s.coverage_angle)
-                                .range(0.5..=70.0).speed(0.1).max_decimals(1).suffix("°"))
+                                .range(0.5..=100.0).speed(0.1).max_decimals(1).suffix("°"))
                                 .on_hover_text("Minimum elevation angle for coverage");
                         });
                     });
@@ -378,10 +421,41 @@ impl ViewerState {
                 }
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_asc_desc_colors, "Asc/Desc colors"))
                     .on_hover_text("Color orbits by ascending/descending node");
+                if s.show_asc_desc_colors {
+                    ui.indent("asc_desc_colors", |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Asc");
+                            let mut c = s.color_ascending.to_array();
+                            if ui.color_edit_button_srgba_unmultiplied(&mut c).changed() {
+                                s.color_ascending = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+                            }
+                            ui.label("Desc");
+                            let mut c = s.color_descending.to_array();
+                            if ui.color_edit_button_srgba_unmultiplied(&mut c).changed() {
+                                s.color_descending = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+                            }
+                            ui.label("Links");
+                            let mut c = s.color_links.to_array();
+                            if ui.color_edit_button_srgba_unmultiplied(&mut c).changed() {
+                                s.color_links = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+                            }
+                        });
+                    });
+                }
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_sat_labels, "Satellite labels"))
+                    .on_hover_text("Show satellite info tooltip on hover");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.single_color, "Monochrome planes"))
                     .on_hover_text("Use a single color for all orbital planes");
-                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_altitude_lines, "Altitude lines"))
-                    .on_hover_text("Draw concentric altitude reference rings");
+                ui.horizontal(|ui| {
+                    ui.add_enabled(on, egui::Checkbox::new(&mut s.show_altitude_lines, "Altitude lines"))
+                        .on_hover_text("Draw a radial line from each satellite down to the surface");
+                    ui.add_enabled(on && s.show_altitude_lines, egui::DragValue::new(&mut s.altitude_line_width)
+                        .range(0.2..=8.0)
+                        .speed(0.1)
+                        .max_decimals(1)
+                        .suffix("px"))
+                        .on_hover_text("Width of the altitude reference line");
+                });
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_torus, "Show torus"))
                     .on_hover_text("Display the orbital torus shell");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_links, "ISL links"))
@@ -398,6 +472,16 @@ impl ViewerState {
                     if s.show_radiation_path && s.show_routing_paths {
                         ui.add(egui::Slider::new(&mut s.radiation_weight, 0.0..=10.0).text("Rad weight"))
                             .on_hover_text("Weight of radiation cost in path finding");
+                    }
+                    if s.show_routing_paths {
+                        ui.horizontal(|ui| {
+                            ui.label("Link:");
+                            ui.add(egui::DragValue::new(&mut s.routing_width).range(0.5..=20.0).speed(0.1).max_decimals(1))
+                                .on_hover_text("Routing path line width");
+                            ui.label("Node:");
+                            ui.add(egui::DragValue::new(&mut s.routing_node_scale).range(1.0..=10.0).speed(0.1).max_decimals(1).suffix("x"))
+                                .on_hover_text("Scale factor for satellite nodes when routing is active");
+                        });
                     }
                 });
                 ui.horizontal(|ui| {
@@ -428,12 +512,14 @@ impl ViewerState {
                     .on_hover_text("Dim satellites in the planet's shadow");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_sun, "Show sun"))
                     .on_hover_text("Display the sun direction indicator");
-                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_polar_circle, "Show polar circle"))
-                    .on_hover_text("Draw the Arctic and Antarctic circles");
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_polar_circle, "Show oblateness"))
+                    .on_hover_text("Show planetary oblateness (flattening at the poles)");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_equator, "Show equator"))
                     .on_hover_text("Draw the equatorial line");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_graticule, "Show graticule"))
                     .on_hover_text("Draw latitude/longitude grid lines");
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_ground_tracks, "Show ground tracks"))
+                    .on_hover_text("Plot sub-satellite points for camera-tracked satellites");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_crosshairs, "Show crosshairs"))
                     .on_hover_text("Draw crosshair lines at the view center");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_day_night, "Show day/night"))
@@ -506,6 +592,32 @@ impl ViewerState {
                     .on_hover_text("Label major cities on the surface");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_borders, "Country borders"))
                     .on_hover_text("Draw national border lines");
+                let is_abstract = planets.first().map_or(false, |p| p.skin == crate::celestial::Skin::Abstract);
+                if is_abstract {
+                    if let Some(planet) = planets.first_mut() {
+                        ui.label("Abstract colors");
+                        ui.horizontal(|ui| {
+                            ui.label("Ocean");
+                            let mut c = planet.abstract_ocean.to_array();
+                            if ui.color_edit_button_srgba_unmultiplied(&mut c).changed() {
+                                planet.abstract_ocean = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+                                planet.abstract_colors_dirty = true;
+                            }
+                            ui.label("Land");
+                            let mut c = planet.abstract_land.to_array();
+                            if ui.color_edit_button_srgba_unmultiplied(&mut c).changed() {
+                                planet.abstract_land = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+                                planet.abstract_colors_dirty = true;
+                            }
+                            ui.label("Ice");
+                            let mut c = planet.abstract_ice.to_array();
+                            if ui.color_edit_button_srgba_unmultiplied(&mut c).changed() {
+                                planet.abstract_ice = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+                                planet.abstract_colors_dirty = true;
+                            }
+                        });
+                    }
+                }
             });
         });
         }
@@ -539,6 +651,8 @@ impl ViewerState {
             });
             ui.add_enabled(on, egui::Checkbox::new(&mut s.show_ss_labels, "Planet labels"))
                 .on_hover_text("Show planet name labels in the solar system view");
+            ui.add_enabled(on, egui::Checkbox::new(&mut s.solar_system_hide_bodies, "Hide planet bodies"))
+                .on_hover_text("Hide planet body images, showing only the Sun. Orbits and labels remain visible.");
             ui.label(egui::RichText::new("Hohmann Transfer").strong());
             let h_sim_time = s.time;
             ui.indent("hohmann_opts", |ui| {
@@ -770,30 +884,6 @@ impl ViewerState {
                     .on_hover_text("Pause duration at each zoom level");
             });
         });
-        }
-        ui.checkbox(&mut self.auto_hide_tab_bar, "Auto-hide UI")
-            .on_hover_text("Hide the tab bar and sidebar automatically");
-        ui.checkbox(&mut self.auto_cycle_tabs, "Auto-cycle tabs")
-            .on_hover_text("Cycle through tabs automatically");
-        ui.indent("cycle_opts", |ui| {
-            ui.add_enabled_ui(self.auto_cycle_tabs, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Interval:");
-                    ui.add(egui::DragValue::new(&mut self.cycle_interval).range(1.0..=60.0).speed(0.5).suffix("s"))
-                        .on_hover_text("Time between automatic tab switches");
-                });
-            });
-        });
-
-        let prev_slideshow = self.slideshow_mode;
-        ui.checkbox(&mut self.slideshow_mode, "Slideshow mode")
-            .on_hover_text("Full-screen presentation with fade transitions");
-        if self.slideshow_mode && !prev_slideshow {
-            self.auto_cycle_tabs = true;
-            self.auto_hide_tab_bar = true;
-        } else if !self.slideshow_mode && prev_slideshow {
-            self.auto_cycle_tabs = false;
-            self.auto_hide_tab_bar = false;
         }
 
         ui.separator();

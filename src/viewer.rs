@@ -15,7 +15,7 @@ use crate::drawing::{
 use crate::geo::{GeoLoadState, GeoOverlayData};
 use crate::texture::{TextureLoadState, EarthTexture, RingTexture};
 use crate::tile::TileOverlayState;
-use crate::time::{body_rotation_angle, DAYS_PER_YEAR, SOLAR_DECLINATION_MAX};
+use crate::time::{body_rotation_angle, continuous_day_of_year, DAYS_PER_YEAR, SOLAR_DECLINATION_MAX};
 use crate::tle::{TlePreset, TleSatellite, TleShell, TleLoadState, mean_motion_to_altitude_km, SECONDS_PER_DAY};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::tle::fetch_tle_data;
@@ -138,7 +138,6 @@ pub(crate) struct ViewerState {
     pub(crate) camera_id_counter: usize,
     pub(crate) tab_counter: usize,
     pub(crate) torus_zoom: f64,
-    pub(crate) torus_rotation: Matrix3<f64>,
     pub(crate) planet_textures: HashMap<(CelestialBody, Skin, TextureResolution), Arc<EarthTexture>>,
     pub(crate) ring_textures: HashMap<CelestialBody, Arc<RingTexture>>,
     pub(crate) cloud_textures: HashMap<TextureResolution, Arc<EarthTexture>>,
@@ -162,11 +161,13 @@ pub(crate) struct ViewerState {
     pub(crate) cycle_interval: f64,
     pub(crate) last_cycle_time: f64,
     pub(crate) slideshow_mode: bool,
+    pub(crate) show_tab_info: bool,
     pub(crate) slideshow_fade_alpha: f32,
     pub(crate) use_gpu_rendering: bool,
     pub(crate) show_borders: bool,
     pub(crate) show_cities: bool,
     pub(crate) active_tab_idx: usize,
+    pub(crate) prev_active_tab_idx: usize,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) geo_data: GeoLoadState,
     #[cfg(not(target_arch = "wasm32"))]
@@ -234,6 +235,23 @@ impl TabViewer for ViewerState {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         if *tab < self.tabs.len() {
+            if self.prev_active_tab_idx != *tab && self.prev_active_tab_idx < self.tabs.len() {
+                if self.tabs[*tab].settings.reset_time_on_switch {
+                    self.tabs[*tab].settings.time = 0.0;
+                    for planet in &mut self.tabs[*tab].planets {
+                        for cons in &mut planet.constellations {
+                            cons.numerical = None;
+                        }
+                    }
+                } else {
+                    let prev_time = self.tabs[self.prev_active_tab_idx].settings.time;
+                    self.tabs[*tab].settings.time = prev_time;
+                }
+                // Tab changed — restart the auto-cycle countdown from zero so
+                // switching tabs gives a full interval on the new tab.
+                self.last_cycle_time = 0.0;
+            }
+            self.prev_active_tab_idx = *tab;
             self.active_tab_idx = *tab;
             self.render_tab_ui(ui, *tab);
         }
@@ -320,7 +338,17 @@ impl ViewerState {
             );
         }
 
-        if self.auto_cycle_tabs {
+        if self.auto_cycle_tabs && self.show_tab_info {
+            let rect = ui.available_rect_before_wrap();
+            let frac = (self.last_cycle_time / self.cycle_interval).min(1.0) as f32;
+            let bar_rect = egui::Rect::from_min_size(
+                egui::pos2(rect.left(), rect.bottom() - 3.0),
+                egui::vec2(rect.width() * frac, 3.0),
+            );
+            ui.painter().rect_filled(bar_rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 80));
+        }
+
+        if self.auto_cycle_tabs && !self.show_tab_info {
             let tab = &self.tabs[tab_idx];
             let has_title = !tab.title.is_empty();
             let has_desc = !tab.description.is_empty();
@@ -359,17 +387,18 @@ impl ViewerState {
                         let pos = egui::pos2(rect.left() + 30.0, y);
                         let font = egui::FontId::proportional(20.0);
                         let desc_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 200);
+                        let plain = crate::config::strip_bold_markers(&tab.description);
                         painter.text(
                             pos + shadow_offset,
                             egui::Align2::LEFT_TOP,
-                            &tab.description,
+                            &plain,
                             font.clone(),
                             egui::Color32::BLACK,
                         );
                         painter.text(
                             pos,
                             egui::Align2::LEFT_TOP,
-                            &tab.description,
+                            &plain,
                             font,
                             desc_color,
                         );
@@ -400,15 +429,16 @@ impl ViewerState {
             } else if has_title || has_desc {
                 let mut y = rect.bottom() - 20.0;
                 if has_desc {
+                    let plain = crate::config::strip_bold_markers(&tab.description);
                     y -= painter.layout_no_wrap(
-                        tab.description.clone(),
+                        plain.clone(),
                         egui::FontId::proportional(18.0),
                         egui::Color32::WHITE,
                     ).rect.height();
                     painter.text(
                         egui::pos2(rect.center().x, y),
                         egui::Align2::CENTER_BOTTOM,
-                        &tab.description,
+                        &plain,
                         egui::FontId::proportional(18.0),
                         egui::Color32::from_rgba_unmultiplied(255, 255, 255, 200),
                     );
@@ -723,7 +753,12 @@ impl ViewerState {
         let show_places = self.tabs[tab_idx].planets[planet_idx].show_gs_aoi_window;
         let show_config = self.tabs[tab_idx].planets[planet_idx].show_config_window;
 
-        if self.ui_visible {
+        if self.show_tab_info {
+            ui.vertical_centered(|ui| {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(&planet_name).strong().size(16.0));
+            });
+        } else if self.ui_visible {
         egui::ScrollArea::horizontal()
             .id_salt(("planet_hscroll", tab_idx, planet_idx))
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
@@ -1449,7 +1484,7 @@ impl ViewerState {
             self.tabs[tab_idx].show_sat_list = show;
         }
 
-        if show_config {
+        if show_config && !self.show_tab_info {
         ui.separator();
 
         let mut const_to_remove: Option<usize> = None;
@@ -1803,7 +1838,7 @@ impl ViewerState {
                         if sso_possible && cons.sso {
                             if let Some(inc) = ConstellationConfig::sso_inclination(
                                 cons.altitude_km, cons.eccentricity,
-                                cb.mu(), cb.j2(), cb.equatorial_radius_km(),
+                                cb.mu(), cb.j2(), cb.radius_km(), cb.equatorial_radius_km(),
                                 cb.orbital_period_days().unwrap(),
                             ) {
                                 cons.inclination = inc;
@@ -2390,30 +2425,42 @@ impl ViewerState {
                     let coll_thresh = planet.kessler.collision_threshold_km;
                     let n_frags = planet.kessler.fragments_per_collision;
                     let max_debris = planet.kessler.max_debris;
+                    let max_per_frame = (sim_dt * 0.2).max(1.0).min(20.0) as usize;
+                    let mut already_hit: HashSet<String> = planet.kessler.collided_pairs.iter()
+                        .flat_map(|(a, b)| [a.clone(), b.clone()])
+                        .collect();
                     let candidates: Vec<_> = planet.conjunction_cache.conjunctions.iter()
                         .filter(|c| c.distance_km < coll_thresh)
                         .filter(|c| !(c.source_a == "Kessler Debris" && c.source_b == "Kessler Debris"))
-                        .take(10)
                         .map(|c| (c.pos_a, c.pos_b, c.name_a.clone(), c.name_b.clone()))
                         .collect();
+                    let mut collisions_this_frame = 0usize;
                     for (pos_a, pos_b, name_a, name_b) in candidates {
-                        let key = if name_a < name_b {
-                            (name_a, name_b)
-                        } else {
-                            (name_b, name_a)
-                        };
-                        if planet.kessler.collided_pairs.contains(&key) {
+                        if collisions_this_frame >= max_per_frame { break; }
+                        // One object can only be destroyed once — prevents a single
+                        // physical collision event from being counted many times when
+                        // several pairs fall within the detection threshold.
+                        if already_hit.contains(&name_a) || already_hit.contains(&name_b) {
                             continue;
                         }
+                        let key = if name_a < name_b {
+                            (name_a.clone(), name_b.clone())
+                        } else {
+                            (name_b.clone(), name_a.clone())
+                        };
+                        already_hit.insert(name_a);
+                        already_hit.insert(name_b);
                         planet.kessler.collided_pairs.insert(key);
                         planet.kessler.collision_count += 1;
                         planet.kessler.collision_id_counter += 1;
+                        collisions_this_frame += 1;
                         if planet.kessler.debris.len() < max_debris {
+                            let capped_frags = n_frags.min(15);
                             let new_debris = crate::kessler::generate_collision_debris(
                                 pos_a, pos_b,
                                 planet_mu, planet_radius,
                                 current_time,
-                                n_frags,
+                                capped_frags,
                                 planet.kessler.collision_id_counter,
                             );
                             let remaining = max_debris - planet.kessler.debris.len();
@@ -2932,6 +2979,18 @@ impl ViewerState {
                             .on_hover_text("Draw lines from moons to the planet center");
                         ui.checkbox(&mut settings.show_moon_labels, "Show labels")
                             .on_hover_text("Display moon names");
+                        ui.separator();
+                        let mut has_override = planet.moon_inclination_override.is_some();
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut has_override, "Override inclination");
+                            if has_override {
+                                let val = planet.moon_inclination_override.get_or_insert(90.0);
+                                ui.add(egui::DragValue::new(val).range(0.0..=180.0).speed(0.5).suffix("°"));
+                            }
+                        });
+                        if !has_override {
+                            planet.moon_inclination_override = None;
+                        }
                     });
             }
             planet.show_moons_window = show_moons_window;
@@ -2959,9 +3018,25 @@ impl ViewerState {
         let show_coverage = settings.show_coverage;
         let coverage_angle = settings.coverage_angle;
         let time = settings.time;
-        let rotation = settings.rotation;
+        let rotation = {
+            let base = settings.rotation;
+            let roll = settings.camera_roll.to_radians();
+            if roll.abs() < 1e-9 {
+                base
+            } else {
+                let c = roll.cos();
+                let s = roll.sin();
+                let roll_mat = nalgebra::Matrix3::new(
+                    c, -s, 0.0,
+                    s,  c, 0.0,
+                    0.0, 0.0, 1.0,
+                );
+                roll_mat * base
+            }
+        };
         let zoom = settings.zoom;
         let earth_fixed_camera = settings.earth_fixed_camera;
+        let sun_fixed_camera = settings.sun_fixed_camera;
         let body_rot_angle = body_rotation_angle(celestial_body, time, self.current_gmst);
         let cos_a = body_rot_angle.cos();
         let sin_a = body_rot_angle.sin();
@@ -2970,7 +3045,37 @@ impl ViewerState {
             0.0, 1.0, 0.0,
             -sin_a, 0.0, cos_a,
         );
-        let satellite_rotation = if earth_fixed_camera {
+        // Sun-fixing rotation: cancels the Sun's RA drift around +y. This is
+        // exactly what SSO locks onto — the RAAN–Sun_RA relationship stays
+        // constant, so the orbit plane appears stationary in this frame.
+        //
+        // We intentionally DON'T cancel the Sun's declination component.
+        // The Sun traces the ecliptic, moving ±23° in declination each year,
+        // and that motion is shared by the Sun and the terminator but NOT by
+        // a Keplerian orbit plane. Applying an R_z(-decl) correction would pin
+        // the Sun perfectly but would wobble every other inertial vector
+        // (including the SSO orbit) ~23° out of plane. The physical truth is
+        // that SSO locks RA, not the 3D sun angle — so what the user sees
+        // ("Sun slowly bobs up/down over the year, orbit stays fixed") is the
+        // correct visualization.
+        //
+        // Uses `continuous_day_of_year` (not `ordinal()`) so sun_ra stays
+        // exactly linear in sim time, matching the linear RAAN drift in walker.rs.
+        let sun_y_rotation = if sun_fixed_camera {
+            let day_of_year = continuous_day_of_year(self.start_timestamp, time);
+            let sun_ra = ((day_of_year - 80.0) * 360.0 / DAYS_PER_YEAR).to_radians();
+            let cy = sun_ra.cos();
+            let sy = sun_ra.sin();
+            Matrix3::new(
+                cy, 0.0, -sy,
+                0.0, 1.0, 0.0,
+                sy, 0.0, cy,
+            )
+        } else {
+            Matrix3::identity()
+        };
+        let rotation = rotation * sun_y_rotation;
+        let satellite_rotation = if earth_fixed_camera && !sun_fixed_camera {
             rotation * body_y_rotation.transpose()
         } else {
             rotation
@@ -2985,11 +3090,34 @@ impl ViewerState {
         let show_shortest_path = settings.show_shortest_path;
         let show_radiation_path = settings.show_radiation_path;
         let radiation_weight = settings.radiation_weight;
+        let routing_width = settings.routing_width;
+        let routing_node_scale = settings.routing_node_scale;
         let show_asc_desc_colors = settings.show_asc_desc_colors;
+        let color_ascending = settings.color_ascending;
+        let color_descending = settings.color_descending;
+        let color_links = settings.color_links;
+        let show_sat_labels = settings.show_sat_labels;
         let show_altitude_lines = settings.show_altitude_lines;
+        let altitude_line_width = settings.altitude_line_width;
+        let show_ground_tracks = settings.show_ground_tracks;
         let tex_res = self.texture_resolution;
         let planet_handle = self.planet_image_handles.get(&(celestial_body, skin, tex_res));
-        let torus_rotation = self.torus_rotation;
+        let torus_rotation = {
+            let base = settings.rotation;
+            let roll = settings.camera_roll.to_radians();
+            if roll.abs() < 1e-9 {
+                base
+            } else {
+                let c = roll.cos();
+                let s = roll.sin();
+                let roll_mat = nalgebra::Matrix3::new(
+                    c, -s, 0.0,
+                    s,  c, 0.0,
+                    0.0, 0.0, 1.0,
+                );
+                roll_mat * base
+            }
+        };
         let torus_zoom = self.torus_zoom;
         let link_width = settings.link_width;
         let fixed_sizes = settings.fixed_sizes;
@@ -3013,10 +3141,12 @@ impl ViewerState {
         let trackpad_rotate = settings.trackpad_rotate;
         let north_up = settings.north_up;
         let enabled_moons = self.tabs[tab_idx].planets[planet_idx].enabled_moons.clone();
+        let moon_inclination_override = self.tabs[tab_idx].planets[planet_idx].moon_inclination_override;
         let show_moon_orbits = settings.show_moon_orbits;
         let show_moon_lines = settings.show_moon_lines;
         let show_moon_labels = settings.show_moon_labels;
         let moon_camera_distance_km = settings.moon_camera_distance_km;
+        let tle_monochrome = settings.tle_monochrome;
 
         let is_2d_projection = planet_projection != crate::projection::ProjectionKind::Orthographic;
         let log_power = settings.solar_system_log_power;
@@ -3038,30 +3168,86 @@ impl ViewerState {
                 if render_planet && !is_2d_projection {
                     ui.vertical(|ui| {
                         let planet = &mut self.tabs[tab_idx].planets[planet_idx];
+                        // Accumulate ground-track samples for any camera-tracked satellite.
+                        // We record (geographic_lat, geographic_lon, sim_time) points as the
+                        // sub-satellite point moves over the Earth-fixed frame. Points
+                        // older than the orbit period × 6 are trimmed to keep history bounded.
+                        if show_ground_tracks {
+                            const GT_MIN_DT: f64 = 10.0;  // seconds of sim time between samples
+                            const GT_MAX_POINTS: usize = 20000;
+                            let tracked: Vec<(usize, usize, usize)> = planet.satellite_cameras
+                                .iter()
+                                .filter(|c| c.constellation_idx != usize::MAX)
+                                .map(|c| (c.constellation_idx, c.plane, c.sat_index))
+                                .collect();
+                            for (cons_idx, plane, sat_index) in tracked {
+                                let Some(cons) = planet.constellations.get(cons_idx) else { continue; };
+                                let wc = cons.constellation(planet_radius, planet_mu, planet_j2, planet_eq_radius);
+                                let positions = wc.satellite_positions(time);
+                                let Some(sat) = positions.iter().find(|s| s.plane == plane && s.sat_index == sat_index) else { continue; };
+                                let r = (sat.x * sat.x + sat.y * sat.y + sat.z * sat.z).sqrt();
+                                if r < 1e-6 { continue; }
+                                let lat = (sat.y / r).asin().to_degrees();
+                                let bx = sat.x * cos_a - sat.z * sin_a;
+                                let bz = sat.x * sin_a + sat.z * cos_a;
+                                let lon = (-bz).atan2(bx).to_degrees();
+                                let key = (cons_idx, plane, sat_index);
+                                let entry = planet.ground_track_history.entry(key).or_default();
+                                let should_push = entry.last()
+                                    .map(|&(_, _, t)| (time - t).abs() >= GT_MIN_DT)
+                                    .unwrap_or(true);
+                                if should_push {
+                                    entry.push((lat, lon, time));
+                                    if entry.len() > GT_MAX_POINTS {
+                                        entry.drain(..entry.len() - GT_MAX_POINTS);
+                                    }
+                                }
+                            }
+                        } else {
+                            planet.ground_track_history.clear();
+                        }
                         let view_flags = View3DFlags {
                             show_orbits, show_axes, show_magnetic_axis, show_coverage, show_links,
                             hide_behind_earth, single_color, dark_mode, show_routing_paths,
                             show_manhattan_path, show_shortest_path, show_radiation_path, radiation_weight,
+                            routing_width, routing_node_scale,
                             show_asc_desc_colors,
-                            show_altitude_lines, render_planet, fixed_sizes, show_sat_border, show_polar_circle,
+                            color_ascending,
+                            color_descending,
+                            color_links,
+                            show_sat_labels,
+                            show_altitude_lines, altitude_line_width, render_planet, fixed_sizes, show_sat_border, show_polar_circle,
                             show_equator, show_graticule, show_crosshairs, show_terminator, show_eclipse, show_sun, earth_fixed_camera,
                             use_gpu_rendering: self.use_gpu_rendering, show_clouds, show_day_night, show_city_lights,
                             show_stars, show_borders, show_cities,
                             trackpad_rotate,
                             north_up,
                             enabled_moons: enabled_moons.clone(),
+                            moon_inclination_override,
                             show_moon_orbits,
                             show_moon_lines,
                             show_moon_labels,
                             moon_camera_distance_km,
+                            tle_monochrome,
+                            show_ground_tracks,
                         };
                         let sun_dir = {
-                            use chrono::Datelike;
-                            let timestamp = self.start_timestamp + chrono::Duration::seconds(time as i64);
-                            let day_of_year = timestamp.ordinal() as f64;
-                            let declination: f64 = SOLAR_DECLINATION_MAX * ((360.0 / DAYS_PER_YEAR) * (day_of_year + 10.0)).to_radians().cos();
-                            let decl_rad = declination.to_radians();
-                            let sun_ra = ((day_of_year - 80.0) * 360.0 / 365.0).to_radians();
+                            let day_of_year = continuous_day_of_year(self.start_timestamp, time);
+                            // When sun-fixed camera is active, zero out the seasonal
+                            // declination so the Sun traces the equator. This is
+                            // unphysical (the Sun really moves on the ecliptic ±23.45°)
+                            // but pedagogically necessary: SSO only locks RA, so with
+                            // real declination the terminator would wobble ±23° over
+                            // a year relative to the SSO plane. Flattening the Sun to
+                            // the equator gives a clean demonstration where SSO stays
+                            // exactly on the terminator forever.
+                            let decl_rad: f64 = if sun_fixed_camera {
+                                0.0
+                            } else {
+                                let declination = SOLAR_DECLINATION_MAX * ((360.0 / DAYS_PER_YEAR) * (day_of_year + 10.0)).to_radians().cos();
+                                declination.to_radians()
+                            };
+                            let sun_ra = ((day_of_year - 80.0) * 360.0 / DAYS_PER_YEAR).to_radians();
                             let sun_inertial = Vector3::new(
                                 decl_rad.cos() * sun_ra.cos(),
                                 decl_rad.sin(),
@@ -3096,6 +3282,9 @@ impl ViewerState {
                         } else {
                             HashSet::new()
                         };
+                        let hit_sats: HashSet<String> = planet.kessler.collided_pairs.iter()
+                            .flat_map(|(a, b)| [a.clone(), b.clone()])
+                            .collect();
                         if show_radiation_belts || planet.show_radiation_window {
                             let sphere_r = planet_radius + planet.radiation.heatmap_altitude_km;
                             match planet.radiation.heatmap_mode {
@@ -3145,6 +3334,13 @@ impl ViewerState {
                         };
                         let mut ctx_menu_req: Option<(egui::Pos2, f64, f64)> = None;
                         let mut label_click_req: Option<(bool, usize, egui::Pos2)> = None;
+                        let ground_tracks_vec: Vec<Vec<(f64, f64)>> = if show_ground_tracks {
+                            planet.ground_track_history.values()
+                                .map(|v| v.iter().map(|&(lat, lon, _)| (lat, lon)).collect())
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
                         let (rot, new_zoom) = draw_3d_view(
                             ui,
                             &view_name,
@@ -3188,6 +3384,7 @@ impl ViewerState {
                             &conj_lines,
                             &conj_heatmap,
                             &correcting_sats,
+                            &hit_sats,
                             if show_radiation_belts || planet.show_radiation_window {
                                 Some(&planet.radiation)
                             } else {
@@ -3198,8 +3395,26 @@ impl ViewerState {
                             &mut label_click_req,
                             &physics_colors,
                             &physics_info,
+                            &ground_tracks_vec,
                         );
-                        self.tabs[tab_idx].settings.rotation = rot;
+                        {
+                            // Strip the sun-fix rotation before saving so it
+                            // doesn't compound across frames.
+                            let rot = rot * sun_y_rotation.transpose();
+                            let roll = self.tabs[tab_idx].settings.camera_roll.to_radians();
+                            if roll.abs() < 1e-9 {
+                                self.tabs[tab_idx].settings.rotation = rot;
+                            } else {
+                                let c = roll.cos();
+                                let s = roll.sin();
+                                let roll_inv = nalgebra::Matrix3::new(
+                                    c, s, 0.0,
+                                    -s, c, 0.0,
+                                    0.0, 0.0, 1.0,
+                                );
+                                self.tabs[tab_idx].settings.rotation = roll_inv * rot;
+                            }
+                        }
                         self.tabs[tab_idx].settings.zoom = new_zoom;
                         if let Some((screen_pos, lat, lon)) = ctx_menu_req {
                             self.context_menu = Some(crate::viewer::ContextMenuState {
@@ -3282,15 +3497,19 @@ impl ViewerState {
                             view_height,
                             sat_radius,
                             show_links,
+                            show_orbits,
                             single_color,
                             torus_zoom,
                             &mut planet.satellite_cameras,
                             show_routing_paths,
                             show_manhattan_path,
                             show_shortest_path,
-                            show_radiation_path,
+                            false,
                             radiation_weight,
                             show_asc_desc_colors,
+                            color_ascending,
+                            color_descending,
+                            color_links,
                             planet_radius,
                             &mut planet.pending_cameras,
                             &mut self.camera_id_counter,
@@ -3300,7 +3519,19 @@ impl ViewerState {
                             &body_y_rotation,
                             rad_grid,
                         );
-                        self.torus_rotation = trot;
+                        let roll = self.tabs[tab_idx].settings.camera_roll.to_radians();
+                        if roll.abs() < 1e-9 {
+                            self.tabs[tab_idx].settings.rotation = trot;
+                        } else {
+                            let c = roll.cos();
+                            let s = roll.sin();
+                            let roll_inv = nalgebra::Matrix3::new(
+                                c, s, 0.0,
+                                -s, c, 0.0,
+                                0.0, 0.0, 1.0,
+                            );
+                            self.tabs[tab_idx].settings.rotation = roll_inv * trot;
+                        }
                         self.torus_zoom = tzoom;
                     });
                 }
@@ -3396,6 +3627,7 @@ impl ViewerState {
                             };
                             let show_ss_labels = self.tabs[tab_idx].settings.show_ss_labels;
                             let show_cal = self.tabs[tab_idx].settings.show_circular_calendar;
+                            let hide_bodies = self.tabs[tab_idx].settings.solar_system_hide_bodies;
                             let ss_click = crate::solar_system::draw_solar_system_view(
                                 plot_ui,
                                 celestial_body,
@@ -3407,6 +3639,7 @@ impl ViewerState {
                                 self.asteroid_sprite.as_ref(),
                                 show_ss_labels,
                                 show_cal,
+                                hide_bodies,
                             );
                             if self.tabs[tab_idx].settings.show_hohmann {
                                 let ss_j2000 = ss_timestamp.signed_duration_since(*crate::solar_system::J2000_EPOCH_PUB).num_seconds() as f64 / 86400.0;
@@ -3495,9 +3728,15 @@ impl ViewerState {
                 }
             }
             let texture = if let Some(src) = self.planet_textures.get(&src_key) {
-                let ocean = [25u8, 40, 80];
-                let land = [60u8, 75, 85];
-                let ice = [140u8, 150, 160];
+                let (ocean, land, ice) = self.tabs.iter()
+                    .flat_map(|t| t.planets.iter())
+                    .find(|p| p.celestial_body == body && p.skin == Skin::Abstract)
+                    .map(|p| (
+                        [p.abstract_ocean.r(), p.abstract_ocean.g(), p.abstract_ocean.b()],
+                        [p.abstract_land.r(), p.abstract_land.g(), p.abstract_land.b()],
+                        [p.abstract_ice.r(), p.abstract_ice.g(), p.abstract_ice.b()],
+                    ))
+                    .unwrap_or(([25, 40, 80], [60, 75, 85], [140, 150, 160]));
                 let pixels: Vec<[u8; 3]> = src.pixels.iter().map(|&[r, g, b]| {
                     let brightness = (r as u16 + g as u16 + b as u16) / 3;
                     let is_ocean = b as u16 > (r as u16 + g as u16) / 2 + 20

@@ -68,7 +68,7 @@ impl SpatialGrid {
                 let a = &self.sats[indices[i]];
                 for j in (i + 1)..indices.len() {
                     let b = &self.sats[indices[j]];
-                    if a.ci == b.ci { continue; }
+                    if a.ci == b.ci && a.si == b.si { continue; }
                     let d_sq = dist_sq(a, b);
                     if d_sq < thresh_sq {
                         results.push((a, b, d_sq.sqrt()));
@@ -83,7 +83,7 @@ impl SpatialGrid {
                         let a = &self.sats[ai];
                         for &bi in neighbor_indices {
                             let b = &self.sats[bi];
-                            if a.ci == b.ci { continue; }
+                            if a.ci == b.ci && a.si == b.si { continue; }
                             let d_sq = dist_sq(a, b);
                             if d_sq < thresh_sq {
                                 results.push((a, b, d_sq.sqrt()));
@@ -155,7 +155,7 @@ pub(crate) fn compute_conjunctions(
     for (ci, (_, positions, _, _, _, label)) in constellations_data.iter().enumerate() {
         for (idx, sat) in positions.iter().enumerate() {
             let name = sat.name.clone().unwrap_or_else(|| {
-                format!("{} P{}:S{}", label, sat.plane, sat.sat_index)
+                format!("{}#{} P{}:S{}", label, ci, sat.plane, sat.sat_index)
             });
             grid.insert(SatRef {
                 ci,

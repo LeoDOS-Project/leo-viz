@@ -194,18 +194,33 @@ pub(crate) fn generate_collision_debris(
     for i in 0..num_fragments {
         let seed_base = collision_id.wrapping_mul(1000).wrapping_add(i as u64);
 
-        let theta = simple_hash(seed_base) * 2.0 * PI;
-        let phi = simple_hash(seed_base + 1) * PI - PI / 2.0;
-        let dv = (simple_hash(seed_base + 2) - 0.5) * 1.0;
+        // Pick a random orbital direction in the plane perpendicular to r_hat.
+        // This gives each fragment a different RAAN/inclination, so they scatter
+        // instead of sharing the parent orbit.
+        let orbit_angle = simple_hash(seed_base) * 2.0 * PI;
+        let oc = orbit_angle.cos();
+        let os = orbit_angle.sin();
+        let orbit_dir = [
+            tang[0] * oc + tang2[0] * os,
+            tang[1] * oc + tang2[1] * os,
+            tang[2] * oc + tang2[2] * os,
+        ];
 
-        let v_tang = (v_circ + dv * 0.3) * theta.cos();
-        let v_tang2 = dv * theta.sin() * phi.cos();
-        let v_radial = dv * phi.sin() * 0.3;
+        // Isotropic random perturbation (Marsaglia) to break coplanarity.
+        let u = 2.0 * simple_hash(seed_base + 1) - 1.0;
+        let az = 2.0 * PI * simple_hash(seed_base + 2);
+        let s = (1.0 - u * u).sqrt();
+        let pert_dir = [s * az.cos(), s * az.sin(), u];
+        let dv_mag = 0.05 + simple_hash(seed_base + 3) * 0.25;
+
+        // Keep fragments near the parent orbital shell so they remain collision
+        // candidates — only a small speed spread for eccentricity diversity.
+        let v_mag = v_circ * (0.98 + simple_hash(seed_base + 4) * 0.04);
 
         let vel = [
-            tang[0] * v_tang + tang2[0] * v_tang2 + r_hat[0] * v_radial,
-            tang[1] * v_tang + tang2[1] * v_tang2 + r_hat[1] * v_radial,
-            tang[2] * v_tang + tang2[2] * v_tang2 + r_hat[2] * v_radial,
+            orbit_dir[0] * v_mag + pert_dir[0] * dv_mag,
+            orbit_dir[1] * v_mag + pert_dir[1] * dv_mag,
+            orbit_dir[2] * v_mag + pert_dir[2] * dv_mag,
         ];
 
         let pos_offset = 0.1;
