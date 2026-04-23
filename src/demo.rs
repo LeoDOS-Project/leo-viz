@@ -781,6 +781,7 @@ fn solar_system_demo(v: &mut ViewerState) {
     v.ss_auto_zoom_time = 0.0;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn planet_sizes_demo(v: &mut ViewerState) {
     v.tab_counter += 1;
     let mut tab = TabConfig::new_empty("Planet Sizes".to_string());
@@ -1202,6 +1203,7 @@ impl App {
         iss_demo(v);
         // Context & scale
         solar_system_demo(v);
+        #[cfg(not(target_arch = "wasm32"))]
         planet_sizes_demo(v);
 
         for tab in &mut v.tabs {
