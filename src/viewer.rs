@@ -2202,7 +2202,10 @@ impl ViewerState {
         let skin = planet.skin;
         let view_name = planet.name.clone();
 
+        #[cfg(not(target_arch = "wasm32"))]
         let hide_sats = self.tabs[tab_idx].settings.zoom > 100.0 && self.tile_overlay.enabled;
+        #[cfg(target_arch = "wasm32")]
+        let hide_sats = false;
         let mut constellations_data: Vec<_> = if hide_sats {
             Vec::new()
         } else {
