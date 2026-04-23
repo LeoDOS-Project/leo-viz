@@ -148,6 +148,8 @@ pub(crate) struct ViewerState {
     pub(crate) last_resolution: usize,
     pub(crate) texture_load_state: TextureLoadState,
     pub(crate) pending_body: Option<(CelestialBody, Skin, TextureResolution)>,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) pending_planet_texture_fetches: std::collections::HashSet<(CelestialBody, Skin, TextureResolution)>,
     pub(crate) dark_mode: bool,
     pub(crate) show_info: bool,
     pub(crate) real_time: f64,

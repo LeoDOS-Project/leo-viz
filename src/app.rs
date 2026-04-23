@@ -122,6 +122,8 @@ impl App {
                 last_resolution: 0,
                 texture_load_state: TextureLoadState::Loaded(builtin_texture),
                 pending_body: None,
+                #[cfg(target_arch = "wasm32")]
+                pending_planet_texture_fetches: std::collections::HashSet::new(),
                 dark_mode: true,
                 show_info: false,
                 real_time: 0.0,
@@ -1304,6 +1306,25 @@ impl eframe::App for App {
                             }
                         }
                     }
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                for &body in &CelestialBody::ALL {
+                    let key = (body, Skin::Default, TextureResolution::R512);
+                    if v.planet_textures.contains_key(&key) { continue; }
+                    if !v.pending_planet_texture_fetches.insert(key) { continue; }
+                    let Some(filename) = Skin::Default.filename(body, TextureResolution::R512) else {
+                        continue;
+                    };
+                    let filename = filename.to_string();
+                    let ctx = ctx.clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let result = crate::texture::fetch_texture(&filename).await;
+                        crate::texture::TEXTURE_RESULT.with(|cell| {
+                            cell.borrow_mut().push((key, result));
+                        });
+                        ctx.request_repaint();
+                    });
                 }
 
                 if v.asteroid_sprite.is_none() {

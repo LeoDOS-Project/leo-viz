@@ -971,6 +971,7 @@ fn all_tle_map_demo(v: &mut ViewerState) {
     v.tabs.push(tab);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn countries_demo(v: &mut ViewerState) {
     v.tab_counter += 1;
     let mut tab = TabConfig::new_empty("Live data by country/region".to_string());
@@ -1195,6 +1196,7 @@ impl App {
         starlink_tle_demo(v);
         all_tle_demo(v);
         all_tle_map_demo(v);
+        #[cfg(not(target_arch = "wasm32"))]
         countries_demo(v);
         projections_demo(v);
         iss_demo(v);
@@ -1219,37 +1221,66 @@ impl App {
         ));
 
         // Restore cached TLE data and fetch missing presets
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let mut fetched = std::collections::HashSet::new();
-            for tab in &mut v.tabs {
-                for planet in &mut tab.planets {
-                    for (preset, (selected, state, _shells)) in &mut planet.tle_selections {
-                        if !*selected {
-                            continue;
+        let mut fetched = std::collections::HashSet::new();
+        for tab in &mut v.tabs {
+            for planet in &mut tab.planets {
+                for (preset, (selected, state, _shells)) in &mut planet.tle_selections {
+                    if !*selected {
+                        continue;
+                    }
+                    if let Some(cached_sats) = tle_cache.get(preset) {
+                        *state = TleLoadState::Loaded {
+                            satellites: cached_sats.clone(),
+                        };
+                        continue;
+                    }
+                    if !matches!(state, TleLoadState::NotLoaded) {
+                        continue;
+                    }
+                    *state = TleLoadState::Loading;
+                    if !fetched.insert(*preset) {
+                        continue;
+                    }
+                    let preset_copy = *preset;
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let tx = v.tle_fetch_tx.clone();
+                        if let Some(owners) = preset.country_owners() {
+                            std::thread::spawn(move || {
+                                let result = crate::tle::fetch_tle_by_country(owners);
+                                let _ = tx.send((preset_copy, result));
+                            });
+                        } else {
+                            let url = preset.url().to_string();
+                            std::thread::spawn(move || {
+                                let result = crate::tle::fetch_tle_data(&url);
+                                let _ = tx.send((preset_copy, result));
+                            });
                         }
-                        if let Some(cached_sats) = tle_cache.get(preset) {
-                            *state = TleLoadState::Loaded {
-                                satellites: cached_sats.clone(),
-                            };
-                        } else if matches!(state, TleLoadState::NotLoaded) {
-                            *state = TleLoadState::Loading;
-                            if fetched.insert(*preset) {
-                                let preset_copy = *preset;
-                                let tx = v.tle_fetch_tx.clone();
-                                if let Some(owners) = preset.country_owners() {
-                                    std::thread::spawn(move || {
-                                        let result = crate::tle::fetch_tle_by_country(owners);
-                                        let _ = tx.send((preset_copy, result));
-                                    });
-                                } else {
-                                    let url = preset.url().to_string();
-                                    std::thread::spawn(move || {
-                                        let result = crate::tle::fetch_tle_data(&url);
-                                        let _ = tx.send((preset_copy, result));
-                                    });
-                                }
-                            }
+                    }
+
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        use crate::tle::TLE_FETCH_RESULT;
+                        if let Some(owners) = preset.country_owners() {
+                            wasm_bindgen_futures::spawn_local(async move {
+                                let result = crate::tle::fetch_tle_by_country_async(owners).await;
+                                TLE_FETCH_RESULT.with(|cell| {
+                                    cell.borrow_mut().push((preset_copy, result));
+                                });
+                            });
+                        } else {
+                            let url = preset.url().to_string();
+                            wasm_bindgen_futures::spawn_local(async move {
+                                let result = match crate::tle::fetch_tle_text(&url).await {
+                                    Ok(text) => crate::tle::parse_tle_data_async(&text).await,
+                                    Err(e) => Err(e),
+                                };
+                                TLE_FETCH_RESULT.with(|cell| {
+                                    cell.borrow_mut().push((preset_copy, result));
+                                });
+                            });
                         }
                     }
                 }
