@@ -1351,17 +1351,41 @@ pub fn draw_planet_sizes(
     sphere_handles: &HashMap<CelestialBody, eframe::egui::TextureHandle>,
     zoom_t: &mut f64,
     auto_zoom: &mut AutoZoomState,
+    enabled: &mut std::collections::HashSet<CelestialBody>,
 ) -> Option<CelestialBody> {
     use eframe::egui;
 
-    let mut sorted: Vec<CelestialBody> = CelestialBody::ALL.to_vec();
+    ui.horizontal(|ui| {
+        if ui.selectable_label(enabled.len() == CelestialBody::ALL.len(), "All").clicked() {
+            *enabled = CelestialBody::ALL.iter().copied().collect();
+        }
+        for cat in &["Star", "Planets", "Dwarf Planets", "Asteroids", "Moons"] {
+            let in_cat: Vec<CelestialBody> = CelestialBody::ALL.iter()
+                .copied()
+                .filter(|b| b.category() == *cat)
+                .collect();
+            let all_on = in_cat.iter().all(|b| enabled.contains(b));
+            if ui.selectable_label(all_on, *cat).clicked() {
+                for b in &in_cat {
+                    if all_on { enabled.remove(b); } else { enabled.insert(*b); }
+                }
+            }
+        }
+    });
+
+    let mut sorted: Vec<CelestialBody> = CelestialBody::ALL.iter()
+        .copied()
+        .filter(|b| enabled.contains(b))
+        .collect();
     sorted.sort_by(|a, b| b.radius_km().partial_cmp(&a.radius_km()).unwrap());
+    if sorted.is_empty() { return None; }
 
     let available = ui.available_size();
     let mut clicked_body = None;
 
     {
         let n = sorted.len();
+        *zoom_t = zoom_t.clamp(0.0, (n - 1) as f64);
 
         let text_color = ui.visuals().text_color();
         let weak_color = ui.visuals().weak_text_color();
@@ -1385,10 +1409,15 @@ pub fn draw_planet_sizes(
         let view_h = rect.height() as f64;
         let view_w = rect.width() as f64;
 
+        let base_name_pre = (view_h as f32 * 0.06).clamp(18.0, 48.0);
+        let base_km_pre = (view_h as f32 * 0.045).clamp(14.0, 36.0);
+        let label_reserve_f64 = (base_name_pre + base_km_pre * 0.9 + base_km_pre + 16.0) as f64;
+        let body_h = view_h - label_reserve_f64;
+
         let margin = 12.0;
         let compute_layout = |k: usize| -> Vec<(f64, f64)> {
             let r_focus = sorted[k].radius_km();
-            let h_scale = view_h / (2.0 * r_focus);
+            let h_scale = body_h / (2.0 * r_focus);
             let num_gaps = (n - k).saturating_sub(1).max(1) as f64;
             let usable_w = view_w - 2.0 * margin;
             let body_ext = |_b: &CelestialBody| -> f64 { 1.0 };
@@ -1474,12 +1503,12 @@ pub fn draw_planet_sizes(
 
         let layout_a = compute_layout(i);
         let layout_b = compute_layout((i + 1).min(n - 1));
-        let center_y = rect.center().y;
-
         let base_name = (view_h as f32 * 0.06).clamp(18.0, 48.0);
         let base_km = (view_h as f32 * 0.045).clamp(14.0, 36.0);
+        let label_reserve = base_name + base_km * 0.9 + base_km + 16.0;
+        let baseline_y = rect.bottom() - label_reserve;
 
-        let mut screen_bodies: Vec<(CelestialBody, f32, f32)> = Vec::new();
+        let mut screen_bodies: Vec<(CelestialBody, f32, f32, f32)> = Vec::new();
 
         for j in 0..n {
             let (xa, ra) = layout_a[j];
@@ -1496,11 +1525,11 @@ pub fn draw_planet_sizes(
                 continue;
             }
 
-            screen_bodies.push((body, cx, r_px));
-
+            let body_cy = baseline_y - r_px;
+            screen_bodies.push((body, cx, r_px, body_cy));
             if let Some(handle) = sphere_handles.get(&body) {
                 let img_rect = egui::Rect::from_center_size(
-                    egui::Pos2::new(cx, center_y),
+                    egui::Pos2::new(cx, body_cy),
                     egui::Vec2::splat(r_px * 2.0),
                 );
                 painter.image(
@@ -1522,14 +1551,10 @@ pub fn draw_planet_sizes(
                 // and the GPU interpolates between frames — no per-frame
                 // rasterization wobble.
                 let scale = decay.clamp(0.2, 1.0);
-                let vert_extent = r_px;
-                // If the body's labels would fall below the view (e.g. Sun
-                // focused with r_px > half view), anchor the label stack
-                // inside the body so it stays visible.
                 let total_label_h = (base_name + base_km * 0.9 + base_km + 6.0) * scale;
-                let below_y = center_y + vert_extent + 8.0;
+                let below_y = baseline_y + 8.0;
                 let label_y_start = if below_y + total_label_h > rect.bottom() - 4.0 {
-                    (rect.bottom() - total_label_h - 4.0).max(center_y)
+                    (rect.bottom() - total_label_h - 4.0).max(baseline_y)
                 } else {
                     below_y
                 };
@@ -1634,7 +1659,7 @@ pub fn draw_planet_sizes(
             });
         };
 
-        let draw_highlight = |painter: &egui::Painter, body: CelestialBody, cx: f32, r_px: f32| {
+        let draw_highlight = |painter: &egui::Painter, body: CelestialBody, cx: f32, cy: f32, r_px: f32| {
             let ring_r = r_px * 1.15;
             let n_pts = 64;
             for i in 0..n_pts {
@@ -1642,8 +1667,8 @@ pub fn draw_planet_sizes(
                 let a1 = std::f32::consts::TAU * (i + 1) as f32 / n_pts as f32;
                 painter.line_segment(
                     [
-                        egui::Pos2::new(cx + ring_r * a0.cos(), center_y + ring_r * a0.sin()),
-                        egui::Pos2::new(cx + ring_r * a1.cos(), center_y + ring_r * a1.sin()),
+                        egui::Pos2::new(cx + ring_r * a0.cos(), cy + ring_r * a0.sin()),
+                        egui::Pos2::new(cx + ring_r * a1.cos(), cy + ring_r * a1.sin()),
                     ],
                     egui::Stroke::new(2.0, body.display_color()),
                 );
@@ -1652,13 +1677,13 @@ pub fn draw_planet_sizes(
 
         if response.hovered() || response.clicked() {
             if let Some(pointer) = ui.ctx().pointer_hover_pos() {
-                for &(body, cx, r_px) in &screen_bodies {
+                for &(body, cx, r_px, cy) in &screen_bodies {
                     let dx = pointer.x - cx;
-                    let dy = pointer.y - center_y;
+                    let dy = pointer.y - cy;
                     let dist = (dx * dx + dy * dy).sqrt();
                     let hit = r_px.max(12.0);
                     if dist <= hit {
-                        draw_highlight(&painter, body, cx, r_px);
+                        draw_highlight(&painter, body, cx, cy, r_px);
                         show_tooltip(ui, body, egui::PopupAnchor::Pointer);
                         if response.clicked() {
                             clicked_body = Some(body);

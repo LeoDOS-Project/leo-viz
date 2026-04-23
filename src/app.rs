@@ -289,6 +289,7 @@ impl App {
                 planet_sizes_zoom_duration: 30.0,
                 planet_sizes_stay_duration: 3.0,
                 planet_sizes_auto_time: 0.0,
+                planet_sizes_enabled: CelestialBody::ALL.iter().copied().collect(),
                 ss_auto_zoom: false,
                 ss_auto_zoom_duration: 30.0,
                 ss_auto_zoom_stay: 3.0,

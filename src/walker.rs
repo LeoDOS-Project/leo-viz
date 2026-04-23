@@ -671,3 +671,37 @@ pub fn step_numerical_state(
     state.time += sim_seconds;
     true
 }
+
+pub fn compute_knn_neighbors(positions: &mut [SatelliteState], k: usize) {
+    let n = positions.len();
+    if k == 0 || n < 2 {
+        return;
+    }
+    let coords: Vec<(f64, f64, f64)> = positions.iter().map(|s| (s.x, s.y, s.z)).collect();
+    let mut all_neighbors: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for i in 0..n {
+        let (xi, yi, zi) = coords[i];
+        let mut dists: Vec<(usize, f64)> = (0..n)
+            .filter(|&j| j != i)
+            .map(|j| {
+                let (xj, yj, zj) = coords[j];
+                let dx = xi - xj;
+                let dy = yi - yj;
+                let dz = zi - zj;
+                (j, dx * dx + dy * dy + dz * dz)
+            })
+            .collect();
+        let k_actual = k.min(dists.len());
+        dists.select_nth_unstable_by(k_actual.saturating_sub(1), |a, b| {
+            a.1.partial_cmp(&b.1).unwrap()
+        });
+        for &(j, _) in &dists[..k_actual] {
+            if j > i {
+                all_neighbors[i].push(j);
+            }
+        }
+    }
+    for (i, nbrs) in all_neighbors.into_iter().enumerate() {
+        positions[i].neighbors = nbrs;
+    }
+}

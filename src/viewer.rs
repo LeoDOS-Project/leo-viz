@@ -203,6 +203,7 @@ pub(crate) struct ViewerState {
     pub(crate) planet_sizes_zoom_duration: f32,
     pub(crate) planet_sizes_stay_duration: f32,
     pub(crate) planet_sizes_auto_time: f64,
+    pub(crate) planet_sizes_enabled: std::collections::HashSet<CelestialBody>,
     pub(crate) ss_auto_zoom: bool,
     pub(crate) ss_auto_zoom_duration: f32,
     pub(crate) ss_auto_zoom_stay: f32,
@@ -1576,6 +1577,9 @@ impl ViewerState {
                         if ui.small_button("x").clicked() {
                             planet.show_tle_window = false;
                         }
+                        ui.separator();
+                        ui.label("ISL k:");
+                        ui.add(egui::DragValue::new(&mut planet.tle_isl_k).range(0..=8).speed(0.1));
                     });
 
                     egui::ScrollArea::vertical()
@@ -1623,31 +1627,48 @@ impl ViewerState {
                                             #[cfg(not(target_arch = "wasm32"))]
                                             if fetch_requested && *selected && matches!(state, TleLoadState::NotLoaded | TleLoadState::Failed(_)) {
                                                 *state = TleLoadState::Loading;
-                                                let url = preset.url().to_string();
                                                 let preset_copy = *preset;
                                                 let tx = tle_fetch_tx.clone();
-                                                std::thread::spawn(move || {
-                                                    let result = fetch_tle_data(&url);
-                                                    let _ = tx.send((preset_copy, result));
-                                                });
+                                                if let Some(owners) = preset.country_owners() {
+                                                    std::thread::spawn(move || {
+                                                        let result = crate::tle::fetch_tle_by_country(owners);
+                                                        let _ = tx.send((preset_copy, result));
+                                                    });
+                                                } else {
+                                                    let url = preset.url().to_string();
+                                                    std::thread::spawn(move || {
+                                                        let result = fetch_tle_data(&url);
+                                                        let _ = tx.send((preset_copy, result));
+                                                    });
+                                                }
                                             }
 
                                             #[cfg(target_arch = "wasm32")]
                                             if fetch_requested && *selected && matches!(state, TleLoadState::NotLoaded | TleLoadState::Failed(_)) {
                                                 *state = TleLoadState::Loading;
-                                                let url = preset.url().to_string();
                                                 let preset_copy = *preset;
                                                 let ctx = ui.ctx().clone();
-                                                wasm_bindgen_futures::spawn_local(async move {
-                                                    let result = match fetch_tle_text(&url).await {
-                                                        Ok(text) => parse_tle_data_async(&text).await,
-                                                        Err(e) => Err(e),
-                                                    };
-                                                    TLE_FETCH_RESULT.with(|cell| {
-                                                        cell.borrow_mut().push((preset_copy, result));
+                                                if let Some(owners) = preset.country_owners() {
+                                                    wasm_bindgen_futures::spawn_local(async move {
+                                                        let result = crate::tle::fetch_tle_by_country_async(owners).await;
+                                                        TLE_FETCH_RESULT.with(|cell| {
+                                                            cell.borrow_mut().push((preset_copy, result));
+                                                        });
+                                                        ctx.request_repaint();
                                                     });
-                                                    ctx.request_repaint();
-                                                });
+                                                } else {
+                                                    let url = preset.url().to_string();
+                                                    wasm_bindgen_futures::spawn_local(async move {
+                                                        let result = match fetch_tle_text(&url).await {
+                                                            Ok(text) => parse_tle_data_async(&text).await,
+                                                            Err(e) => Err(e),
+                                                        };
+                                                        TLE_FETCH_RESULT.with(|cell| {
+                                                            cell.borrow_mut().push((preset_copy, result));
+                                                        });
+                                                        ctx.request_repaint();
+                                                    });
+                                                }
                                             }
                                         });
                                     }
@@ -2244,6 +2265,7 @@ impl ViewerState {
                     });
                 }
                 if all_positions.is_empty() { continue; }
+                let tle_isl_k = planet.tle_isl_k;
 
                 if let Some(shells) = shells {
                     let shell_indices: Vec<std::collections::HashSet<usize>> = shells.iter()
@@ -2251,7 +2273,7 @@ impl ViewerState {
                         .collect();
                     for (si, shell) in shells.iter().enumerate() {
                         if !shell.selected { continue; }
-                        let positions: Vec<SatelliteState> = all_positions.iter()
+                        let mut positions: Vec<SatelliteState> = all_positions.iter()
                             .filter(|p| shell_indices[si].contains(&p.sat_index))
                             .map(|p| SatelliteState {
                                 plane: p.plane, sat_index: p.sat_index,
@@ -2265,6 +2287,9 @@ impl ViewerState {
                             })
                             .collect();
                         if positions.is_empty() { continue; }
+                        if tle_isl_k > 0 {
+                            crate::walker::compute_knn_neighbors(&mut positions, tle_isl_k);
+                        }
                         let tle_wc = WalkerConstellation {
                             walker_type: WalkerType::Delta,
                             total_sats: positions.len(),
@@ -2308,6 +2333,9 @@ impl ViewerState {
                         planet_j2,
                         planet_equatorial_radius: planet_eq_radius,
                     };
+                    if tle_isl_k > 0 {
+                        crate::walker::compute_knn_neighbors(&mut all_positions, tle_isl_k);
+                    }
                     let tle_kind = if preset.is_debris() { 2u8 } else { 1u8 };
                     constellations_data.push((tle_wc, all_positions, preset.color_index(), tle_kind, usize::MAX, preset.label().to_string()));
                 }
@@ -3760,6 +3788,7 @@ impl ViewerState {
                             &self.planet_sizes_handles,
                             &mut self.planet_sizes_t,
                             &mut az,
+                            &mut self.planet_sizes_enabled,
                         ) {
                             self.tabs[tab_idx].planets[planet_idx].celestial_body = body;
                         }

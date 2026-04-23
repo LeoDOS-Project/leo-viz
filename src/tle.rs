@@ -19,6 +19,8 @@ pub enum TlePreset {
     Stations, Last30Days, Brightest100, ActiveSats, Analyst, Science,
     Geodetic, Engineering, Education, Military, RadarCal, Cubesats, Misc,
     Fengyun1cDebris, Cosmos2251Debris, Iridium33Debris, Cosmos1408Debris,
+    Sentinel,
+    CountrySweden, CountryEurope, CountryUsa, CountryChina, CountryIndia,
 }
 
 impl TlePreset {
@@ -75,6 +77,12 @@ impl TlePreset {
             Self::Cosmos2251Debris => "Cosmos 2251",
             Self::Iridium33Debris => "Iridium 33",
             Self::Cosmos1408Debris => "Cosmos 1408",
+            Self::Sentinel => "Sentinel",
+            Self::CountrySweden => "Sweden",
+            Self::CountryEurope => "Europe",
+            Self::CountryUsa => "USA",
+            Self::CountryChina => "China",
+            Self::CountryIndia => "India",
         }
     }
 
@@ -131,6 +139,13 @@ impl TlePreset {
             Self::Cosmos2251Debris => "https://celestrak.org/NORAD/elements/gp.php?GROUP=cosmos-2251-debris&FORMAT=tle",
             Self::Iridium33Debris => "https://celestrak.org/NORAD/elements/gp.php?GROUP=iridium-33-debris&FORMAT=tle",
             Self::Cosmos1408Debris => "https://celestrak.org/NORAD/elements/gp.php?GROUP=cosmos-1408-debris&FORMAT=tle",
+            // Sentinel-1A, 1C, 2A, 2B, 3A, 3B, 5P, 6A by NORAD ID. Sentinel-1B
+            // failed in 2021; -2C launched 2024. Update IDs as the fleet grows.
+            Self::Sentinel => "https://celestrak.org/NORAD/elements/gp.php?CATNR=39634;CATNR=62261;CATNR=40697;CATNR=42063;CATNR=41335;CATNR=43437;CATNR=42969;CATNR=49260&FORMAT=tle",
+            // Country presets are fetched via SATCAT filtering in
+            // fetch_tle_by_country; the URL field is unused for them.
+            Self::CountrySweden | Self::CountryEurope | Self::CountryUsa
+            | Self::CountryChina | Self::CountryIndia => "",
         }
     }
 
@@ -144,14 +159,16 @@ impl TlePreset {
             Self::Gnss | Self::Sbas | Self::Nnss | Self::Musson => "Navigation",
             Self::Weather | Self::Noaa | Self::Goes | Self::EarthResources |
             Self::Sarsat | Self::DisasterMon | Self::Tdrss | Self::Argos |
-            Self::Planet | Self::Spire => "Observation",
+            Self::Planet | Self::Spire | Self::Sentinel => "Observation",
             Self::Fengyun1cDebris | Self::Cosmos2251Debris |
             Self::Iridium33Debris | Self::Cosmos1408Debris => "Debris",
+            Self::CountrySweden | Self::CountryEurope | Self::CountryUsa
+            | Self::CountryChina | Self::CountryIndia => "Country",
             _ => "Other",
         }
     }
 
-    pub const ALL: [TlePreset; 51] = [
+    pub const ALL: [TlePreset; 57] = [
         Self::Starlink, Self::OneWeb, Self::Kuiper, Self::Geo,
         Self::Intelsat, Self::Ses, Self::Iridium, Self::IridiumNext,
         Self::Globalstar, Self::Orbcomm, Self::Molniya, Self::Swarm,
@@ -160,17 +177,38 @@ impl TlePreset {
         Self::Gnss, Self::Sbas, Self::Nnss, Self::Musson,
         Self::Weather, Self::Noaa, Self::Goes, Self::EarthResources,
         Self::Sarsat, Self::DisasterMon, Self::Tdrss, Self::Argos,
-        Self::Planet, Self::Spire,
+        Self::Planet, Self::Spire, Self::Sentinel,
         Self::Stations, Self::Last30Days, Self::Brightest100,
         Self::ActiveSats, Self::Analyst, Self::Science,
         Self::Geodetic, Self::Engineering, Self::Education,
         Self::Military, Self::RadarCal, Self::Cubesats, Self::Misc,
         Self::Fengyun1cDebris, Self::Cosmos2251Debris,
         Self::Iridium33Debris, Self::Cosmos1408Debris,
+        Self::CountrySweden, Self::CountryEurope, Self::CountryUsa,
+        Self::CountryChina, Self::CountryIndia,
     ];
 
     pub fn is_debris(&self) -> bool {
         matches!(self, Self::Fengyun1cDebris | Self::Cosmos2251Debris | Self::Iridium33Debris | Self::Cosmos1408Debris)
+    }
+
+    /// Celestrak SATCAT OWNER codes that belong to this country/region preset.
+    pub fn country_owners(&self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::CountrySweden => Some(&["SW"]),
+            // ESA + EUMETSAT + EUTELSAT + major EU member states. Not strict
+            // EU membership: includes ESA participants like UK and Norway.
+            Self::CountryEurope => Some(&[
+                "ESA", "EUME", "EUTE", "FR", "GER", "IT", "SPN", "NETH",
+                "SW", "FIN", "DEN", "BEL", "POR", "AUT", "POL", "CZE",
+                "HUN", "GRC", "EST", "BUL", "ROU", "SVK", "SVN", "LUX",
+                "IRL", "NOR", "UK",
+            ]),
+            Self::CountryUsa => Some(&["US"]),
+            Self::CountryChina => Some(&["PRC"]),
+            Self::CountryIndia => Some(&["IND"]),
+            _ => None,
+        }
     }
 
     pub fn color_index(&self) -> usize {
@@ -185,6 +223,7 @@ pub struct TleSatellite {
     pub epoch_minutes: f64,
     pub inclination_deg: f64,
     pub mean_motion: f64,
+    pub norad_id: u64,
 }
 
 #[derive(Clone)]
@@ -241,6 +280,7 @@ pub fn parse_tle_data(data: &str) -> Result<Vec<TleSatellite>, String> {
                         name: elements.object_name.unwrap_or_default(),
                         inclination_deg: elements.inclination,
                         mean_motion: elements.mean_motion,
+                        norad_id: elements.norad_id,
                         constants,
                         epoch_minutes,
                     });
@@ -307,6 +347,83 @@ pub fn fetch_tle_data(url: &str) -> Result<Vec<TleSatellite>, String> {
     let _ = std::fs::write(&cache_path, &body);
 
     parse_tle_data(&body)
+}
+
+const SATCAT_URL: &str = "https://celestrak.org/pub/satcat.csv";
+const ACTIVE_TLE_URL: &str = "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle";
+
+pub fn parse_satcat_csv(body: &str) -> std::collections::HashMap<u64, String> {
+    let mut map = std::collections::HashMap::new();
+    let mut lines = body.lines();
+    let header = match lines.next() {
+        Some(h) => h,
+        None => return map,
+    };
+    let cols: Vec<&str> = header.split(',').collect();
+    let id_col = cols.iter().position(|&c| c == "NORAD_CAT_ID").unwrap_or(2);
+    let owner_col = cols.iter().position(|&c| c == "OWNER").unwrap_or(5);
+    for line in lines {
+        let fields: Vec<&str> = line.split(',').collect();
+        if fields.len() <= id_col.max(owner_col) { continue; }
+        let id = match fields[id_col].trim().parse::<u64>() {
+            Ok(id) => id,
+            Err(_) => continue,
+        };
+        let owner = fields[owner_col].trim().trim_matches('"').to_string();
+        if !owner.is_empty() {
+            map.insert(id, owner);
+        }
+    }
+    map
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn fetch_satcat() -> Result<std::collections::HashMap<u64, String>, String> {
+    let cache_path = tle_cache_path(SATCAT_URL);
+    let max_age = std::time::Duration::from_secs(7 * 24 * 3600);
+    let cache_exists = cache_path.exists();
+    if cache_exists {
+        if let Ok(meta) = std::fs::metadata(&cache_path) {
+            if let Ok(modified) = meta.modified() {
+                if modified.elapsed().unwrap_or(max_age) < max_age {
+                    if let Ok(body) = std::fs::read_to_string(&cache_path) {
+                        return Ok(parse_satcat_csv(&body));
+                    }
+                }
+            }
+        }
+    }
+    let response = match ureq::get(SATCAT_URL).call() {
+        Ok(r) => r,
+        Err(e) => {
+            if cache_exists {
+                if let Ok(body) = std::fs::read_to_string(&cache_path) {
+                    return Ok(parse_satcat_csv(&body));
+                }
+            }
+            return Err(format!("SATCAT HTTP error: {}", e));
+        }
+    };
+    let body = response.into_string()
+        .map_err(|e| format!("SATCAT read error: {}", e))?;
+    let _ = std::fs::write(&cache_path, &body);
+    Ok(parse_satcat_csv(&body))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn fetch_tle_by_country(owners: &[&str]) -> Result<Vec<TleSatellite>, String> {
+    let satcat = fetch_satcat()?;
+    let active = fetch_tle_data(ACTIVE_TLE_URL)?;
+    let target: std::collections::HashSet<&str> = owners.iter().copied().collect();
+    let filtered: Vec<TleSatellite> = active.into_iter()
+        .filter(|s| satcat.get(&s.norad_id)
+            .map_or(false, |code| target.contains(code.as_str())))
+        .collect();
+    if filtered.is_empty() {
+        Err("No matching satellites for country".to_string())
+    } else {
+        Ok(filtered)
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -380,6 +497,7 @@ pub(crate) async fn parse_tle_data_async(data: &str) -> Result<Vec<TleSatellite>
                         name: elements.object_name.unwrap_or_default(),
                         inclination_deg: elements.inclination,
                         mean_motion: elements.mean_motion,
+                        norad_id: elements.norad_id,
                         constants,
                         epoch_minutes,
                     });
@@ -396,5 +514,28 @@ pub(crate) async fn parse_tle_data_async(data: &str) -> Result<Vec<TleSatellite>
         Err("No valid TLE data found".to_string())
     } else {
         Ok(satellites)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn fetch_satcat_async() -> Result<std::collections::HashMap<u64, String>, String> {
+    let body = fetch_tle_text(SATCAT_URL).await?;
+    Ok(parse_satcat_csv(&body))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn fetch_tle_by_country_async(owners: &[&'static str]) -> Result<Vec<TleSatellite>, String> {
+    let satcat = fetch_satcat_async().await?;
+    let body = fetch_tle_text(ACTIVE_TLE_URL).await?;
+    let active = parse_tle_data_async(&body).await?;
+    let target: std::collections::HashSet<&str> = owners.iter().copied().collect();
+    let filtered: Vec<TleSatellite> = active.into_iter()
+        .filter(|s| satcat.get(&s.norad_id)
+            .map_or(false, |code| target.contains(code.as_str())))
+        .collect();
+    if filtered.is_empty() {
+        Err("No matching satellites for country".to_string())
+    } else {
+        Ok(filtered)
     }
 }

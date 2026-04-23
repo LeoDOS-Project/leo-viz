@@ -264,6 +264,111 @@ pub fn compute_manhattan_path(
     if d1 >= d2 { planes_first } else { sats_first }
 }
 
+pub fn compute_shortest_path_graph(
+    src_idx: usize,
+    dst_idx: usize,
+    positions: &[SatelliteState],
+) -> Vec<(usize, usize)> {
+    use std::collections::BinaryHeap;
+
+    let n = positions.len();
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, sat) in positions.iter().enumerate() {
+        for &j in &sat.neighbors {
+            if j < n {
+                adj[i].push(j);
+                adj[j].push(i);
+            }
+        }
+    }
+
+    let mut cost = vec![f64::INFINITY; n];
+    let mut prev = vec![usize::MAX; n];
+    cost[src_idx] = 0.0;
+
+    #[derive(PartialEq)]
+    struct State(f64, usize);
+    impl Eq for State {}
+    impl PartialOrd for State {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) }
+    }
+    impl Ord for State {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            other.0.partial_cmp(&self.0).unwrap_or(std::cmp::Ordering::Equal)
+        }
+    }
+
+    let mut heap: BinaryHeap<State> = BinaryHeap::new();
+    heap.push(State(0.0, src_idx));
+
+    while let Some(State(c, u)) = heap.pop() {
+        if u == dst_idx { break; }
+        if c > cost[u] { continue; }
+        let (ux, uy, uz) = (positions[u].x, positions[u].y, positions[u].z);
+        for &v in &adj[u] {
+            let (vx, vy, vz) = (positions[v].x, positions[v].y, positions[v].z);
+            let dx = ux - vx;
+            let dy = uy - vy;
+            let dz = uz - vz;
+            let new_cost = cost[u] + (dx * dx + dy * dy + dz * dz).sqrt();
+            if new_cost < cost[v] {
+                cost[v] = new_cost;
+                prev[v] = u;
+                heap.push(State(new_cost, v));
+            }
+        }
+    }
+
+    let mut path = Vec::new();
+    let mut cur = dst_idx;
+    while cur != usize::MAX {
+        path.push((positions[cur].plane, positions[cur].sat_index));
+        if cur == src_idx { break; }
+        cur = prev[cur];
+    }
+    path.reverse();
+    path
+}
+
+pub fn build_bidirectional_adj(positions: &[SatelliteState]) -> Vec<Vec<usize>> {
+    let n = positions.len();
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, sat) in positions.iter().enumerate() {
+        for &j in &sat.neighbors {
+            if j < n {
+                adj[i].push(j);
+                adj[j].push(i);
+            }
+        }
+    }
+    adj
+}
+
+pub fn graph_hop_count(
+    src_idx: usize,
+    dst_idx: usize,
+    adj: &[Vec<usize>],
+) -> usize {
+    use std::collections::VecDeque;
+
+    if src_idx == dst_idx { return 0; }
+    let n = adj.len();
+    let mut visited = vec![false; n];
+    let mut queue = VecDeque::new();
+    visited[src_idx] = true;
+    queue.push_back((src_idx, 0usize));
+    while let Some((u, dist)) = queue.pop_front() {
+        for &v in &adj[u] {
+            if v == dst_idx { return dist + 1; }
+            if !visited[v] {
+                visited[v] = true;
+                queue.push_back((v, dist + 1));
+            }
+        }
+    }
+    usize::MAX
+}
+
 pub fn compute_shortest_path(
     src_plane: usize, src_sat: usize,
     dst_plane: usize, dst_sat: usize,
@@ -2323,7 +2428,7 @@ pub fn draw_3d_view(
                     match aoi.job_mode {
                     AoiJobMode::Route => {
                     let find_nearest_sat = |center_lat: f64, center_lon: f64, radius_km: f64, ascending_filter: Option<bool>|
-                        -> Option<(usize, &WalkerConstellation, &Vec<SatelliteState>, &SatelliteState)>
+                        -> Option<(usize, &WalkerConstellation, &Vec<SatelliteState>, &SatelliteState, u8)>
                     {
                         let center_lat_rad = center_lat.to_radians();
                         let center_lon_rad = center_lon.to_radians() + body_rot_angle;
@@ -2339,22 +2444,24 @@ pub fn draw_3d_view(
                             2.0 * a.sqrt().asin()
                         };
 
-                        let mut best: Option<(usize, &WalkerConstellation, &Vec<SatelliteState>, &SatelliteState, f64)> = None;
+                        let mut best: Option<(usize, &WalkerConstellation, &Vec<SatelliteState>, &SatelliteState, u8, f64)> = None;
 
                         for (cidx, (cons, positions, _, tle_kind, _, _)) in constellations.iter().enumerate() {
-                            if *tle_kind != 0 { continue; }
+                            let is_tle = *tle_kind != 0;
+                            let has_neighbors = is_tle && positions.iter().any(|s| !s.neighbors.is_empty());
+                            if is_tle && !has_neighbors { continue; }
                             for sat in positions.iter() {
                                 if let Some(asc) = ascending_filter {
                                     if sat.ascending != asc { continue; }
                                 }
                                 let dist = haversine_dist(sat);
-                                if dist <= max_angular_dist && (best.is_none() || dist < best.as_ref().unwrap().4) {
-                                    best = Some((cidx, cons, positions, sat, dist));
+                                if dist <= max_angular_dist && (best.is_none() || dist < best.as_ref().unwrap().5) {
+                                    best = Some((cidx, cons, positions, sat, *tle_kind, dist));
                                 }
                             }
                         }
 
-                        best.map(|(cidx, cons, positions, sat, _)| (cidx, cons, positions, sat))
+                        best.map(|(cidx, cons, positions, sat, tk, _)| (cidx, cons, positions, sat, tk))
                     };
 
                     let aoi_asc = find_nearest_sat(aoi.lat, aoi.lon, aoi.radius_km, Some(true));
@@ -2367,20 +2474,26 @@ pub fn draw_3d_view(
                         (aoi_desc, gs_desc)
                     };
 
-                    if let (Some((gs_cidx, gs_cons, gs_positions, gs_sat)),
-                            Some((aoi_cidx, _, _, aoi_sat))) = (gs_result, aoi_result)
+                    if let (Some((gs_cidx, gs_cons, gs_positions, gs_sat, gs_tk)),
+                            Some((aoi_cidx, _, _, aoi_sat, _))) = (gs_result, aoi_result)
                     {
                         let path_color = egui::Color32::from_rgb(255, 255, 0);
                         let routing_width = scaled_routing_width;
 
                         if gs_cidx == aoi_cidx {
-                            let path = compute_shortest_path(
-                                gs_sat.plane, gs_sat.sat_index,
-                                aoi_sat.plane, aoi_sat.sat_index,
-                                gs_cons.num_planes, gs_cons.sats_per_plane(),
-                                gs_positions,
-                                gs_cons.walker_type == WalkerType::Star,
-                            );
+                            let path = if gs_tk != 0 {
+                                let gs_idx = gs_positions.iter().position(|s| s.sat_index == gs_sat.sat_index).unwrap_or(0);
+                                let aoi_idx = gs_positions.iter().position(|s| s.sat_index == aoi_sat.sat_index).unwrap_or(0);
+                                compute_shortest_path_graph(gs_idx, aoi_idx, gs_positions)
+                            } else {
+                                compute_shortest_path(
+                                    gs_sat.plane, gs_sat.sat_index,
+                                    aoi_sat.plane, aoi_sat.sat_index,
+                                    gs_cons.num_planes, gs_cons.sats_per_plane(),
+                                    gs_positions,
+                                    gs_cons.walker_type == WalkerType::Star,
+                                )
+                            };
                             draw_routing_path(
                                 plot_ui, &path, gs_positions, &satellite_rotation,
                                 path_color, routing_width, hide_behind_earth, earth_r_sq,
@@ -2419,32 +2532,52 @@ pub fn draw_3d_view(
                         let color_gs = egui::Color32::from_rgb(255, 255, 0);
 
                         for (_cidx, (cons, positions, _, tle_kind, _, _)) in constellations.iter().enumerate() {
-                            if *tle_kind != 0 { continue; }
+                            let is_tle = *tle_kind != 0;
+                            let has_neighbors = is_tle && positions.iter().any(|s| !s.neighbors.is_empty());
+                            if is_tle && !has_neighbors { continue; }
                             let is_star = cons.walker_type == WalkerType::Star;
-                            let job = crate::spacecomp::compute_spacecomp_job(
-                                aoi.lat, aoi.lon, aoi.radius_km,
-                                gs.lat, gs.lon, gs.radius_km,
-                                positions,
-                                cons,
-                                is_star,
-                                planet_radius, body_rot_angle,
-                                aoi.job_n,
-                            );
+                            let job = if is_tle {
+                                crate::spacecomp::compute_spacecomp_job_graph(
+                                    aoi.lat, aoi.lon, aoi.radius_km,
+                                    gs.lat, gs.lon, gs.radius_km,
+                                    positions,
+                                    planet_radius, body_rot_angle,
+                                    aoi.job_n,
+                                )
+                            } else {
+                                crate::spacecomp::compute_spacecomp_job(
+                                    aoi.lat, aoi.lon, aoi.radius_km,
+                                    gs.lat, gs.lon, gs.radius_km,
+                                    positions,
+                                    cons,
+                                    is_star,
+                                    planet_radius, body_rot_angle,
+                                    aoi.job_n,
+                                )
+                            };
                             let Some(job) = job else { continue };
 
                             let px_to_world_off = 2.0 * margin / width as f64;
                             let offset_unit = routing_width as f64 * px_to_world_off * 1.3;
+
+                            let sat_to_arr = |sat_idx: usize| -> usize {
+                                positions.iter().position(|s| s.sat_index == sat_idx).unwrap_or(0)
+                            };
 
                             let mut all_paths: Vec<(Vec<(usize, usize)>, egui::Color32)> = Vec::new();
 
                             for &(ci, mi) in &job.assignments {
                                 let (cp, cs) = job.collectors[ci];
                                 let (mp, ms) = job.mappers[mi];
-                                let path = compute_shortest_path(
-                                    cp, cs, mp, ms,
-                                    cons.num_planes, cons.sats_per_plane(),
-                                    positions, is_star,
-                                );
+                                let path = if is_tle {
+                                    compute_shortest_path_graph(sat_to_arr(cs), sat_to_arr(ms), positions)
+                                } else {
+                                    compute_shortest_path(
+                                        cp, cs, mp, ms,
+                                        cons.num_planes, cons.sats_per_plane(),
+                                        positions, is_star,
+                                    )
+                                };
                                 all_paths.push((path, color_collector));
                             }
 
@@ -2453,11 +2586,15 @@ pub fn draw_3d_view(
                                 if drawn_mappers.insert(mi) {
                                     let (mp, ms) = job.mappers[mi];
                                     let (rp, rs) = job.reducer;
-                                    let path = compute_shortest_path(
-                                        mp, ms, rp, rs,
-                                        cons.num_planes, cons.sats_per_plane(),
-                                        positions, is_star,
-                                    );
+                                    let path = if is_tle {
+                                        compute_shortest_path_graph(sat_to_arr(ms), sat_to_arr(rs), positions)
+                                    } else {
+                                        compute_shortest_path(
+                                            mp, ms, rp, rs,
+                                            cons.num_planes, cons.sats_per_plane(),
+                                            positions, is_star,
+                                        )
+                                    };
                                     all_paths.push((path, color_mapper));
                                 }
                             }
@@ -2465,11 +2602,15 @@ pub fn draw_3d_view(
                             {
                                 let (rp, rs) = job.reducer;
                                 let (gp, gsi) = job.gs_sat;
-                                let path = compute_shortest_path(
-                                    rp, rs, gp, gsi,
-                                    cons.num_planes, cons.sats_per_plane(),
-                                    positions, is_star,
-                                );
+                                let path = if is_tle {
+                                    compute_shortest_path_graph(sat_to_arr(rs), sat_to_arr(gsi), positions)
+                                } else {
+                                    compute_shortest_path(
+                                        rp, rs, gp, gsi,
+                                        cons.num_planes, cons.sats_per_plane(),
+                                        positions, is_star,
+                                    )
+                                };
                                 all_paths.push((path, color_reducer));
                             }
 

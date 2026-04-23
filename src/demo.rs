@@ -25,7 +25,7 @@ pub fn inclination_demo(v: &mut ViewerState) {
     tab.settings.show_links = false;
     tab.settings.auto_rotate = true;
     tab.settings.auto_rotate_speed = 3.0;
-    for (inc, label) in [(90.0, "90°"), (60.0, "60°")] {
+    for (inc, label) in [(90.0, "90° inclination"), (60.0, "60° inclination")] {
         tab.planet_counter += 1;
         let mut planet = PlanetConfig::new(format!("Earth ({})", label));
         planet.celestial_body = CelestialBody::Earth;
@@ -58,7 +58,7 @@ fn walker_demo(v: &mut ViewerState) {
     tab.settings.show_links = false;
     tab.settings.earth_fixed_camera = true;
     tab.settings.rotation = crate::math::lat_lon_to_matrix(75.0_f64.to_radians(), 0.0);
-    for (wt, label) in [(WalkerType::Star, "Star"), (WalkerType::Delta, "Delta")] {
+    for (wt, label) in [(WalkerType::Star, "Walker Star"), (WalkerType::Delta, "Walker Delta")] {
         tab.planet_counter += 1;
         let mut planet = PlanetConfig::new(format!("Earth ({})", label));
         planet.celestial_body = CelestialBody::Earth;
@@ -90,7 +90,7 @@ fn coverage_demo(v: &mut ViewerState) {
     tab.settings.coverage_angle = 100.0;
     tab.settings.earth_fixed_camera = true;
     tab.settings.rotation = crate::math::lat_lon_to_matrix(45.0_f64.to_radians(), 0.0);
-    for (alt, label) in [(300.0, "300 km"), (600.0, "600 km")] {
+    for (alt, label) in [(300.0, "300 km alt"), (600.0, "600 km alt")] {
         tab.planet_counter += 1;
         let mut planet = PlanetConfig::new(format!("Earth ({}, 50° half-cone)", label));
         planet.celestial_body = CelestialBody::Earth;
@@ -127,7 +127,7 @@ fn phasing_demo(v: &mut ViewerState) {
     tab.settings.rotation = crate::math::lat_lon_to_matrix(90.0_f64.to_radians(), 0.0);
     tab.settings.zoom = 2.5;
     tab.settings.show_sat_border = true;
-    for (f, label) in [(0.0, "F=0"), (0.5, "F=0.5")] {
+    for (f, label) in [(0.0, "F=0 phasing"), (0.5, "F=0.5 phasing")] {
         tab.planet_counter += 1;
         let mut planet = PlanetConfig::new(format!("Earth ({})", label));
         planet.celestial_body = CelestialBody::Earth;
@@ -155,7 +155,7 @@ fn altitude_demo(v: &mut ViewerState) {
 
             Lower-altitude satellites move faster, since orbital speed follows **v = √(μ/r)**, where μ is the planet's gravitational parameter and r is the orbital radius. Halve the radius and the speed grows by √2; quadruple it and the speed halves.
 
-            • **VLEO** (Very Low Earth Orbit) refers to altitudes below 500 km, where atmospheric drag is significant.
+            • **VLEO** (Very Low Earth Orbit) refers to altitudes below 500 km, where atmospheric drag is significant — satellites need thrusters firing periodically (electric propulsion is common) just to stay aloft, otherwise they reenter within months.
             • **LEO** (Low Earth Orbit) refers to altitudes between 500 km and 2000 km, where many Earth observation and communication satellites operate.
             • **MEO** (Medium Earth Orbit) refers to altitudes between 2000 km and ~35000 km, where navigation constellations like GPS operate.
             • **GEO** (Geostationary Earth Orbit) is at approximately 35786 km altitude, where satellites appear stationary relative to the Earth's surface. Real GEO satellites always orbit directly above the equator (i≈0°); an inclined orbit at GEO altitude traces a figure-eight ground track rather than staying fixed.
@@ -282,7 +282,7 @@ fn eccentricity_demo(v: &mut ViewerState) {
     tab.settings.rotation = crate::math::lat_lon_to_matrix(30.0_f64.to_radians(), 0.0);
     tab.settings.zoom = 10000.0 / 30000.0;
     tab.settings.speed = 250.0;
-    for (omega, label) in [(0.0, "ω=0"), (90.0, "ω=90°")] {
+    for (omega, label) in [(0.0, "ω=0° periapsis"), (90.0, "ω=90° periapsis")] {
         tab.planet_counter += 1;
         let mut planet = PlanetConfig::new(format!("Earth ({})", label));
         planet.celestial_body = CelestialBody::Earth;
@@ -401,7 +401,7 @@ fn isl_demo(v: &mut ViewerState) {
     tab.settings.auto_rotate_speed = 3.0;
     tab.settings.auto_rotate_axis_lat = 0.0;
     tab.settings.auto_rotate_axis_lon = 0.0;
-    for (isl, label) in [(4, "4 ISL"), (8, "8 ISL")] {
+    for (isl, label) in [(4, "4 ISLs per sat"), (8, "8 ISLs per sat")] {
         tab.planet_counter += 1;
         let mut planet = PlanetConfig::new(format!("Earth ({})", label));
         planet.celestial_body = CelestialBody::Earth;
@@ -533,7 +533,7 @@ fn kessler_demo(v: &mut ViewerState) {
     tab.settings.show_links = false;
     tab.settings.speed = 50.0;
     tab.settings.single_color = true;
-    for (alt_diff, thresh, label) in [(15.0, 20.0, "Crossing"), (500.0, 20.0, "Separated")] {
+    for (alt_diff, thresh, label) in [(15.0, 20.0, "Crossing altitudes"), (500.0, 20.0, "Separated altitudes")] {
         tab.planet_counter += 1;
         let mut planet = PlanetConfig::new(format!("Earth ({})", label));
         planet.celestial_body = CelestialBody::Earth;
@@ -641,18 +641,20 @@ fn radiation_demo(v: &mut ViewerState) {
     tab.settings.auto_rotate_axis_lon = 0.0;
     {
         tab.planet_counter += 1;
-        let mut planet = PlanetConfig::new("Geomagnetic Field".to_string());
+        let mut planet = PlanetConfig::new("Geomagnetic Field at 500 km (brighter = stronger magnetic field)".to_string());
         planet.celestial_body = CelestialBody::Earth;
         planet.radiation.show_heatmap_sphere = true;
         planet.radiation.heatmap_mode = crate::config::HeatmapMode::IgrfField;
+        planet.radiation.heatmap_altitude_km = 500.0;
         tab.planets.push(planet);
     }
     {
         tab.planet_counter += 1;
-        let mut planet = PlanetConfig::new("Radiation Belts".to_string());
+        let mut planet = PlanetConfig::new("Radiation Belts at 500 km (brighter = higher radiation)".to_string());
         planet.celestial_body = CelestialBody::Earth;
         planet.radiation.show_heatmap_sphere = true;
         planet.radiation.heatmap_mode = crate::config::HeatmapMode::IgrfRadiation;
+        planet.radiation.heatmap_altitude_km = 500.0;
         tab.planets.push(planet);
     }
     v.tabs.push(tab);
@@ -871,7 +873,14 @@ fn all_tle_demo(v: &mut ViewerState) {
     for preset in TlePreset::ALL {
         let selected = !matches!(
             preset,
-            TlePreset::Last30Days | TlePreset::Brightest100 | TlePreset::ActiveSats
+            TlePreset::Last30Days
+                | TlePreset::Brightest100
+                | TlePreset::ActiveSats
+                | TlePreset::CountrySweden
+                | TlePreset::CountryEurope
+                | TlePreset::CountryUsa
+                | TlePreset::CountryChina
+                | TlePreset::CountryIndia
         );
         planet
             .tle_selections
@@ -945,13 +954,62 @@ fn all_tle_map_demo(v: &mut ViewerState) {
     for preset in TlePreset::ALL {
         let selected = !matches!(
             preset,
-            TlePreset::Last30Days | TlePreset::Brightest100 | TlePreset::ActiveSats
+            TlePreset::Last30Days
+                | TlePreset::Brightest100
+                | TlePreset::ActiveSats
+                | TlePreset::CountrySweden
+                | TlePreset::CountryEurope
+                | TlePreset::CountryUsa
+                | TlePreset::CountryChina
+                | TlePreset::CountryIndia
         );
         planet
             .tle_selections
             .insert(preset, (selected, TleLoadState::NotLoaded, None));
     }
     tab.planets.push(planet);
+    v.tabs.push(tab);
+}
+
+fn countries_demo(v: &mut ViewerState) {
+    v.tab_counter += 1;
+    let mut tab = TabConfig::new_empty("Live data by country/region".to_string());
+    tab.title = "Live data by country/region".to_string();
+    tab.description = indoc::indoc! {"
+            Active satellites broken out by country/region of ownership.
+
+            The list is built from CelesTrak's **SATCAT** catalogue, which records the registered owner of every tracked object, intersected with the live active-satellite TLE feed. Coverage is approximate — joint missions and commercial operators registered abroad don't always land where you'd expect.
+
+            • **Sweden** — Odin, MATS and a handful of national missions.
+            • **Europe** — ESA, EUMETSAT, EUTELSAT and the major member states (FR, DE, IT, ES, NL, etc.).
+            • **USA** — by far the largest fleet (Starlink alone dwarfs every other operator).
+            • **China** — Beidou, Yaogan, Tiangong, Gaofen and a fast-growing commercial sector.
+            • **India** — ISRO's NavIC, Cartosat, RISAT, Oceansat constellations.
+        "}.to_string();
+    tab.settings.sat_radius = 3.0;
+    tab.settings.zoom = 10000.0 / 10000.0;
+    tab.settings.rotation = crate::math::lat_lon_to_matrix(20.0_f64.to_radians(), 0.0);
+    tab.settings.auto_rotate = true;
+    tab.settings.auto_rotate_speed = 3.0;
+    tab.settings.auto_rotate_axis_lat = 0.0;
+    tab.settings.auto_rotate_axis_lon = 0.0;
+    tab.settings.show_links = false;
+
+    let countries = [
+        (TlePreset::CountrySweden, "Sweden"),
+        (TlePreset::CountryEurope, "Europe"),
+        (TlePreset::CountryUsa, "USA"),
+        (TlePreset::CountryChina, "China"),
+        (TlePreset::CountryIndia, "India"),
+    ];
+    for (preset, label) in countries {
+        tab.planet_counter += 1;
+        let mut planet = PlanetConfig::new(label.to_string());
+        planet.celestial_body = CelestialBody::Earth;
+        planet.show_tle_window = false;
+        planet.tle_selections.insert(preset, (true, TleLoadState::NotLoaded, None));
+        tab.planets.push(planet);
+    }
     v.tabs.push(tab);
 }
 
@@ -1137,6 +1195,7 @@ impl App {
         starlink_tle_demo(v);
         all_tle_demo(v);
         all_tle_map_demo(v);
+        countries_demo(v);
         projections_demo(v);
         iss_demo(v);
         // Context & scale
@@ -1176,13 +1235,20 @@ impl App {
                         } else if matches!(state, TleLoadState::NotLoaded) {
                             *state = TleLoadState::Loading;
                             if fetched.insert(*preset) {
-                                let url = preset.url().to_string();
                                 let preset_copy = *preset;
                                 let tx = v.tle_fetch_tx.clone();
-                                std::thread::spawn(move || {
-                                    let result = crate::tle::fetch_tle_data(&url);
-                                    let _ = tx.send((preset_copy, result));
-                                });
+                                if let Some(owners) = preset.country_owners() {
+                                    std::thread::spawn(move || {
+                                        let result = crate::tle::fetch_tle_by_country(owners);
+                                        let _ = tx.send((preset_copy, result));
+                                    });
+                                } else {
+                                    let url = preset.url().to_string();
+                                    std::thread::spawn(move || {
+                                        let result = crate::tle::fetch_tle_data(&url);
+                                        let _ = tx.send((preset_copy, result));
+                                    });
+                                }
                             }
                         }
                     }
