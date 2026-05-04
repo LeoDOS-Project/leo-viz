@@ -133,6 +133,105 @@ fn numerical_state_to_positions(
     positions
 }
 
+/// Look up cached neighbour lists for `key`, recomputing if the cache is
+/// missing or stale, and assign them onto `positions[i].neighbors`.
+fn apply_cached_isl_neighbors(
+    cache: &mut HashMap<(TlePreset, Option<usize>), TleIslCache>,
+    key: (TlePreset, Option<usize>),
+    positions: &mut [SatelliteState],
+    k: usize,
+    max_lat_deg: f64,
+    sim_time_s: f64,
+) {
+    let n = positions.len();
+    let idx_of: HashMap<usize, usize> = positions
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.sat_index, i))
+        .collect();
+
+    let needs_recompute = match cache.get(&key) {
+        Some(c) => {
+            c.k != k || (sim_time_s - c.sim_time_s).abs() > ISL_CACHE_RECOMPUTE_INTERVAL_S
+        }
+        None => true,
+    };
+
+    if needs_recompute {
+        // Translate the previous (sat_index → sat_index) topology into the
+        // current array space so the kNN can apply hysteresis to it.
+        let prev_array: Option<Vec<Vec<usize>>> = cache.get(&key).map(|c| {
+            let mut v: Vec<Vec<usize>> = vec![Vec::new(); n];
+            for (sat_a, nbrs) in &c.neighbors {
+                let Some(&i) = idx_of.get(sat_a) else { continue; };
+                for sat_b in nbrs {
+                    if let Some(&j) = idx_of.get(sat_b) {
+                        v[i].push(j);
+                    }
+                }
+            }
+            v
+        });
+        let neighbors_array = crate::walker::compute_knn_neighbor_lists(
+            positions,
+            k,
+            prev_array.as_deref(),
+        );
+        // Store as (sat_index → [sat_index, ...]) so the cache survives any
+        // future reshuffle of the positions array.
+        let neighbors: Vec<(usize, Vec<usize>)> = neighbors_array
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| !n.is_empty())
+            .map(|(i, nbrs)| {
+                let sat_i = positions[i].sat_index;
+                let nbr_sats = nbrs.iter().map(|&j| positions[j].sat_index).collect();
+                (sat_i, nbr_sats)
+            })
+            .collect();
+        cache.insert(key, TleIslCache { sim_time_s, k, neighbors });
+    }
+
+    for sat in positions.iter_mut() {
+        sat.neighbors.clear();
+    }
+    let entry = cache.get(&key).expect("just inserted");
+    // Latitude filter is applied at *apply* time (not bake time) so that a
+    // moving satellite's links visibly tear down and reform as it crosses
+    // the threshold, while the underlying topology stays cached.
+    for (sat_a, nbrs) in &entry.neighbors {
+        let Some(&i) = idx_of.get(sat_a) else { continue; };
+        if positions[i].lat.abs() > max_lat_deg { continue; }
+        for sat_b in nbrs {
+            if let Some(&j) = idx_of.get(sat_b) {
+                if positions[j].lat.abs() > max_lat_deg { continue; }
+                positions[i].neighbors.push(j);
+            }
+        }
+    }
+}
+
+/// Cached k-nearest-neighbour topology for a TLE preset (or shell).
+///
+/// Keyed by satellite identity (`sat_index`, the stable TLE row index) rather
+/// than array position, so transient SGP4 failures that drop a single satellite
+/// from one frame's `positions` don't invalidate the whole topology.
+///
+/// Recomputed only when sim time advances past `ISL_CACHE_RECOMPUTE_INTERVAL_S`
+/// or `k` changes. Topology evolves on the order of minutes; rebuilding it
+/// every render frame is wasteful.
+pub(crate) struct TleIslCache {
+    pub(crate) sim_time_s: f64,
+    pub(crate) k: usize,
+    /// `(sat_index_a, [sat_index_b, ...])` with `sat_index_b > sat_index_a`.
+    pub(crate) neighbors: Vec<(usize, Vec<usize>)>,
+}
+
+/// Sim-time between ISL topology recomputes. Topology genuinely shifts only
+/// over many minutes of orbital evolution; recomputing more often introduces
+/// visible flicker at recompute boundaries (especially at high time-warp).
+const ISL_CACHE_RECOMPUTE_INTERVAL_S: f64 = 300.0;
+
 pub(crate) struct ViewerState {
     pub(crate) tabs: Vec<TabConfig>,
     pub(crate) camera_id_counter: usize,
@@ -150,6 +249,7 @@ pub(crate) struct ViewerState {
     pub(crate) pending_body: Option<(CelestialBody, Skin, TextureResolution)>,
     #[cfg(target_arch = "wasm32")]
     pub(crate) pending_planet_texture_fetches: std::collections::HashSet<(CelestialBody, Skin, TextureResolution)>,
+    pub(crate) tle_isl_cache: HashMap<(TlePreset, Option<usize>), TleIslCache>,
     pub(crate) dark_mode: bool,
     pub(crate) show_info: bool,
     pub(crate) real_time: f64,
@@ -1582,6 +1682,17 @@ impl ViewerState {
                         ui.separator();
                         ui.label("ISL k:");
                         ui.add(egui::DragValue::new(&mut planet.tle_isl_k).range(0..=8).speed(0.1));
+                        ui.label("max |lat|:");
+                        ui.add(
+                            egui::DragValue::new(&mut planet.tle_isl_max_lat_deg)
+                                .range(0.0..=90.0)
+                                .speed(0.5)
+                                .suffix("°"),
+                        )
+                        .on_hover_text(
+                            "Drop ISLs whose endpoint latitude exceeds this. Models the \
+                             high-latitude cross-plane laser tear-down. 90° disables.",
+                        );
                     });
 
                     egui::ScrollArea::vertical()
@@ -2271,6 +2382,8 @@ impl ViewerState {
                 }
                 if all_positions.is_empty() { continue; }
                 let tle_isl_k = planet.tle_isl_k;
+                let isl_max_lat = planet.tle_isl_max_lat_deg;
+                let isl_sim_time = self.tabs[tab_idx].settings.time;
 
                 if let Some(shells) = shells {
                     let shell_indices: Vec<std::collections::HashSet<usize>> = shells.iter()
@@ -2293,7 +2406,14 @@ impl ViewerState {
                             .collect();
                         if positions.is_empty() { continue; }
                         if tle_isl_k > 0 {
-                            crate::walker::compute_knn_neighbors(&mut positions, tle_isl_k);
+                            apply_cached_isl_neighbors(
+                                &mut self.tle_isl_cache,
+                                (*preset, Some(si)),
+                                &mut positions,
+                                tle_isl_k,
+                                isl_max_lat,
+                                isl_sim_time,
+                            );
                         }
                         let tle_wc = WalkerConstellation {
                             walker_type: WalkerType::Delta,
@@ -2339,7 +2459,14 @@ impl ViewerState {
                         planet_equatorial_radius: planet_eq_radius,
                     };
                     if tle_isl_k > 0 {
-                        crate::walker::compute_knn_neighbors(&mut all_positions, tle_isl_k);
+                        apply_cached_isl_neighbors(
+                            &mut self.tle_isl_cache,
+                            (*preset, None),
+                            &mut all_positions,
+                            tle_isl_k,
+                            isl_max_lat,
+                            isl_sim_time,
+                        );
                     }
                     let tle_kind = if preset.is_debris() { 2u8 } else { 1u8 };
                     constellations_data.push((tle_wc, all_positions, preset.color_index(), tle_kind, usize::MAX, preset.label().to_string()));

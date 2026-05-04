@@ -672,36 +672,164 @@ pub fn step_numerical_state(
     true
 }
 
-pub fn compute_knn_neighbors(positions: &mut [SatelliteState], k: usize) {
+/// Compute k-nearest neighbours (upper-triangular, j > i) using a uniform 3D
+/// spatial grid. Falls back to a brute-force pass for tiny inputs where the
+/// grid setup is not worthwhile.
+///
+/// `prev_neighbors`, when supplied and length-matched, applies hysteresis:
+/// candidates that were already linked get a small effective-distance bonus,
+/// so links don't flicker when two candidates sit at near-equal range.
+pub fn compute_knn_neighbor_lists(
+    positions: &[SatelliteState],
+    k: usize,
+    prev_neighbors: Option<&[Vec<usize>]>,
+) -> Vec<Vec<usize>> {
     let n = positions.len();
     if k == 0 || n < 2 {
-        return;
+        return vec![Vec::new(); n];
     }
+
     let coords: Vec<(f64, f64, f64)> = positions.iter().map(|s| (s.x, s.y, s.z)).collect();
-    let mut all_neighbors: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let ascending: Vec<bool> = positions.iter().map(|s| s.ascending).collect();
+
+    // 0.49 = 0.7² — a previously-linked candidate at 1.0× wins over a fresh
+    // candidate up to 0.7× as close. Strong enough to pin stable links
+    // through small geometric shifts at recompute boundaries.
+    const HYSTERESIS_D2_FACTOR: f64 = 0.49;
+    let prev_links: std::collections::HashSet<(usize, usize)> = prev_neighbors
+        .filter(|p| p.len() == n)
+        .map(|p| {
+            let mut s = std::collections::HashSet::new();
+            for (i, nbrs) in p.iter().enumerate() {
+                for &j in nbrs {
+                    let (a, b) = if i < j { (i, j) } else { (j, i) };
+                    s.insert((a, b));
+                }
+            }
+            s
+        })
+        .unwrap_or_default();
+    let was_linked = |i: usize, j: usize| -> bool {
+        let (a, b) = if i < j { (i, j) } else { (j, i) };
+        prev_links.contains(&(a, b))
+    };
+
+    if n < 256 {
+        return brute_force_knn(&coords, &ascending, k, &was_linked, HYSTERESIS_D2_FACTOR);
+    }
+
+    // Cell size targets the expected nearest-neighbour spacing on a sphere
+    // covered by `n` points, so the typical 1-cell neighbourhood holds enough
+    // candidates for k ≤ 8.
+    let mut r = 0.0f64;
+    for &(x, y, z) in &coords {
+        let r2 = x * x + y * y + z * z;
+        if r2 > r { r = r2; }
+    }
+    let r = r.sqrt().max(1.0);
+    let cell = (4.0 * std::f64::consts::PI * r * r / n as f64).sqrt().max(1.0);
+
+    let mut min = (f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    for &(x, y, z) in &coords {
+        if x < min.0 { min.0 = x; }
+        if y < min.1 { min.1 = y; }
+        if z < min.2 { min.2 = z; }
+    }
+
+    let cell_of = |p: (f64, f64, f64)| -> (i32, i32, i32) {
+        (
+            ((p.0 - min.0) / cell).floor() as i32,
+            ((p.1 - min.1) / cell).floor() as i32,
+            ((p.2 - min.2) / cell).floor() as i32,
+        )
+    };
+
+    let mut grid: std::collections::HashMap<(i32, i32, i32), Vec<usize>> =
+        std::collections::HashMap::with_capacity(n);
+    for i in 0..n {
+        grid.entry(cell_of(coords[i])).or_default().push(i);
+    }
+
+    let mut out: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut scratch: Vec<(usize, f64)> = Vec::new();
+
+    for i in 0..n {
+        let (xi, yi, zi) = coords[i];
+        let (cx, cy, cz) = cell_of(coords[i]);
+
+        // Expand search radius until we have at least k candidates. Most
+        // queries succeed at radius 1.
+        let mut radius = 1i32;
+        scratch.clear();
+        loop {
+            scratch.clear();
+            for dx in -radius..=radius {
+                for dy in -radius..=radius {
+                    for dz in -radius..=radius {
+                        let Some(bucket) = grid.get(&(cx + dx, cy + dy, cz + dz)) else { continue; };
+                        for &j in bucket {
+                            if j == i { continue; }
+                            if ascending[j] != ascending[i] { continue; }
+                            let (xj, yj, zj) = coords[j];
+                            let ddx = xi - xj;
+                            let ddy = yi - yj;
+                            let ddz = zi - zj;
+                            let mut d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+                            if was_linked(i, j) { d2 *= HYSTERESIS_D2_FACTOR; }
+                            scratch.push((j, d2));
+                        }
+                    }
+                }
+            }
+            if scratch.len() >= k || radius >= 6 {
+                break;
+            }
+            radius += 1;
+        }
+
+        let k_actual = k.min(scratch.len());
+        if k_actual == 0 { continue; }
+        scratch.select_nth_unstable_by(k_actual - 1, |a, b| a.1.partial_cmp(&b.1).unwrap());
+        for &(j, _) in &scratch[..k_actual] {
+            if j > i {
+                out[i].push(j);
+            }
+        }
+    }
+    out
+}
+
+fn brute_force_knn(
+    coords: &[(f64, f64, f64)],
+    ascending: &[bool],
+    k: usize,
+    was_linked: &impl Fn(usize, usize) -> bool,
+    hysteresis_d2_factor: f64,
+) -> Vec<Vec<usize>> {
+    let n = coords.len();
+    let mut out: Vec<Vec<usize>> = vec![Vec::new(); n];
     for i in 0..n {
         let (xi, yi, zi) = coords[i];
         let mut dists: Vec<(usize, f64)> = (0..n)
-            .filter(|&j| j != i)
+            .filter(|&j| j != i && ascending[j] == ascending[i])
             .map(|j| {
                 let (xj, yj, zj) = coords[j];
                 let dx = xi - xj;
                 let dy = yi - yj;
                 let dz = zi - zj;
-                (j, dx * dx + dy * dy + dz * dz)
+                let mut d2 = dx * dx + dy * dy + dz * dz;
+                if was_linked(i, j) { d2 *= hysteresis_d2_factor; }
+                (j, d2)
             })
             .collect();
         let k_actual = k.min(dists.len());
-        dists.select_nth_unstable_by(k_actual.saturating_sub(1), |a, b| {
-            a.1.partial_cmp(&b.1).unwrap()
-        });
+        if k_actual == 0 { continue; }
+        dists.select_nth_unstable_by(k_actual - 1, |a, b| a.1.partial_cmp(&b.1).unwrap());
         for &(j, _) in &dists[..k_actual] {
             if j > i {
-                all_neighbors[i].push(j);
+                out[i].push(j);
             }
         }
     }
-    for (i, nbrs) in all_neighbors.into_iter().enumerate() {
-        positions[i].neighbors = nbrs;
-    }
+    out
 }

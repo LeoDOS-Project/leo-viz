@@ -244,6 +244,9 @@ pub struct PlanetConfig {
     pub moon_inclination_override: Option<f64>,
     pub auto_cluster_tle: bool,
     pub tle_isl_k: usize,
+    /// Drop ISLs whose endpoint latitude exceeds this absolute value (degrees).
+    /// Models the high-latitude cross-plane laser tear-down. `90.0` disables.
+    pub tle_isl_max_lat_deg: f64,
     /// Accumulated sub-satellite points per tracked satellite, keyed by
     /// (constellation_idx, plane, sat_index). Stored as (lat_deg, lon_deg, sim_time_s).
     pub ground_track_history: HashMap<(usize, usize, usize), Vec<(f64, f64, f64)>>,
@@ -295,6 +298,7 @@ impl PlanetConfig {
             moon_inclination_override: None,
             auto_cluster_tle: false,
             tle_isl_k: 0,
+            tle_isl_max_lat_deg: 70.0,
             ground_track_history: HashMap::new(),
             projection_override: None,
         }

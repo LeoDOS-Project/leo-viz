@@ -124,6 +124,7 @@ impl App {
                 pending_body: None,
                 #[cfg(target_arch = "wasm32")]
                 pending_planet_texture_fetches: std::collections::HashSet::new(),
+                tle_isl_cache: HashMap::new(),
                 dark_mode: true,
                 show_info: false,
                 real_time: 0.0,
