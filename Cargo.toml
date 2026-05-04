@@ -24,6 +24,7 @@ chrono = { version = "0.4", features = ["wasmbind"] }
 web-time = "1.1.0"
 bytemuck = { version = "1", features = ["derive"] }
 indoc = "2.0.7"
+zerocopy = { version = "0.8", features = ["derive"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 eframe = { version = "0.33", default-features = false, features = [

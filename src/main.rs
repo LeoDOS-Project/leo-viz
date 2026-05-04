@@ -25,6 +25,7 @@ mod projection;
 mod spacecomp;
 mod aep8;
 mod solar_system;
+mod bridge;
 
 pub(crate) use viewer::ViewerState;
 pub(crate) use app::App;
