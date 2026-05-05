@@ -26,6 +26,8 @@ mod spacecomp;
 mod aep8;
 mod solar_system;
 mod bridge;
+#[cfg(not(target_arch = "wasm32"))]
+mod bridge_publisher;
 
 pub(crate) use viewer::ViewerState;
 pub(crate) use app::App;
