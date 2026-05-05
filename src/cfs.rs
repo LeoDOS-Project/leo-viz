@@ -25,7 +25,10 @@ wait
 #[derive(Debug, Clone)]
 pub enum CfsStatus {
     Launching,
-    Running { container_id: String },
+    Running {
+        #[allow(dead_code)]
+        container_id: String,
+    },
     Failed(String),
 }
 

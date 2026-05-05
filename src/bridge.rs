@@ -15,6 +15,8 @@
 //!   Receivers MUST validate `magic` and `version` on every frame
 //!   to recover from a stream gone out of sync.
 
+#![allow(dead_code)]
+
 use zerocopy::byteorder::network_endian::F64;
 use zerocopy::byteorder::network_endian::U16;
 use zerocopy::byteorder::network_endian::U32;
@@ -30,12 +32,6 @@ pub const BRIDGE_MAGIC: [u8; 4] = *b"LEOS";
 
 /// Wire format version. Bump on any layout change.
 pub const BRIDGE_VERSION: u16 = 2;
-
-/// Default loopback port. leo-viz allocates one ephemeral listener
-/// per launched constellation, so this is only a fallback for
-/// standalone tests; production launches pass an explicit port via
-/// the `LEODOS_BRIDGE_ADDR` env var.
-pub const DEFAULT_BRIDGE_PORT: u16 = 7000;
 
 /// North direction in `los_neighbors` bitmask.
 pub const DIR_NORTH: u8 = 0;
