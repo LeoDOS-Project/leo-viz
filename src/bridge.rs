@@ -1,15 +1,19 @@
-//! Wire format for the walker-delta ↔ LeoDOS bridge.
+//! Wire format for the leo-viz ↔ LeoDOS bridge over TCP.
 //!
-//! Walker-delta publishes simulation state (orbital positions, LOS
-//! bitmasks, time) to LeoDOS over UDP. LeoDOS-side hwlib backends
-//! consume the same byte layout from a sibling module copy.
+//! `leo-viz` runs a TCP server per launched constellation. Each cFS
+//! `sim_client` opens an outbound connection at boot and:
+//!   1. writes one [`Hello`] identifying its spacecraft id;
+//!   2. reads a stream of [`StateFrame`]s, one per simulator tick,
+//!      each carrying the satellite's current ECI position/velocity,
+//!      attitude, and link visibility.
 //!
 //! Encoding rules:
 //! - Big-endian (network byte order) for all multi-byte fields.
 //! - `#[repr(C)]` + zerocopy for stable layout, no allocation,
 //!   no serde overhead.
-//! - One `StateHeader` followed by `num_sats × SatState` per UDP
-//!   datagram. Receivers MUST validate `magic` and `version`.
+//! - Both message types are fixed size — no length prefix needed.
+//!   Receivers MUST validate `magic` and `version` on every frame
+//!   to recover from a stream gone out of sync.
 
 use zerocopy::byteorder::network_endian::F64;
 use zerocopy::byteorder::network_endian::U16;
@@ -21,50 +25,55 @@ use zerocopy::IntoBytes;
 use zerocopy::KnownLayout;
 use zerocopy::Unaligned;
 
-/// Magic bytes identifying a walker-delta → LeoDOS state packet.
-pub const STATE_MAGIC: [u8; 4] = *b"LEOS";
+/// Magic bytes identifying any frame in the leo-viz ↔ LeoDOS protocol.
+pub const BRIDGE_MAGIC: [u8; 4] = *b"LEOS";
 
 /// Wire format version. Bump on any layout change.
-pub const BRIDGE_VERSION: u16 = 1;
+pub const BRIDGE_VERSION: u16 = 2;
 
-/// UDP port LeoDOS hwlib backends listen on for state.
-pub const TOPOLOGY_PORT: u16 = 7000;
+/// Default loopback port. leo-viz allocates one ephemeral listener
+/// per launched constellation, so this is only a fallback for
+/// standalone tests; production launches pass an explicit port via
+/// the `LEODOS_BRIDGE_ADDR` env var.
+pub const DEFAULT_BRIDGE_PORT: u16 = 7000;
 
-/// Direction enum encoded in `PacketEvent::link`.
+/// North direction in `los_neighbors` bitmask.
 pub const DIR_NORTH: u8 = 0;
+/// South direction in `los_neighbors` bitmask.
 pub const DIR_SOUTH: u8 = 1;
+/// East direction in `los_neighbors` bitmask.
 pub const DIR_EAST: u8 = 2;
+/// West direction in `los_neighbors` bitmask.
 pub const DIR_WEST: u8 = 3;
+/// Ground link encoded separately from torus neighbors.
 pub const DIR_GROUND: u8 = 4;
 
-/// Header for a state packet. Followed by `num_sats × SatState`.
+/// Client → server: identifies which satellite this connection is.
+/// Sent once immediately after the TCP handshake, before any
+/// [`StateFrame`]s are read.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
-pub struct StateHeader {
+pub struct Hello {
     pub magic: [u8; 4],
     pub version: U16,
-    pub seq: U32,
-    pub sim_time_ms: U64,
-    pub real_time_ms: U64,
-    pub num_sats: U16,
-    pub _pad: [u8; 4],
+    pub _pad0: [u8; 2],
+    pub scid: U32,
+    pub _pad1: [u8; 4],
 }
 
-impl StateHeader {
-    pub fn new(seq: u32, sim_time_ms: u64, real_time_ms: u64, num_sats: u16) -> Self {
+impl Hello {
+    pub fn new(scid: u32) -> Self {
         Self {
-            magic: STATE_MAGIC,
+            magic: BRIDGE_MAGIC,
             version: U16::new(BRIDGE_VERSION),
-            seq: U32::new(seq),
-            sim_time_ms: U64::new(sim_time_ms),
-            real_time_ms: U64::new(real_time_ms),
-            num_sats: U16::new(num_sats),
-            _pad: [0; 4],
+            _pad0: [0; 2],
+            scid: U32::new(scid),
+            _pad1: [0; 4],
         }
     }
 
     pub fn validate(&self) -> Result<(), DecodeError> {
-        if self.magic != STATE_MAGIC {
+        if self.magic != BRIDGE_MAGIC {
             return Err(DecodeError::BadMagic);
         }
         if self.version.get() != BRIDGE_VERSION {
@@ -77,22 +86,44 @@ impl StateHeader {
     }
 }
 
-/// Per-satellite state. Position in ECI meters, velocity in m/s,
-/// nadir attitude as a body→ECI quaternion (w, x, y, z).
+/// Server → client: per-tick snapshot of one satellite's state.
+/// Position in ECI meters, velocity in m/s, nadir attitude as a
+/// body→ECI quaternion (w, x, y, z).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
-pub struct SatState {
+pub struct StateFrame {
+    pub magic: [u8; 4],
+    pub version: U16,
+    pub _pad0: [u8; 2],
+    /// Monotonic sequence number assigned by leo-viz.
+    pub seq: U32,
+    /// Simulated mission time in milliseconds since epoch.
+    pub sim_time_ms: U64,
+    /// Wall clock time in milliseconds when the frame was published.
+    pub real_time_ms: U64,
+    /// Spacecraft id this frame is addressed to (matches `Hello.scid`).
     pub scid: U32,
+    pub _pad1: [u8; 4],
+    /// ECI position in meters.
     pub pos_eci_m: [F64; 3],
+    /// ECI velocity in m/s.
     pub vel_eci_m_s: [F64; 3],
+    /// Body→ECI quaternion (w, x, y, z) for nadir-pointing attitude.
     pub nadir_quat: [F64; 4],
+    /// Bitmask of torus neighbors currently in line of sight.
     pub los_neighbors: u8,
+    pub _pad2: [u8; 1],
+    /// Bitmask of ground stations currently in view.
     pub los_ground: U16,
-    pub _pad: [u8; 9],
+    pub _pad3: [u8; 4],
 }
 
-impl SatState {
+impl StateFrame {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
+        seq: u32,
+        sim_time_ms: u64,
+        real_time_ms: u64,
         scid: u32,
         pos_eci_m: [f64; 3],
         vel_eci_m_s: [f64; 3],
@@ -101,7 +132,14 @@ impl SatState {
         los_ground: u16,
     ) -> Self {
         Self {
+            magic: BRIDGE_MAGIC,
+            version: U16::new(BRIDGE_VERSION),
+            _pad0: [0; 2],
+            seq: U32::new(seq),
+            sim_time_ms: U64::new(sim_time_ms),
+            real_time_ms: U64::new(real_time_ms),
             scid: U32::new(scid),
+            _pad1: [0; 4],
             pos_eci_m: [
                 F64::new(pos_eci_m[0]),
                 F64::new(pos_eci_m[1]),
@@ -119,70 +157,40 @@ impl SatState {
                 F64::new(nadir_quat[3]),
             ],
             los_neighbors,
+            _pad2: [0; 1],
             los_ground: U16::new(los_ground),
-            _pad: [0; 9],
+            _pad3: [0; 4],
         }
     }
 
+    pub fn validate(&self) -> Result<(), DecodeError> {
+        if self.magic != BRIDGE_MAGIC {
+            return Err(DecodeError::BadMagic);
+        }
+        if self.version.get() != BRIDGE_VERSION {
+            return Err(DecodeError::VersionMismatch {
+                expected: BRIDGE_VERSION,
+                got: self.version.get(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Returns `true` if `dir` (one of `DIR_*`) is in the neighbor mask.
     pub fn los_has(&self, dir: u8) -> bool {
         (self.los_neighbors >> dir) & 1 == 1
     }
 }
 
-/// Errors decoding an incoming state packet.
+/// Errors decoding an incoming frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecodeError {
-    /// Buffer too short for a header.
-    HeaderTooShort,
-    /// Header magic doesn't match.
+    /// Buffer was too short for the expected frame size.
+    Truncated { expected: usize, got: usize },
+    /// Frame magic did not match [`BRIDGE_MAGIC`].
     BadMagic,
-    /// Wire format version unsupported.
+    /// Wire format version did not match [`BRIDGE_VERSION`].
     VersionMismatch { expected: u16, got: u16 },
-    /// Buffer too short for the declared sat count.
-    BodyTooShort { expected: usize, got: usize },
-}
-
-/// Encode a state packet into `out`. Returns the number of bytes
-/// written. `out` must be at least
-/// `size_of::<StateHeader>() + sats.len() * size_of::<SatState>()`.
-pub fn encode_state(out: &mut [u8], header: &StateHeader, sats: &[SatState]) -> usize {
-    let header_len = core::mem::size_of::<StateHeader>();
-    let sat_len = core::mem::size_of::<SatState>();
-    let total = header_len + sats.len() * sat_len;
-    assert!(out.len() >= total, "buffer too small for state packet");
-    out[..header_len].copy_from_slice(header.as_bytes());
-    let mut off = header_len;
-    for sat in sats {
-        out[off..off + sat_len].copy_from_slice(sat.as_bytes());
-        off += sat_len;
-    }
-    total
-}
-
-/// Decode a state packet. Returns header + view of the sat array.
-pub fn decode_state(buf: &[u8]) -> Result<(StateHeader, &[SatState]), DecodeError> {
-    let header_len = core::mem::size_of::<StateHeader>();
-    if buf.len() < header_len {
-        return Err(DecodeError::HeaderTooShort);
-    }
-    let header = StateHeader::read_from_bytes(&buf[..header_len])
-        .map_err(|_| DecodeError::HeaderTooShort)?;
-    header.validate()?;
-    let n = header.num_sats.get() as usize;
-    let body = &buf[header_len..];
-    let expected = n * core::mem::size_of::<SatState>();
-    if body.len() < expected {
-        return Err(DecodeError::BodyTooShort {
-            expected,
-            got: body.len(),
-        });
-    }
-    let sats = <[SatState]>::ref_from_bytes(&body[..expected])
-        .map_err(|_| DecodeError::BodyTooShort {
-            expected,
-            got: body.len(),
-        })?;
-    Ok((header, sats))
 }
 
 #[cfg(test)]
@@ -190,85 +198,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn header_size_is_stable() {
-        assert_eq!(core::mem::size_of::<StateHeader>(), 32);
+    fn hello_size_is_stable() {
+        assert_eq!(core::mem::size_of::<Hello>(), 16);
     }
 
     #[test]
-    fn sat_state_size_is_stable() {
-        assert_eq!(core::mem::size_of::<SatState>(), 96);
+    fn state_frame_size_is_stable() {
+        assert_eq!(core::mem::size_of::<StateFrame>(), 124);
     }
 
     #[test]
-    fn round_trip_empty() {
-        let h = StateHeader::new(0, 0, 0, 0);
-        let mut buf = [0u8; 32];
-        let n = encode_state(&mut buf, &h, &[]);
-        assert_eq!(n, 32);
-        let (h2, sats) = decode_state(&buf[..n]).unwrap();
-        assert_eq!(h2.magic, STATE_MAGIC);
-        assert_eq!(h2.version.get(), BRIDGE_VERSION);
-        assert_eq!(sats.len(), 0);
+    fn hello_round_trip() {
+        let h = Hello::new(42);
+        let bytes = h.as_bytes();
+        let decoded = Hello::read_from_bytes(bytes).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(decoded.scid.get(), 42);
     }
 
     #[test]
-    fn round_trip_three_sats() {
-        let sats = [
-            SatState::new(1, [7000e3, 0.0, 0.0], [0.0, 7.5e3, 0.0], [1.0, 0.0, 0.0, 0.0], 0b0011, 0),
-            SatState::new(2, [0.0, 7000e3, 0.0], [-7.5e3, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], 0b1100, 0b0001),
-            SatState::new(3, [0.0, 0.0, 7000e3], [0.0, 0.0, 7.5e3], [1.0, 0.0, 0.0, 0.0], 0b1111, 0b0011),
-        ];
-        let h = StateHeader::new(42, 1_000_000, 2_000_000, sats.len() as u16);
-        let mut buf = vec![0u8; 32 + sats.len() * 96];
-        let n = encode_state(&mut buf, &h, &sats);
-        assert_eq!(n, buf.len());
-
-        let (h2, decoded) = decode_state(&buf[..n]).unwrap();
-        assert_eq!(h2.seq.get(), 42);
-        assert_eq!(h2.sim_time_ms.get(), 1_000_000);
-        assert_eq!(h2.real_time_ms.get(), 2_000_000);
-        assert_eq!(h2.num_sats.get(), 3);
-        assert_eq!(decoded.len(), 3);
-        assert_eq!(decoded[0].scid.get(), 1);
-        assert_eq!(decoded[0].pos_eci_m[0].get(), 7000e3);
-        assert_eq!(decoded[1].scid.get(), 2);
-        assert_eq!(decoded[2].los_neighbors, 0b1111);
-        assert_eq!(decoded[2].los_ground.get(), 0b0011);
+    fn state_frame_round_trip() {
+        let f = StateFrame::new(
+            7,
+            1_000_000,
+            2_000_000,
+            3,
+            [7000e3, 0.0, 0.0],
+            [0.0, 7.5e3, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
+            0b0011,
+            0b0001,
+        );
+        let bytes = f.as_bytes();
+        let decoded = StateFrame::read_from_bytes(bytes).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(decoded.seq.get(), 7);
+        assert_eq!(decoded.scid.get(), 3);
+        assert_eq!(decoded.pos_eci_m[0].get(), 7000e3);
+        assert!(decoded.los_has(DIR_NORTH));
+        assert!(decoded.los_has(DIR_SOUTH));
+        assert!(!decoded.los_has(DIR_EAST));
     }
 
     #[test]
     fn rejects_bad_magic() {
-        let mut buf = [0u8; 32];
-        let h = StateHeader::new(0, 0, 0, 0);
-        encode_state(&mut buf, &h, &[]);
-        buf[0] = b'X';
-        assert!(matches!(decode_state(&buf), Err(DecodeError::BadMagic)));
-    }
-
-    #[test]
-    fn rejects_short_header() {
-        let buf = [0u8; 8];
-        assert!(matches!(decode_state(&buf), Err(DecodeError::HeaderTooShort)));
-    }
-
-    #[test]
-    fn rejects_truncated_body() {
-        let h = StateHeader::new(0, 0, 0, 2);
-        let mut buf = vec![0u8; 32 + 96];
-        encode_state(&mut buf[..32 + 96], &h, &[SatState::new(1, [0.0; 3], [0.0; 3], [1.0, 0.0, 0.0, 0.0], 0, 0)]);
-        let truncated = &buf[..32 + 96];
-        match decode_state(truncated) {
-            Err(DecodeError::BodyTooShort { expected: 192, .. }) => {}
-            other => panic!("unexpected: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn los_has_decodes_bitmask() {
-        let s = SatState::new(0, [0.0; 3], [0.0; 3], [1.0, 0.0, 0.0, 0.0], 0b1010, 0);
-        assert!(!s.los_has(DIR_NORTH));
-        assert!(s.los_has(DIR_SOUTH));
-        assert!(!s.los_has(DIR_EAST));
-        assert!(s.los_has(DIR_WEST));
+        let mut h = Hello::new(1);
+        h.magic = *b"XXXX";
+        assert!(matches!(h.validate(), Err(DecodeError::BadMagic)));
     }
 }

@@ -70,7 +70,7 @@ pub(crate) struct App {
     pub(crate) viewer: ViewerState,
     first_frame: bool,
     #[cfg(not(target_arch = "wasm32"))]
-    bridge: Option<crate::bridge_publisher::BridgePublisher>,
+    bridge: Option<crate::bridge_server::BridgeServer>,
 }
 
 impl App {
@@ -319,7 +319,7 @@ impl App {
             },
             first_frame: true,
             #[cfg(not(target_arch = "wasm32"))]
-            bridge: crate::bridge_publisher::BridgePublisher::from_env(),
+            bridge: crate::bridge_server::BridgeServer::from_env(),
         };
 
         {
@@ -368,7 +368,7 @@ impl App {
         let dt = 1.0_f64;
         let sats = wc.satellite_positions(tab.settings.time);
         let sats_next = wc.satellite_positions(tab.settings.time + dt);
-        bridge.publish(tab.settings.time, &sats, &sats_next, dt);
+        bridge.publish_tick(tab.settings.time, &sats, &sats_next, dt);
     }
 }
 
