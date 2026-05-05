@@ -2222,6 +2222,15 @@ impl eframe::App for App {
         #[cfg(not(target_arch = "wasm32"))]
         self.publish_bridge_state();
 
+        #[cfg(not(target_arch = "wasm32"))]
+        for tab in self.viewer.tabs.iter_mut() {
+            for planet in tab.planets.iter_mut() {
+                for cons in planet.constellations.iter_mut() {
+                    crate::cfs::render_cfs_log_window(ctx, cons);
+                }
+            }
+        }
+
         self.first_frame = false;
     }
 
