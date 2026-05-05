@@ -146,6 +146,8 @@ fn run_docker(
             "run",
             "-d",
             "--rm",
+            "--sysctl",
+            "fs.mqueue.msg_max=1000",
             "-e",
             &format!("LEODOS_NUM_SATS={}", num_sats),
             "-e",
