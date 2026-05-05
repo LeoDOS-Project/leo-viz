@@ -1956,10 +1956,14 @@ impl ViewerState {
                     ui.horizontal(|ui| {
                         let mut sats = cons.sats_per_plane as i32;
                         let mut planes = cons.num_planes as i32;
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let editable = cons.cfs.is_none();
+                        #[cfg(target_arch = "wasm32")]
+                        let editable = true;
                         ui.label("Sats:");
-                        let sats_resp = ui.add(egui::DragValue::new(&mut sats).range(1..=100)).on_hover_text("Satellites per orbital plane");
+                        let sats_resp = ui.add_enabled(editable, egui::DragValue::new(&mut sats).range(1..=100)).on_hover_text("Satellites per orbital plane");
                         ui.label("Orbits:");
-                        let planes_resp = ui.add(egui::DragValue::new(&mut planes).range(1..=100)).on_hover_text("Number of orbital planes");
+                        let planes_resp = ui.add_enabled(editable, egui::DragValue::new(&mut planes).range(1..=100)).on_hover_text("Number of orbital planes");
                         if sats > 0 && planes > 0 {
                             cons.sats_per_plane = sats as usize;
                             cons.num_planes = planes as usize;
