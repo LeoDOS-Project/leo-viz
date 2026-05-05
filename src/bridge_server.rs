@@ -52,32 +52,10 @@ struct ServerState {
 }
 
 impl BridgeServer {
-    /// Bind a fixed port if `LEODOS_BRIDGE_BIND_PORT` is set,
-    /// otherwise return `None`. Used in standalone testing before
-    /// the per-constellation Launch UI is wired up.
-    pub fn from_env() -> Option<Self> {
-        let port: u16 = std::env::var("LEODOS_BRIDGE_BIND_PORT").ok()?.parse().ok()?;
-        match Self::bind_port(port) {
-            Ok(s) => Some(s),
-            Err(e) => {
-                log::warn!("bridge server failed to bind :{}: {}", port, e);
-                None
-            }
-        }
-    }
-
     /// Bind a fresh ephemeral port on `127.0.0.1`. Returns an
     /// error if the host is out of ports.
     pub fn bind() -> std::io::Result<Self> {
-        Self::bind_inner(TcpListener::bind("127.0.0.1:0")?)
-    }
-
-    /// Bind a specific port on `127.0.0.1`.
-    pub fn bind_port(port: u16) -> std::io::Result<Self> {
-        Self::bind_inner(TcpListener::bind(("127.0.0.1", port))?)
-    }
-
-    fn bind_inner(listener: TcpListener) -> std::io::Result<Self> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
         let state = Arc::new(Mutex::new(ServerState {

@@ -72,6 +72,8 @@ pub struct ConstellationConfig {
     pub physics: crate::physics::PhysicsConfig,
     pub physics_state: Vec<crate::physics::SatellitePhysics>,
     pub numerical: Option<NumericalState>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub cfs: Option<std::sync::Arc<std::sync::Mutex<crate::cfs::Cfs>>>,
 }
 
 impl ConstellationConfig {
@@ -101,6 +103,8 @@ impl ConstellationConfig {
             physics: crate::physics::PhysicsConfig::default(),
             physics_state: Vec::new(),
             numerical: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            cfs: None,
         }
     }
 

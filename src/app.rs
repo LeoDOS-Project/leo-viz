@@ -69,8 +69,6 @@ pub(crate) struct App {
     pub(crate) dock_state: DockState<usize>,
     pub(crate) viewer: ViewerState,
     first_frame: bool,
-    #[cfg(not(target_arch = "wasm32"))]
-    bridge: Option<crate::bridge_server::BridgeServer>,
 }
 
 impl App {
@@ -318,8 +316,6 @@ impl App {
                 editing_tab: None,
             },
             first_frame: true,
-            #[cfg(not(target_arch = "wasm32"))]
-            bridge: crate::bridge_server::BridgeServer::from_env(),
         };
 
         {
@@ -353,22 +349,26 @@ impl App {
 #[cfg(not(target_arch = "wasm32"))]
 impl App {
     fn publish_bridge_state(&mut self) {
-        let Some(bridge) = self.bridge.as_mut() else { return; };
-        let active = self.viewer.active_tab_idx;
-        let Some(tab) = self.viewer.tabs.get(active) else { return; };
-        let Some(planet) = tab.planets.first() else { return; };
-        let Some(cons) = planet.constellations.first() else { return; };
-        let body = planet.celestial_body;
-        let wc = cons.constellation(
-            body.radius_km(),
-            body.mu(),
-            body.j2(),
-            body.equatorial_radius_km(),
-        );
         let dt = 1.0_f64;
-        let sats = wc.satellite_positions(tab.settings.time);
-        let sats_next = wc.satellite_positions(tab.settings.time + dt);
-        bridge.publish_tick(tab.settings.time, &sats, &sats_next, dt);
+        for tab in &self.viewer.tabs {
+            for planet in &tab.planets {
+                let body = planet.celestial_body;
+                for cons in &planet.constellations {
+                    let Some(cfs) = cons.cfs.as_ref() else { continue };
+                    let Ok(mut cfs) = cfs.lock() else { continue };
+                    let wc = cons.constellation(
+                        body.radius_km(),
+                        body.mu(),
+                        body.j2(),
+                        body.equatorial_radius_km(),
+                    );
+                    let sats = wc.satellite_positions(tab.settings.time);
+                    let sats_next = wc.satellite_positions(tab.settings.time + dt);
+                    cfs.server_mut()
+                        .publish_tick(tab.settings.time, &sats, &sats_next, dt);
+                }
+            }
+        }
     }
 }
 

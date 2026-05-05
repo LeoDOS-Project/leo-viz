@@ -1947,6 +1947,8 @@ impl ViewerState {
                                 const_to_remove = Some(cidx);
                             }
                         }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        crate::cfs::render_cfs_button(ui, cons);
                     });
 
                     ui.horizontal_top(|ui| {

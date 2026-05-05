@@ -28,6 +28,8 @@ mod solar_system;
 mod bridge;
 #[cfg(not(target_arch = "wasm32"))]
 mod bridge_server;
+#[cfg(not(target_arch = "wasm32"))]
+mod cfs;
 
 pub(crate) use viewer::ViewerState;
 pub(crate) use app::App;
