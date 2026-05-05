@@ -53,7 +53,17 @@ impl BridgePublisher {
     /// Publish a snapshot. Rate-limited; returns immediately if
     /// the previous publish was more recent than [`MIN_PUBLISH_INTERVAL`].
     /// `sim_time_seconds` is the simulator's current sim clock.
-    pub fn publish(&mut self, sim_time_seconds: f64, sats: &[SatelliteState]) {
+    /// `sats_next` is a propagated snapshot at `sim_time_seconds + dt`,
+    /// used to derive ECI velocity by finite difference. Entries pair
+    /// up by index; if the slices differ in length the shorter one
+    /// determines how many sats are published.
+    pub fn publish(
+        &mut self,
+        sim_time_seconds: f64,
+        sats: &[SatelliteState],
+        sats_next: &[SatelliteState],
+        dt: f64,
+    ) {
         let now = Instant::now();
         if let Some(last) = self.last_publish {
             if now.duration_since(last) < MIN_PUBLISH_INTERVAL {
@@ -61,7 +71,7 @@ impl BridgePublisher {
             }
         }
 
-        let n = sats.len().min(u16::MAX as usize);
+        let n = sats.len().min(sats_next.len()).min(u16::MAX as usize);
         let total = core::mem::size_of::<StateHeader>() + n * core::mem::size_of::<SatState>();
         if total > MAX_DATAGRAM_BYTES {
             log::warn!("bridge publisher: {} sats exceeds datagram budget", n);
@@ -77,7 +87,12 @@ impl BridgePublisher {
         let header = StateHeader::new(self.seq, sim_time_ms, real_time_ms, n as u16);
         self.buf.resize(total, 0);
 
-        let encoded: Vec<SatState> = sats.iter().take(n).map(encode_sat).collect();
+        let encoded: Vec<SatState> = sats
+            .iter()
+            .zip(sats_next.iter())
+            .take(n)
+            .map(|(s, s_next)| encode_sat(s, s_next, dt))
+            .collect();
         encode_state(&mut self.buf, &header, &encoded);
 
         match self.socket.send_to(&self.buf, self.target) {
@@ -106,9 +121,13 @@ impl BridgePublisher {
     }
 }
 
-fn encode_sat(s: &SatelliteState) -> SatState {
+fn encode_sat(s: &SatelliteState, s_next: &SatelliteState, dt: f64) -> SatState {
     let pos_eci_m = [s.x * 1000.0, s.y * 1000.0, s.z * 1000.0];
-    let vel_eci_m_s = [0.0, 0.0, 0.0];
+    let vel_eci_m_s = [
+        (s_next.x - s.x) * 1000.0 / dt,
+        (s_next.y - s.y) * 1000.0 / dt,
+        (s_next.z - s.z) * 1000.0 / dt,
+    ];
     let nadir_quat = [1.0, 0.0, 0.0, 0.0];
     let mut los_neighbors: u8 = 0;
     for (i, _) in s.neighbors.iter().take(4).enumerate() {
@@ -154,7 +173,8 @@ mod tests {
 
         let mut pub_ = BridgePublisher::new_to(target).unwrap();
         let sats = vec![fake_sat(7, 7000.0), fake_sat(8, 7100.0)];
-        pub_.publish(123.456, &sats);
+        let sats_next = vec![fake_sat(7, 7000.5), fake_sat(8, 7100.5)];
+        pub_.publish(123.456, &sats, &sats_next, 1.0);
 
         let mut buf = [0u8; 65_000];
         let (n, _) = listener.recv_from(&mut buf).unwrap();
@@ -166,6 +186,8 @@ mod tests {
         assert_eq!(decoded.len(), 2);
         assert_eq!(decoded[0].scid.get(), 7);
         assert_eq!(decoded[0].pos_eci_m[0].get(), 7_000_000.0);
+        // 0.5 km / 1.0 s = 500 m/s along x
+        assert_eq!(decoded[0].vel_eci_m_s[0].get(), 500.0);
         assert_eq!(decoded[0].los_neighbors, 0b0111);
         assert_eq!(decoded[1].scid.get(), 8);
     }
@@ -178,8 +200,9 @@ mod tests {
 
         let mut pub_ = BridgePublisher::new_to(target).unwrap();
         let sats = vec![fake_sat(1, 7000.0)];
-        pub_.publish(0.0, &sats);
-        pub_.publish(0.001, &sats);
+        let sats_next = vec![fake_sat(1, 7000.5)];
+        pub_.publish(0.0, &sats, &sats_next, 1.0);
+        pub_.publish(0.001, &sats, &sats_next, 1.0);
 
         let mut buf = [0u8; 1024];
         let first = listener.recv_from(&mut buf);

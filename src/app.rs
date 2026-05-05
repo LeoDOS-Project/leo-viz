@@ -365,8 +365,10 @@ impl App {
             body.j2(),
             body.equatorial_radius_km(),
         );
+        let dt = 1.0_f64;
         let sats = wc.satellite_positions(tab.settings.time);
-        bridge.publish(tab.settings.time, &sats);
+        let sats_next = wc.satellite_positions(tab.settings.time + dt);
+        bridge.publish(tab.settings.time, &sats, &sats_next, dt);
     }
 }
 
