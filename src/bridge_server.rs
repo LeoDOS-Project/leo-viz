@@ -14,10 +14,19 @@
 //! client. Writes are blocking but the frames are small (128 B) and
 //! the connections are loopback, so this is effectively a memcpy.
 
+use crate::bridge::ENDPOINT_GROUND;
+use crate::bridge::ENDPOINT_SATELLITE;
+use crate::bridge::EventFrame;
+use crate::bridge::GroundStateFrame;
 use crate::bridge::Hello;
+use crate::bridge::KIND_GROUND_STATE;
+use crate::bridge::KIND_PING_REQUEST;
+use crate::bridge::PingRequestFrame;
 use crate::bridge::StateFrame;
+use crate::bridge::VisibleSat;
 use crate::walker::SatelliteState;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::io::Read;
 use std::io::Write;
 use std::net::SocketAddr;
@@ -37,18 +46,52 @@ use zerocopy::IntoBytes;
 
 const ACCEPT_POLL: Duration = Duration::from_millis(200);
 
+/// One EVS event observed on a connected satellite, decoded from the
+/// `EventFrame` wire format and stamped with a host-side receive time.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct ReceivedEvent {
+    pub scid: u32,
+    pub sim_time_ms: u64,
+    pub recv_real_time_ms: u64,
+    pub event_id: u16,
+    pub event_type: u8,
+    pub app_name: String,
+    pub message: String,
+}
+
+const MAX_EVENTS: usize = 4096;
+
+#[allow(dead_code)]
 pub struct BridgeServer {
     addr: SocketAddr,
     state: Arc<Mutex<ServerState>>,
+    events: Arc<Mutex<VecDeque<ReceivedEvent>>>,
     stop: Arc<AtomicBool>,
     accept_thread: Option<JoinHandle<()>>,
     seq: u32,
 }
 
+pub struct ConnectionTracker {
+    state: Arc<Mutex<ServerState>>,
+}
+
+impl ConnectionTracker {
+    pub fn connected_scids(&self) -> Vec<u32> {
+        self.state
+            .lock()
+            .map(|s| s.streams.keys().copied().collect())
+            .unwrap_or_default()
+    }
+}
+
 struct ServerState {
-    /// Stream per connected SCID. Insertion is from the accept
-    /// thread; iteration + writes happen from the UI thread.
+    /// Stream per connected satellite SCID. Insertion is from the
+    /// accept thread; iteration + writes happen from the UI thread.
     streams: HashMap<u32, TcpStream>,
+    /// Stream per connected ground-station id. Same threading rules
+    /// as `streams`.
+    ground_streams: HashMap<u32, TcpStream>,
 }
 
 impl BridgeServer {
@@ -60,25 +103,44 @@ impl BridgeServer {
         let addr = listener.local_addr()?;
         let state = Arc::new(Mutex::new(ServerState {
             streams: HashMap::new(),
+            ground_streams: HashMap::new(),
         }));
+        let events = Arc::new(Mutex::new(VecDeque::new()));
         let stop = Arc::new(AtomicBool::new(false));
 
         let accept_thread = {
             let state = Arc::clone(&state);
+            let events = Arc::clone(&events);
             let stop = Arc::clone(&stop);
             thread::Builder::new()
                 .name(format!("bridge-accept-{}", addr.port()))
-                .spawn(move || run_accept(listener, state, stop))?
+                .spawn(move || run_accept(listener, state, events, stop))?
         };
 
         log::info!("bridge server bound to {}", addr);
         Ok(Self {
             addr,
             state,
+            events,
             stop,
             accept_thread: Some(accept_thread),
             seq: 0,
         })
+    }
+
+    /// Drain all received events accumulated since the last call.
+    #[allow(dead_code)]
+    pub fn drain_events(&mut self) -> Vec<ReceivedEvent> {
+        match self.events.lock() {
+            Ok(mut g) => g.drain(..).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// A `Send`-able handle to the event queue for read-only access.
+    #[allow(dead_code)]
+    pub fn events_handle(&self) -> Arc<Mutex<VecDeque<ReceivedEvent>>> {
+        Arc::clone(&self.events)
     }
 
     /// The address clients should connect to.
@@ -86,12 +148,76 @@ impl BridgeServer {
         self.addr
     }
 
-    /// Returns the SCIDs of all currently-connected clients.
+    /// Returns the SCIDs of all currently-connected satellite clients.
     pub fn connected_scids(&self) -> Vec<u32> {
         self.state
             .lock()
             .map(|s| s.streams.keys().copied().collect())
             .unwrap_or_default()
+    }
+
+    /// Returns the station ids of all currently-connected ground daemons.
+    pub fn connected_ground_ids(&self) -> Vec<u32> {
+        self.state
+            .lock()
+            .map(|s| s.ground_streams.keys().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Push a [`GroundStateFrame`] to one connected ground daemon.
+    /// `visible` should already be ordered by elevation (highest first).
+    /// Returns `true` if the frame was written; `false` if no daemon
+    /// is connected for that station_id or the write failed (in which
+    /// case the connection is dropped).
+    pub fn publish_ground_tick(
+        &mut self,
+        station_id: u32,
+        sim_time_seconds: f64,
+        visible: &[VisibleSat],
+    ) -> bool {
+        let sim_time_ms = (sim_time_seconds * 1000.0) as u64;
+        let frame = GroundStateFrame::new(self.seq, sim_time_ms, station_id, visible);
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        let Some(stream) = state.ground_streams.get_mut(&station_id) else {
+            return false;
+        };
+        if write_kinded(stream, KIND_GROUND_STATE, frame.as_bytes()) {
+            true
+        } else {
+            log::warn!("bridge server: dropping ground id={} (write failed)", station_id);
+            state.ground_streams.remove(&station_id);
+            false
+        }
+    }
+
+    /// Send a [`PingRequestFrame`] to a connected ground daemon.
+    /// Returns `false` if no daemon is connected for that id or
+    /// the write failed.
+    pub fn send_ping_request(&mut self, station_id: u32, frame: &PingRequestFrame) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        let Some(stream) = state.ground_streams.get_mut(&station_id) else {
+            return false;
+        };
+        if write_kinded(stream, KIND_PING_REQUEST, frame.as_bytes()) {
+            true
+        } else {
+            log::warn!("bridge server: dropping ground id={} (write failed)", station_id);
+            state.ground_streams.remove(&station_id);
+            false
+        }
+    }
+
+    /// A `Send`-able read-only handle to the connection set; used by
+    /// the cFS launcher thread to gate `docker exec`s on prior sats
+    /// having actually connected.
+    pub fn tracker(&self) -> ConnectionTracker {
+        ConnectionTracker {
+            state: Arc::clone(&self.state),
+        }
     }
 
     /// Send one [`StateFrame`] per connected client, indexing into
@@ -142,6 +268,16 @@ impl Drop for BridgeServer {
     }
 }
 
+/// Write a 1-byte kind tag followed by `body` as a single contiguous
+/// buffer (one syscall, no Nagle interleaving with concurrent writers
+/// to the same stream).
+fn write_kinded(stream: &mut TcpStream, kind: u8, body: &[u8]) -> bool {
+    let mut buf = Vec::with_capacity(1 + body.len());
+    buf.push(kind);
+    buf.extend_from_slice(body);
+    stream.write_all(&buf).is_ok()
+}
+
 fn build_frame(
     seq: u32,
     sim_time_ms: u64,
@@ -175,14 +311,20 @@ fn build_frame(
     )
 }
 
-fn run_accept(listener: TcpListener, state: Arc<Mutex<ServerState>>, stop: Arc<AtomicBool>) {
+fn run_accept(
+    listener: TcpListener,
+    state: Arc<Mutex<ServerState>>,
+    events: Arc<Mutex<VecDeque<ReceivedEvent>>>,
+    stop: Arc<AtomicBool>,
+) {
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, _peer)) => {
                 let state = Arc::clone(&state);
+                let events = Arc::clone(&events);
                 thread::Builder::new()
                     .name("bridge-handshake".into())
-                    .spawn(move || handle_new_connection(stream, state))
+                    .spawn(move || handle_new_connection(stream, state, events))
                     .ok();
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -196,7 +338,11 @@ fn run_accept(listener: TcpListener, state: Arc<Mutex<ServerState>>, stop: Arc<A
     }
 }
 
-fn handle_new_connection(mut stream: TcpStream, state: Arc<Mutex<ServerState>>) {
+fn handle_new_connection(
+    mut stream: TcpStream,
+    state: Arc<Mutex<ServerState>>,
+    events: Arc<Mutex<VecDeque<ReceivedEvent>>>,
+) {
     if let Err(e) = stream.set_nonblocking(false) {
         log::warn!("bridge server: failed to set blocking: {}", e);
         return;
@@ -216,15 +362,84 @@ fn handle_new_connection(mut stream: TcpStream, state: Arc<Mutex<ServerState>>) 
         log::warn!("bridge server: hello rejected: {:?}", e);
         return;
     }
-    let scid = hello.scid.get();
+    let id = hello.scid.get();
+    let kind = hello.endpoint_kind;
 
     let _ = stream.set_read_timeout(None);
+
+    // try_clone gives us a separate file descriptor referring to the
+    // same TCP connection; the read-side thread can own it
+    // independently while the UI thread keeps the original for writes.
+    let read_stream = match stream.try_clone() {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("bridge server: try_clone failed for id={}: {}", id, e);
+            return;
+        }
+    };
+
     if let Ok(mut s) = state.lock() {
-        if let Some(old) = s.streams.insert(scid, stream) {
-            log::warn!("bridge server: replacing existing connection for scid={}", scid);
+        let map = match kind {
+            ENDPOINT_GROUND => &mut s.ground_streams,
+            // Treat anything we don't know as a satellite for backward compat.
+            _ => &mut s.streams,
+        };
+        let label = match kind {
+            ENDPOINT_GROUND => "ground",
+            ENDPOINT_SATELLITE => "sat",
+            _ => "sat",
+        };
+        if let Some(old) = map.insert(id, stream) {
+            log::warn!("bridge server: replacing existing {} connection for id={}", label, id);
             drop(old);
         } else {
-            log::info!("bridge server: scid={} connected", scid);
+            log::info!("bridge server: {} id={} connected", label, id);
+        }
+    }
+
+    thread::Builder::new()
+        .name(format!("bridge-events-{}", id))
+        .spawn(move || event_reader(read_stream, id, events))
+        .ok();
+}
+
+fn event_reader(
+    mut stream: TcpStream,
+    scid: u32,
+    events: Arc<Mutex<VecDeque<ReceivedEvent>>>,
+) {
+    let mut buf = [0u8; core::mem::size_of::<EventFrame>()];
+    loop {
+        if stream.read_exact(&mut buf).is_err() {
+            log::info!("bridge server: event reader for scid={} ended", scid);
+            return;
+        }
+        let Ok(frame) = EventFrame::read_from_bytes(&buf) else {
+            log::warn!("bridge server: event decode failed for scid={}", scid);
+            continue;
+        };
+        if frame.validate().is_err() {
+            log::warn!("bridge server: event validation failed for scid={}", scid);
+            continue;
+        }
+        let recv_real_time_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let received = ReceivedEvent {
+            scid: frame.scid.get(),
+            sim_time_ms: frame.sim_time_ms.get(),
+            recv_real_time_ms,
+            event_id: frame.event_id.get(),
+            event_type: frame.event_type,
+            app_name: frame.app_name_str().to_string(),
+            message: frame.message_str().to_string(),
+        };
+        if let Ok(mut q) = events.lock() {
+            q.push_back(received);
+            while q.len() > MAX_EVENTS {
+                q.pop_front();
+            }
         }
     }
 }

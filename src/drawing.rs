@@ -661,6 +661,7 @@ pub fn draw_3d_view(
     sun_dir: [f32; 3],
     time: f64,
     ground_stations: &mut [GroundStation],
+    ground_stations_locked: bool,
     areas_of_interest: &mut [AreaOfInterest],
     device_layers: &[DeviceLayer],
     body_rot_angle: f64,
@@ -680,6 +681,7 @@ pub fn draw_3d_view(
     physics_colors: &HashMap<(usize, usize), egui::Color32>,
     physics_info: &HashMap<(usize, usize), (f64, f64, bool)>,
     ground_tracks: &[Vec<(f64, f64)>],
+    flash_intensities: &[HashMap<u32, f32>],
 ) -> (Matrix3<f64>, f64) {
     let View3DFlags {
         show_orbits, show_axes, show_magnetic_axis, show_coverage, show_links,
@@ -3048,6 +3050,22 @@ pub fn draw_3d_view(
                         color.r() / 2, color.g() / 2, color.b() / 2, 80,
                     );
 
+                    let intensity = flash_intensities
+                        .get(ci)
+                        .and_then(|m| m.get(&(flat_idx as u32)))
+                        .copied()
+                        .unwrap_or(0.0);
+                    let color = if intensity > 0.0 {
+                        let m = intensity.clamp(0.0, 1.0);
+                        let r = (color.r() as f32 * (1.0 - m) + 255.0 * m) as u8;
+                        let g = (color.g() as f32 * (1.0 - m) + 255.0 * m) as u8;
+                        let b = (color.b() as f32 * (1.0 - m) + 255.0 * m) as u8;
+                        egui::Color32::from_rgba_unmultiplied(r, g, b, color.a())
+                    } else {
+                        color
+                    };
+                    let active_sat_radius = active_sat_radius * (1.0 + intensity * 1.2);
+
                     let (rx, ry, rz) = rotate_point_matrix(sat.x, sat.y, sat.z, &satellite_rotation);
                     let in_front = rz >= 0.0 || (rx * rx + ry * ry) >= earth_r_sq;
 
@@ -3718,6 +3736,9 @@ pub fn draw_3d_view(
             let mut found = false;
             for (rect, is_gs, idx) in &label_rects {
                 if rect.contains(pos) {
+                    if *is_gs && ground_stations_locked {
+                        continue;
+                    }
                     *dragging_place = Some((drag_tab_planet.0, drag_tab_planet.1, *is_gs, *idx));
                     found = true;
                     break;
@@ -3751,9 +3772,11 @@ pub fn draw_3d_view(
                     let lon = -(orig.z.atan2(orig.x)).to_degrees();
                     if let Some((_, _, is_gs, idx)) = *dragging_place {
                         if is_gs {
-                            if let Some(gs) = ground_stations.get_mut(idx) {
-                                gs.lat = lat;
-                                gs.lon = lon;
+                            if !ground_stations_locked {
+                                if let Some(gs) = ground_stations.get_mut(idx) {
+                                    gs.lat = lat;
+                                    gs.lon = lon;
+                                }
                             }
                         } else if let Some(aoi) = areas_of_interest.get_mut(idx) {
                             aoi.lat = lat;

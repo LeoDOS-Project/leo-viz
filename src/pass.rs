@@ -104,7 +104,7 @@ fn bisect_entry(
     (lo + hi) * 0.5
 }
 
-fn gs_eci_position(
+pub(crate) fn gs_eci_position(
     lat_deg: f64,
     lon_deg: f64,
     planet_radius: f64,
@@ -118,7 +118,7 @@ fn gs_eci_position(
     [x, y, z]
 }
 
-fn elevation_from_ground(gs_xyz: [f64; 3], sat_xyz: [f64; 3]) -> f64 {
+pub(crate) fn elevation_from_ground(gs_xyz: [f64; 3], sat_xyz: [f64; 3]) -> f64 {
     let r = (gs_xyz[0] * gs_xyz[0] + gs_xyz[1] * gs_xyz[1] + gs_xyz[2] * gs_xyz[2]).sqrt();
     let ux = gs_xyz[0] / r;
     let uy = gs_xyz[1] / r;

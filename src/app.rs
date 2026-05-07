@@ -349,23 +349,78 @@ impl App {
 #[cfg(not(target_arch = "wasm32"))]
 impl App {
     fn publish_bridge_state(&mut self) {
+        use crate::bridge::VisibleSat;
+        const MIN_ELEVATION_DEG: f64 = 5.0;
+        const MAX_VISIBLE: usize = 32;
+
         let dt = 1.0_f64;
         for tab in &self.viewer.tabs {
             for planet in &tab.planets {
                 let body = planet.celestial_body;
+                let planet_radius = body.radius_km();
                 for cons in &planet.constellations {
                     let Some(cfs) = cons.cfs.as_ref() else { continue };
                     let Ok(mut cfs) = cfs.lock() else { continue };
                     let wc = cons.constellation(
-                        body.radius_km(),
+                        planet_radius,
                         body.mu(),
                         body.j2(),
                         body.equatorial_radius_km(),
                     );
-                    let sats = wc.satellite_positions(tab.settings.time);
-                    let sats_next = wc.satellite_positions(tab.settings.time + dt);
+                    let sim_time = tab.settings.time;
+                    let sats = wc.satellite_positions(sim_time);
+                    let sats_next = wc.satellite_positions(sim_time + dt);
                     cfs.server_mut()
-                        .publish_tick(tab.settings.time, &sats, &sats_next, dt);
+                        .publish_tick(sim_time, &sats, &sats_next, dt);
+                    let _events = cfs.drain_events();
+
+                    if !cfs.launched_stations.is_empty() {
+                        let sim_dt =
+                            self.viewer.start_timestamp
+                                + chrono::Duration::milliseconds((sim_time * 1000.0) as i64);
+                        let gmst = greenwich_mean_sidereal_time(sim_dt);
+                        let body_rot = body_rotation_angle(body, sim_time, gmst);
+                        let sats_per_plane = cons.sats_per_plane;
+                        let stations = cfs.launched_stations.clone();
+                        for station in &stations {
+                            let gs_xyz = crate::pass::gs_eci_position(
+                                station.lat_deg,
+                                station.lon_deg,
+                                planet_radius,
+                                body_rot,
+                            );
+                            let mut visible: Vec<(f64, VisibleSat)> = Vec::new();
+                            for s in sats.iter() {
+                                let elev = crate::pass::elevation_from_ground(
+                                    gs_xyz,
+                                    [s.x, s.y, s.z],
+                                );
+                                if elev >= MIN_ELEVATION_DEG {
+                                    visible.push((
+                                        elev,
+                                        VisibleSat {
+                                            orb: s.plane as u8,
+                                            sat: s.sat_index as u8,
+                                        },
+                                    ));
+                                }
+                            }
+                            visible.sort_by(|a, b| {
+                                b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                            let visible_list: Vec<VisibleSat> = visible
+                                .into_iter()
+                                .take(MAX_VISIBLE)
+                                .map(|(_, v)| v)
+                                .collect();
+                            let _ = sats_per_plane;
+                            cfs.server_mut().publish_ground_tick(
+                                station.station_id as u32,
+                                sim_time,
+                                &visible_list,
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -2227,6 +2282,7 @@ impl eframe::App for App {
             for planet in tab.planets.iter_mut() {
                 for cons in planet.constellations.iter_mut() {
                     crate::cfs::render_cfs_log_window(ctx, cons);
+                    crate::cfs::render_cfs_send_window(ctx, cons);
                 }
             }
         }

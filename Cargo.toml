@@ -12,6 +12,7 @@ eframe = { version = "0.33", default-features = false, features = [
 egui = "0.33"
 egui-wgpu = "0.33"
 egui_dock = "0.18"
+egui_extras = { version = "0.33", default-features = false }
 egui_plot = "0.34"
 nalgebra = "0.33"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
@@ -33,7 +34,9 @@ eframe = { version = "0.33", default-features = false, features = [
     "persistence",
 ] }
 ureq = "2.9"
+ctrlc = "3.4"
 leodos-lib42 = { path = "../LeoDOS/crates/leodos-lib42" }
+leodos-bridge = { path = "../LeoDOS/crates/leodos-bridge" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 eframe = { version = "0.33", default-features = false, features = [
@@ -56,6 +59,7 @@ egui = { git = "https://github.com/segeljakt/egui.git", branch = "fix/feathering
 egui-winit = { git = "https://github.com/segeljakt/egui.git", branch = "fix/feathering-sharp-corners" }
 egui-wgpu = { git = "https://github.com/segeljakt/egui.git", branch = "fix/feathering-sharp-corners" }
 eframe = { git = "https://github.com/segeljakt/egui.git", branch = "fix/feathering-sharp-corners" }
+egui_extras = { git = "https://github.com/segeljakt/egui.git", branch = "fix/feathering-sharp-corners" }
 
 [profile.release]
 opt-level = 2

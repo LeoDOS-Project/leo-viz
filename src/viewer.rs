@@ -665,7 +665,12 @@ impl ViewerState {
                                 cm_lat, cm_lon,
                             ));
                             ui.separator();
-                            let add_gs = ui.button("Add Ground Station").on_hover_text("Place a ground station at this location").clicked();
+                            let gs_locked = self.tabs[tab_idx].planets.get(cm_planet_idx)
+                                .map(|p| p.has_running_cfs()).unwrap_or(false);
+                            let add_gs = ui.add_enabled(!gs_locked,
+                                egui::Button::new("Add Ground Station"))
+                                .on_hover_text(if gs_locked { "Locked: cFS is running" } else { "Place a ground station at this location" })
+                                .clicked();
                             let add_aoi = ui.button("Add Area of Interest").on_hover_text("Define an area of interest at this location").clicked();
                             (add_gs, add_aoi)
                         }).inner
@@ -1084,6 +1089,7 @@ impl ViewerState {
 
             let pass_cache_for_ui = pass_cache.clone();
             let mut fast_forward_to: Option<(f64, f64, f64)> = None;
+            let gs_locked = planet.has_running_cfs();
 
             egui::Window::new(format!("Ground - {}", planet_name))
                 .open(&mut self.tabs[tab_idx].planets[planet_idx].show_gs_aoi_window)
@@ -1097,22 +1103,25 @@ impl ViewerState {
                         let mut gs_pass_clicked: Option<usize> = None;
                         for (idx, gs) in ground_stations.iter_mut().enumerate() {
                             left.horizontal(|ui| {
-                                if ui.add_sized([70.0, 18.0], egui::TextEdit::singleline(&mut gs.name)).changed() {
+                                if ui.add_enabled(!gs_locked, egui::TextEdit::singleline(&mut gs.name).desired_width(70.0)).changed() {
                                     gs_changed = true;
                                 }
                                 ui.label("Lat:");
-                                if ui.add(egui::DragValue::new(&mut gs.lat).range(-90.0..=90.0).speed(0.5).suffix("°")).changed() {
+                                if ui.add_enabled(!gs_locked, egui::DragValue::new(&mut gs.lat).range(-90.0..=90.0).speed(0.5).suffix("°")).changed() {
                                     gs_changed = true;
                                 }
                                 ui.label("Lon:");
-                                if ui.add(egui::DragValue::new(&mut gs.lon).range(-180.0..=180.0).speed(0.5).suffix("°")).changed() {
+                                if ui.add_enabled(!gs_locked, egui::DragValue::new(&mut gs.lon).range(-180.0..=180.0).speed(0.5).suffix("°")).changed() {
                                     gs_changed = true;
                                 }
                                 ui.label("R:");
                                 if ui.add(egui::DragValue::new(&mut gs.radius_km).range(1.0..=5000.0).speed(10.0).suffix(" km")).changed() {
                                     gs_changed = true;
                                 }
-                                if ui.small_button("×").clicked() {
+                                if ui.add_enabled(!gs_locked, egui::Button::new("×").small())
+                                    .on_hover_text(if gs_locked { "Locked: cFS is running" } else { "Delete" })
+                                    .clicked()
+                                {
                                     gs_to_remove = Some(idx);
                                 }
                                 if ui.checkbox(&mut gs.selected, "Track").on_hover_text("Show satellite passes over this station").changed() {
@@ -1948,7 +1957,19 @@ impl ViewerState {
                             }
                         }
                         #[cfg(not(target_arch = "wasm32"))]
-                        crate::cfs::render_cfs_button(ui, cons);
+                        {
+                            let snaps: Vec<crate::cfs::GroundStationSnapshot> = planet
+                                .ground_stations
+                                .iter()
+                                .enumerate()
+                                .map(|(i, gs)| crate::cfs::GroundStationSnapshot {
+                                    station_id: i as u8,
+                                    lat_deg: gs.lat,
+                                    lon_deg: gs.lon,
+                                })
+                                .collect();
+                            crate::cfs::render_cfs_button(ui, cons, &snaps);
+                        }
                     });
 
                     ui.horizontal_top(|ui| {
@@ -3566,6 +3587,28 @@ impl ViewerState {
                         } else {
                             Vec::new()
                         };
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let flash_intensities: Vec<std::collections::HashMap<u32, f32>> =
+                            constellations_data
+                                .iter()
+                                .map(|(_, _, _, _, orig_idx, _)| {
+                                    if *orig_idx == usize::MAX {
+                                        std::collections::HashMap::new()
+                                    } else {
+                                        crate::cfs::flash_intensities(
+                                            &planet.constellations[*orig_idx],
+                                            800,
+                                        )
+                                    }
+                                })
+                                .collect();
+                        #[cfg(target_arch = "wasm32")]
+                        let flash_intensities: Vec<std::collections::HashMap<u32, f32>> =
+                            constellations_data
+                                .iter()
+                                .map(|_| std::collections::HashMap::new())
+                                .collect();
+                        let gs_locked_for_draw = planet.has_running_cfs();
                         let (rot, new_zoom) = draw_3d_view(
                             ui,
                             &view_name,
@@ -3592,6 +3635,7 @@ impl ViewerState {
                             sun_dir,
                             time,
                             &mut planet.ground_stations,
+                            gs_locked_for_draw,
                             &mut planet.areas_of_interest,
                             device_layers_ref,
                             body_rot_angle,
@@ -3621,6 +3665,7 @@ impl ViewerState {
                             &physics_colors,
                             &physics_info,
                             &ground_tracks_vec,
+                            &flash_intensities,
                         );
                         {
                             // Strip the sun-fix rotation before saving so it

@@ -260,6 +260,20 @@ pub struct PlanetConfig {
 }
 
 impl PlanetConfig {
+    /// Returns `true` if any constellation on this planet has a live
+    /// cFS instance. Ground stations are immutable while any cFS is
+    /// running because each launched router holds a frozen copy of
+    /// the table; mutations would diverge from what the router sees.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn has_running_cfs(&self) -> bool {
+        self.constellations.iter().any(|c| c.cfs.is_some())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn has_running_cfs(&self) -> bool {
+        false
+    }
+
     pub fn new(name: String) -> Self {
         let mut tle_selections = HashMap::new();
         for preset in TlePreset::ALL {
