@@ -339,7 +339,18 @@ impl TabViewer for ViewerState {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         if *tab < self.tabs.len() {
-            if self.prev_active_tab_idx != *tab && self.prev_active_tab_idx < self.tabs.len() {
+            // Slide tabs are non-disruptive: switching to/from them must not
+            // reset the simulation state on the other side.
+            let prev_is_slides = self
+                .tabs
+                .get(self.prev_active_tab_idx)
+                .map_or(false, |t| t.slides.is_some());
+            let curr_is_slides = self.tabs[*tab].slides.is_some();
+            let crossing_slide_boundary = prev_is_slides || curr_is_slides;
+            if self.prev_active_tab_idx != *tab
+                && self.prev_active_tab_idx < self.tabs.len()
+                && !crossing_slide_boundary
+            {
                 // Full reset on tab switch so each demo opens in its designed
                 // initial state, regardless of whatever state the previous tab
                 // accumulated.

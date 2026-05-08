@@ -12,24 +12,35 @@ pub struct DeckId(pub &'static str);
 #[derive(Clone)]
 pub struct SlideDeck {
     pub id: DeckId,
+    /// Half-open absolute slide indices into the source deck (0-based).
+    pub range: std::ops::Range<usize>,
+    /// Current slide, relative to `range.start` (0..self.len()).
     pub current: usize,
 }
 
 impl SlideDeck {
     pub fn new(id: DeckId) -> Self {
-        Self { id, current: 0 }
+        let total = deck(id).expect("unknown slide deck id").len();
+        Self { id, range: 0..total, current: 0 }
     }
 
-    pub fn slides(&self) -> &'static [&'static [u8]] {
-        deck(self.id).expect("unknown slide deck id")
+    /// Show only `range` of the source deck (0-based, half-open). Out-of-bounds
+    /// endpoints are clamped to the deck size.
+    #[allow(dead_code)]
+    pub fn range(id: DeckId, range: std::ops::Range<usize>) -> Self {
+        let total = deck(id).expect("unknown slide deck id").len();
+        let start = range.start.min(total);
+        let end = range.end.min(total).max(start);
+        Self { id, range: start..end, current: 0 }
     }
 
     pub fn len(&self) -> usize {
-        self.slides().len()
+        self.range.len()
     }
 
     pub fn uri(&self, idx: usize) -> String {
-        format!("bytes://slides/{}/{:02}.svg", self.id.0, idx)
+        let absolute = self.range.start + idx;
+        format!("bytes://slides/{}/{:02}.svg", self.id.0, absolute)
     }
 }
 
