@@ -451,10 +451,14 @@ impl eframe::App for App {
         let active_tab_idx = v.active_tab_idx;
 
         let tex_res = v.texture_resolution;
+        // Collect from ALL tabs, not just the active one — otherwise switching
+        // to a tab without planets (e.g. a slide tab) evicts every planet
+        // texture from CPU and GPU caches, causing a ~1s reload spike when
+        // switching back to a simulation tab.
         let bodies_needed: Vec<(CelestialBody, Skin, TextureResolution)> = {
             let mut seen = std::collections::HashSet::new();
-            v.tabs.get(active_tab_idx)
-                .into_iter()
+            v.tabs
+                .iter()
                 .flat_map(|tab| tab.planets.iter().map(|p| (p.celestial_body, p.skin, tex_res)))
                 .filter(|key| seen.insert(*key))
                 .collect()
