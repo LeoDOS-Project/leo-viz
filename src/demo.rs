@@ -1092,7 +1092,7 @@ fn iss_demo(v: &mut ViewerState) {
     v.tabs.push(tab);
 }
 
-fn spacecomp_demo(v: &mut ViewerState) {
+pub(crate) fn spacecomp_demo(v: &mut ViewerState) {
     v.tab_counter += 1;
     let mut tab = TabConfig::new_empty("SpaceCoMP".to_string());
     tab.title = "SpaceCoMP".to_string();
@@ -1149,8 +1149,84 @@ fn spacecomp_demo(v: &mut ViewerState) {
     v.tabs.push(tab);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Presentation {
+    SpaceCoMP,
+}
+
+impl Presentation {
+    pub(crate) const ALL: &'static [Presentation] = &[Presentation::SpaceCoMP];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Presentation::SpaceCoMP => "SpaceCoMP",
+        }
+    }
+
+    fn build(self, v: &mut ViewerState) {
+        match self {
+            Presentation::SpaceCoMP => {
+                spacecomp_slides_tab(v, crate::slides::SPACECOMP_PRIMER, "SpaceCoMP — Primer");
+                spacecomp_demo(v);
+            }
+        }
+    }
+}
+
+fn spacecomp_slides_tab(v: &mut ViewerState, deck_id: crate::slides::DeckId, name: &str) {
+    v.tab_counter += 1;
+    let mut tab = TabConfig::new_empty(name.to_string());
+    tab.title = String::new();
+    tab.slides = Some(crate::slides::SlideDeck::new(deck_id));
+    v.tabs.push(tab);
+}
+
 impl App {
     pub(crate) fn setup_demo(&mut self) {
+        self.setup_tabs(|v| {
+            // Orbit fundamentals
+            inclination_demo(v);
+            altitude_demo(v);
+            eccentricity_demo(v);
+            ground_track_demo(v);
+            // Planet shape & propagation
+            oblateness_demo(v);
+            propagator_demo(v);
+            // Constellation design
+            walker_demo(v);
+            phasing_demo(v);
+            kessler_demo(v);
+            debris_demo(v);
+            coverage_demo(v);
+            // Networking
+            isl_demo(v);
+            torus_demo(v);
+            routing_demo(v);
+            spacecomp_demo(v);
+            // Hazards
+            radiation_demo(v);
+            // Real constellations
+            sso_demo(v);
+            starlink_iris_demo(v);
+            starlink_tle_demo(v);
+            all_tle_demo(v);
+            all_tle_map_demo(v);
+            #[cfg(not(target_arch = "wasm32"))]
+            countries_demo(v);
+            projections_demo(v);
+            iss_demo(v);
+            // Context & scale
+            solar_system_demo(v);
+            #[cfg(not(target_arch = "wasm32"))]
+            planet_sizes_demo(v);
+        });
+    }
+
+    pub(crate) fn setup_presentation(&mut self, presentation: Presentation) {
+        self.setup_tabs(|v| presentation.build(v));
+    }
+
+    fn setup_tabs<F: FnOnce(&mut ViewerState)>(&mut self, build: F) {
         let v = &mut self.viewer;
 
         let mut tle_cache: std::collections::HashMap<TlePreset, Vec<crate::tle::TleSatellite>> =
@@ -1170,41 +1246,7 @@ impl App {
         v.tabs.clear();
         v.tab_counter = 0;
 
-        // Orbit fundamentals
-        inclination_demo(v);
-        altitude_demo(v);
-        eccentricity_demo(v);
-        ground_track_demo(v);
-        // Planet shape & propagation
-        oblateness_demo(v);
-        propagator_demo(v);
-        // Constellation design
-        walker_demo(v);
-        phasing_demo(v);
-        kessler_demo(v);
-        debris_demo(v);
-        coverage_demo(v);
-        // Networking
-        isl_demo(v);
-        torus_demo(v);
-        routing_demo(v);
-        spacecomp_demo(v);
-        // Hazards
-        radiation_demo(v);
-        // Real constellations
-        sso_demo(v);
-        starlink_iris_demo(v);
-        starlink_tle_demo(v);
-        all_tle_demo(v);
-        all_tle_map_demo(v);
-        #[cfg(not(target_arch = "wasm32"))]
-        countries_demo(v);
-        projections_demo(v);
-        iss_demo(v);
-        // Context & scale
-        solar_system_demo(v);
-        #[cfg(not(target_arch = "wasm32"))]
-        planet_sizes_demo(v);
+        build(v);
 
         for tab in &mut v.tabs {
             if tab.settings.auto_rotate {

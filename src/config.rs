@@ -587,6 +587,7 @@ pub struct TabConfig {
     pub show_sat_list: bool,
     pub show_fps: bool,
     pub settings: TabSettings,
+    pub slides: Option<crate::slides::SlideDeck>,
 }
 
 /// Build an egui `LayoutJob` from text with `**bold**` markdown inline spans.
@@ -681,6 +682,7 @@ impl TabConfig {
             show_sat_list: false,
             show_fps: false,
             settings: TabSettings::default(),
+            slides: None,
         }
     }
 

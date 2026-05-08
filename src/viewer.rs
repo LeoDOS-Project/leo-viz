@@ -442,6 +442,11 @@ impl ViewerState {
         }
         self.last_frame_instant = Some(now);
 
+        if self.tabs[tab_idx].slides.is_some() {
+            self.render_slides_ui(ui, tab_idx);
+            return;
+        }
+
         if self.tabs[tab_idx].show_fps {
             let fps_text = format!("{:.0} FPS", self.fps_smooth);
             let rect = ui.available_rect_before_wrap();
@@ -878,6 +883,92 @@ impl ViewerState {
                     self.editing_place = None;
                 }
             }
+        }
+    }
+
+    fn render_slides_ui(&mut self, ui: &mut egui::Ui, tab_idx: usize) {
+        let Some(deck) = self.tabs[tab_idx].slides.as_ref() else { return; };
+        let total = deck.len();
+        if total == 0 {
+            return;
+        }
+        let current = deck.current.min(total - 1);
+        let uri = deck.uri(current);
+
+        let input = ui.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::PageUp),
+                i.key_pressed(egui::Key::ArrowRight)
+                    || i.key_pressed(egui::Key::PageDown)
+                    || i.key_pressed(egui::Key::Space),
+                i.key_pressed(egui::Key::Home),
+                i.key_pressed(egui::Key::End),
+            )
+        });
+        let mut next_current = current;
+        if input.0 && current > 0 {
+            next_current = current - 1;
+        }
+        if input.1 && current + 1 < total {
+            next_current = current + 1;
+        }
+        if input.2 {
+            next_current = 0;
+        }
+        if input.3 {
+            next_current = total - 1;
+        }
+
+        let avail = ui.available_rect_before_wrap();
+        let bar_height = 32.0;
+        let slide_rect = egui::Rect::from_min_size(
+            avail.min,
+            egui::vec2(avail.width(), (avail.height() - bar_height).max(0.0)),
+        );
+        let bar_rect = egui::Rect::from_min_size(
+            egui::pos2(avail.min.x, slide_rect.max.y),
+            egui::vec2(avail.width(), bar_height),
+        );
+
+        ui.painter().rect_filled(slide_rect, 0.0, egui::Color32::BLACK);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(slide_rect), |ui| {
+            ui.centered_and_justified(|ui| {
+                ui.add(
+                    egui::Image::new(uri.as_str())
+                        .maintain_aspect_ratio(true)
+                        .fit_to_exact_size(slide_rect.size()),
+                );
+            });
+        });
+
+        ui.scope_builder(egui::UiBuilder::new().max_rect(bar_rect), |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.add_space(8.0);
+                if ui.add_enabled(current > 0, egui::Button::new("◀ Prev")).clicked() {
+                    next_current = current.saturating_sub(1);
+                }
+                if ui
+                    .add_enabled(current + 1 < total, egui::Button::new("Next ▶"))
+                    .clicked()
+                {
+                    next_current = (current + 1).min(total - 1);
+                }
+                ui.label(format!("{} / {}", current + 1, total));
+                let mut slider_val = current + 1;
+                if ui
+                    .add(egui::Slider::new(&mut slider_val, 1..=total).show_value(false))
+                    .changed()
+                {
+                    next_current = slider_val.saturating_sub(1);
+                }
+            });
+        });
+
+        if next_current != current {
+            if let Some(deck_mut) = self.tabs[tab_idx].slides.as_mut() {
+                deck_mut.current = next_current;
+            }
+            ui.ctx().request_repaint();
         }
     }
 

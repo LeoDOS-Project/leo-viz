@@ -73,6 +73,7 @@ pub(crate) struct App {
 
 impl App {
     pub(crate) fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        crate::slides::install(&cc.egui_ctx);
         let render_state = cc.wgpu_render_state.clone();
 
         if let Some(ref rs) = render_state {
@@ -1949,6 +1950,7 @@ impl eframe::App for App {
                             let mut demo_requested = false;
                             let mut remove_tab: Option<usize> = None;
                             let mut add_tab = false;
+                            let mut presentation_requested: Option<crate::demo::Presentation> = None;
                             egui::popup_below_widget(ui, popup_id, &button, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
                                 ui.set_min_width(200.0);
                                 for (pos, &(surface, node, tab_idx)) in tab_data.iter().enumerate() {
@@ -1981,6 +1983,14 @@ impl eframe::App for App {
                                 if ui.button("Load Demo").clicked() {
                                     demo_requested = true;
                                 }
+                                ui.menu_button("Load Presentation", |ui| {
+                                    for presentation in crate::demo::Presentation::ALL {
+                                        if ui.button(presentation.label()).clicked() {
+                                            presentation_requested = Some(*presentation);
+                                            ui.close_menu();
+                                        }
+                                    }
+                                });
                             });
                             if let Some((surface, node, pos, tab_idx)) = selected {
                                 self.dock_state.set_active_tab((surface, node, egui_dock::TabIndex(pos)));
@@ -2029,6 +2039,9 @@ impl eframe::App for App {
                             }
                             if demo_requested {
                                 self.setup_demo();
+                            }
+                            if let Some(presentation) = presentation_requested {
+                                self.setup_presentation(presentation);
                             }
                         }
                         let play_label = if self.viewer.auto_cycle_tabs { "⏸" } else { "▶" };

@@ -24,6 +24,7 @@ mod igrf;
 mod projection;
 mod spacecomp;
 mod aep8;
+mod slides;
 mod solar_system;
 mod bridge;
 #[cfg(not(target_arch = "wasm32"))]
