@@ -4534,12 +4534,17 @@ pub fn draw_torus(
         .show_grid(false)
         .show_x(false)
         .show_y(false)
-        .show_background(false)
+        .show_background(!ui.visuals().dark_mode)
         .allow_drag(false)
         .allow_zoom(false)
         .allow_scroll(false)
         .allow_boxed_zoom(false)
         .cursor_color(egui::Color32::TRANSPARENT);
+
+    let old_plot_bg_stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+    if !ui.visuals().dark_mode {
+        ui.visuals_mut().widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
+    }
 
     let response = plot.show(ui, |plot_ui| {
         plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
@@ -4815,6 +4820,10 @@ pub fn draw_torus(
             }
         }
     });
+
+    if !ui.visuals().dark_mode {
+        ui.visuals_mut().widgets.noninteractive.bg_stroke = old_plot_bg_stroke;
+    }
 
     if response.response.dragged() && !response.response.drag_started() {
         let drag = response.response.drag_delta();
