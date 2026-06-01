@@ -47,7 +47,11 @@ pub struct TileNode {
 
 impl TileNode {
     pub fn new() -> Self {
-        TileNode { tile: None, children: [None, None, None, None], last_used: 0 }
+        TileNode {
+            tile: None,
+            children: [None, None, None, None],
+            last_used: 0,
+        }
     }
 
     pub fn is_leaf(&self) -> bool {
@@ -64,7 +68,12 @@ pub struct TileQuadTree {
 
 impl TileQuadTree {
     pub fn new(max_tiles: usize) -> Self {
-        TileQuadTree { root: TileNode::new(), tile_count: 0, max_tiles, access_counter: 0 }
+        TileQuadTree {
+            root: TileNode::new(),
+            tile_count: 0,
+            max_tiles,
+            access_counter: 0,
+        }
     }
 
     pub fn child_index(x: u32, y: u32, z: u8, depth: u8) -> usize {
@@ -212,7 +221,10 @@ pub fn lon_lat_to_tile(lon: f64, lat: f64, z: u8) -> TileCoord {
 pub fn tile_to_lon_lat(t: &TileCoord) -> (f64, f64) {
     let n = (1u32 << t.z) as f64;
     let lon = t.x as f64 / n * 360.0 - 180.0;
-    let lat = (PI * (1.0 - 2.0 * t.y as f64 / n)).sinh().atan().to_degrees();
+    let lat = (PI * (1.0 - 2.0 * t.y as f64 / n))
+        .sinh()
+        .atan()
+        .to_degrees();
     (lon, lat)
 }
 

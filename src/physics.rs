@@ -118,8 +118,8 @@ pub(crate) fn update_power(
 ) {
     let can_charge = config.power_device_type == PowerDeviceType::Rtg || !eclipsed;
     if can_charge {
-        state.battery_ws = (state.battery_ws + config.charging_rate_w * dt)
-            .min(config.max_battery_ws);
+        state.battery_ws =
+            (state.battery_ws + config.charging_rate_w * dt).min(config.max_battery_ws);
     }
     state.battery_ws = (state.battery_ws - config.idle_power_w * dt).max(0.0);
 }
@@ -134,10 +134,8 @@ pub(crate) fn update_thermal(
 ) {
     let eclipse_f = if eclipsed { 0.0 } else { 1.0 };
 
-    let q_solar = config.sun_absorptance
-        * config.sun_facing_area
-        * DEFAULT_SOLAR_IRRADIANCE
-        * eclipse_f;
+    let q_solar =
+        config.sun_absorptance * config.sun_facing_area * DEFAULT_SOLAR_IRRADIANCE * eclipse_f;
 
     let q_albedo = config.sun_absorptance
         * config.body_facing_area
@@ -174,7 +172,9 @@ pub(crate) fn update_thermal(
 }
 
 fn pseudo_random(seed: u64) -> f64 {
-    let x = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    let x = seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     let x = ((x >> 33) ^ x).wrapping_mul(0xff51afd7ed558ccd);
     let x = ((x >> 33) ^ x).wrapping_mul(0xc4ceb9fe1a85ec53);
     let x = (x >> 33) ^ x;
@@ -230,11 +230,7 @@ pub(crate) fn battery_color(soc: f64) -> eframe::egui::Color32 {
     let soc = soc.clamp(0.0, 1.0);
     let r = ((1.0 - soc) * 2.0).min(1.0);
     let g = (soc * 2.0).min(1.0);
-    eframe::egui::Color32::from_rgb(
-        (r * 255.0) as u8,
-        (g * 255.0) as u8,
-        0,
-    )
+    eframe::egui::Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, 0)
 }
 
 pub(crate) fn temperature_color(temp_k: f64) -> eframe::egui::Color32 {
@@ -243,18 +239,10 @@ pub(crate) fn temperature_color(temp_k: f64) -> eframe::egui::Color32 {
     let t = ((temp_k - cold) / (hot - cold)).clamp(0.0, 1.0);
     if t < 0.5 {
         let f = t * 2.0;
-        eframe::egui::Color32::from_rgb(
-            (f * 255.0) as u8,
-            (f * 255.0) as u8,
-            255,
-        )
+        eframe::egui::Color32::from_rgb((f * 255.0) as u8, (f * 255.0) as u8, 255)
     } else {
         let f = (t - 0.5) * 2.0;
-        eframe::egui::Color32::from_rgb(
-            255,
-            ((1.0 - f) * 255.0) as u8,
-            ((1.0 - f) * 255.0) as u8,
-        )
+        eframe::egui::Color32::from_rgb(255, ((1.0 - f) * 255.0) as u8, ((1.0 - f) * 255.0) as u8)
     }
 }
 

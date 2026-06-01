@@ -29,8 +29,12 @@ impl Projection for Equirectangular {
             None
         }
     }
-    fn x_range(&self) -> (f64, f64) { (-180.0, 180.0) }
-    fn y_range(&self) -> (f64, f64) { (-90.0, 90.0) }
+    fn x_range(&self) -> (f64, f64) {
+        (-180.0, 180.0)
+    }
+    fn y_range(&self) -> (f64, f64) {
+        (-90.0, 90.0)
+    }
 }
 
 const MERCATOR_MAX_LAT: f64 = 85.0;
@@ -51,9 +55,14 @@ impl Projection for Mercator {
             Some((lat_deg, x))
         }
     }
-    fn x_range(&self) -> (f64, f64) { (-180.0, 180.0) }
+    fn x_range(&self) -> (f64, f64) {
+        (-180.0, 180.0)
+    }
     fn y_range(&self) -> (f64, f64) {
-        let y_max = (PI / 4.0 + MERCATOR_MAX_LAT.to_radians() / 2.0).tan().ln().to_degrees();
+        let y_max = (PI / 4.0 + MERCATOR_MAX_LAT.to_radians() / 2.0)
+            .tan()
+            .ln()
+            .to_degrees();
         (-y_max, y_max)
     }
 }
@@ -68,10 +77,14 @@ impl Projection for Mollweide {
         for _ in 0..20 {
             let f = 2.0 * theta + (2.0 * theta).sin() - target;
             let df = 2.0 + 2.0 * (2.0 * theta).cos();
-            if df.abs() < 1e-15 { break; }
+            if df.abs() < 1e-15 {
+                break;
+            }
             let delta = f / df;
             theta -= delta;
-            if delta.abs() < 1e-12 { break; }
+            if delta.abs() < 1e-12 {
+                break;
+            }
         }
         let lon_rad = lon_deg.to_radians();
         let x = (2.0 * 2.0_f64.sqrt() / PI) * lon_rad * theta.cos();
@@ -82,14 +95,22 @@ impl Projection for Mollweide {
         let xn = x / MOLLWEIDE_SCALE;
         let yn = y / MOLLWEIDE_SCALE;
         let sin_theta = yn / 2.0_f64.sqrt();
-        if sin_theta.abs() > 1.0 { return None; }
+        if sin_theta.abs() > 1.0 {
+            return None;
+        }
         let theta = sin_theta.asin();
         let cos_theta = theta.cos();
-        if cos_theta.abs() < 1e-10 { return None; }
+        if cos_theta.abs() < 1e-10 {
+            return None;
+        }
         let lon_rad = PI * xn / (2.0 * 2.0_f64.sqrt() * cos_theta);
-        if lon_rad.abs() > PI { return None; }
+        if lon_rad.abs() > PI {
+            return None;
+        }
         let sin_lat = (2.0 * theta + (2.0 * theta).sin()) / PI;
-        if sin_lat.abs() > 1.0 { return None; }
+        if sin_lat.abs() > 1.0 {
+            return None;
+        }
         let lat_rad = sin_lat.asin();
         Some((lat_rad.to_degrees(), lon_rad.to_degrees()))
     }
@@ -112,19 +133,32 @@ impl Projection for Sinusoidal {
         let lon_rad = lon_deg.to_radians();
         let x = lon_rad * lat_rad.cos();
         let y = lat_rad;
-        Some((x / PI * SINUSOIDAL_SCALE_X, y / (PI / 2.0) * SINUSOIDAL_SCALE_Y))
+        Some((
+            x / PI * SINUSOIDAL_SCALE_X,
+            y / (PI / 2.0) * SINUSOIDAL_SCALE_Y,
+        ))
     }
     fn inverse(&self, x: f64, y: f64) -> Option<(f64, f64)> {
         let lat_rad = y / SINUSOIDAL_SCALE_Y * (PI / 2.0);
-        if lat_rad.abs() > PI / 2.0 { return None; }
+        if lat_rad.abs() > PI / 2.0 {
+            return None;
+        }
         let cos_lat = lat_rad.cos();
-        if cos_lat.abs() < 1e-10 { return None; }
+        if cos_lat.abs() < 1e-10 {
+            return None;
+        }
         let lon_rad = x / SINUSOIDAL_SCALE_X * PI / cos_lat;
-        if lon_rad.abs() > PI { return None; }
+        if lon_rad.abs() > PI {
+            return None;
+        }
         Some((lat_rad.to_degrees(), lon_rad.to_degrees()))
     }
-    fn x_range(&self) -> (f64, f64) { (-SINUSOIDAL_SCALE_X, SINUSOIDAL_SCALE_X) }
-    fn y_range(&self) -> (f64, f64) { (-SINUSOIDAL_SCALE_Y, SINUSOIDAL_SCALE_Y) }
+    fn x_range(&self) -> (f64, f64) {
+        (-SINUSOIDAL_SCALE_X, SINUSOIDAL_SCALE_X)
+    }
+    fn y_range(&self) -> (f64, f64) {
+        (-SINUSOIDAL_SCALE_Y, SINUSOIDAL_SCALE_Y)
+    }
 }
 
 const AE_SCALE: f64 = 180.0;
@@ -142,13 +176,19 @@ impl Projection for AzimuthalEquidistant {
         let xn = x / AE_SCALE * PI;
         let yn = y / AE_SCALE * PI;
         let c = (xn * xn + yn * yn).sqrt();
-        if c > PI { return None; }
+        if c > PI {
+            return None;
+        }
         let lat_rad = (PI / 2.0) - c;
         let lon_rad = xn.atan2(-yn);
         Some((lat_rad.to_degrees(), lon_rad.to_degrees()))
     }
-    fn x_range(&self) -> (f64, f64) { (-AE_SCALE, AE_SCALE) }
-    fn y_range(&self) -> (f64, f64) { (-AE_SCALE, AE_SCALE) }
+    fn x_range(&self) -> (f64, f64) {
+        (-AE_SCALE, AE_SCALE)
+    }
+    fn y_range(&self) -> (f64, f64) {
+        (-AE_SCALE, AE_SCALE)
+    }
 }
 
 const HAMMER_SCALE: f64 = 90.0;
@@ -166,13 +206,19 @@ impl Projection for Hammer {
         let xn = x / HAMMER_SCALE;
         let yn = y / HAMMER_SCALE;
         let z2 = 1.0 - (xn / 4.0).powi(2) - (yn / 2.0).powi(2);
-        if z2 < 0.0 { return None; }
+        if z2 < 0.0 {
+            return None;
+        }
         let z = z2.sqrt();
         let lon_rad = 2.0 * (z * xn).atan2(2.0 * (2.0 * z2 - 1.0));
         let sin_lat = z * yn;
-        if sin_lat.abs() > 1.0 { return None; }
+        if sin_lat.abs() > 1.0 {
+            return None;
+        }
         let lat_rad = sin_lat.asin();
-        if lon_rad.abs() > PI { return None; }
+        if lon_rad.abs() > PI {
+            return None;
+        }
         Some((lat_rad.to_degrees(), lon_rad.to_degrees()))
     }
     fn x_range(&self) -> (f64, f64) {
@@ -198,8 +244,12 @@ impl Projection for HEALPix {
             let step = PI / 2.0;
             let lam_c = ((lam - PI / 4.0) / step).round() * step + PI / 4.0;
             let mut dlam = lam - lam_c;
-            if dlam > PI { dlam -= 2.0 * PI; }
-            if dlam < -PI { dlam += 2.0 * PI; }
+            if dlam > PI {
+                dlam -= 2.0 * PI;
+            }
+            if dlam < -PI {
+                dlam += 2.0 * PI;
+            }
             let x = lam_c + dlam * sigma;
             let y = sign * PI / 4.0 * (2.0 - sigma);
             Some((x.to_degrees(), y.to_degrees()))
@@ -208,28 +258,49 @@ impl Projection for HEALPix {
     fn inverse(&self, x: f64, y: f64) -> Option<(f64, f64)> {
         let xr = x.to_radians();
         let yr = y.to_radians();
-        if yr.abs() > PI / 2.0 { return None; }
+        if yr.abs() > PI / 2.0 {
+            return None;
+        }
         if yr.abs() <= PI / 4.0 {
             let sin_phi = 8.0 * yr / (3.0 * PI);
-            if sin_phi.abs() > 1.0 { return None; }
-            if xr.abs() > PI { return None; }
+            if sin_phi.abs() > 1.0 {
+                return None;
+            }
+            if xr.abs() > PI {
+                return None;
+            }
             Some((sin_phi.asin().to_degrees(), xr.to_degrees()))
         } else {
             let sign = yr.signum();
             let sigma = 2.0 - 4.0 * yr.abs() / PI;
-            if sigma < 1e-10 { return Some((sign * 90.0, 0.0)); }
+            if sigma < 1e-10 {
+                return Some((sign * 90.0, 0.0));
+            }
             let step = PI / 2.0;
             let lam_c = ((xr - PI / 4.0) / step).round() * step + PI / 4.0;
             let lam = lam_c + (xr - lam_c) / sigma;
-            if (lam - lam_c).abs() > step / 2.0 + 0.001 { return None; }
-            if lam.abs() > PI + 0.001 { return None; }
+            if (lam - lam_c).abs() > step / 2.0 + 0.001 {
+                return None;
+            }
+            if lam.abs() > PI + 0.001 {
+                return None;
+            }
             let sin_phi = 1.0 - sigma * sigma / 3.0;
-            if sin_phi > 1.0 { return None; }
-            Some((sign * sin_phi.asin().to_degrees(), lam.to_degrees().clamp(-180.0, 180.0)))
+            if sin_phi > 1.0 {
+                return None;
+            }
+            Some((
+                sign * sin_phi.asin().to_degrees(),
+                lam.to_degrees().clamp(-180.0, 180.0),
+            ))
         }
     }
-    fn x_range(&self) -> (f64, f64) { (-180.0, 180.0) }
-    fn y_range(&self) -> (f64, f64) { (-90.0, 90.0) }
+    fn x_range(&self) -> (f64, f64) {
+        (-180.0, 180.0)
+    }
+    fn y_range(&self) -> (f64, f64) {
+        (-90.0, 90.0)
+    }
 }
 
 const CASSINI_SCALE: f64 = 180.0 / PI;
@@ -245,13 +316,19 @@ impl Projection for Cassini {
     fn inverse(&self, x: f64, y: f64) -> Option<(f64, f64)> {
         let xr = x / CASSINI_SCALE;
         let yr = y / CASSINI_SCALE;
-        if xr.abs() > PI / 2.0 { return None; }
+        if xr.abs() > PI / 2.0 {
+            return None;
+        }
         let lat = (yr.sin() * xr.cos()).asin();
         let lon = xr.tan().atan2(yr.cos());
         Some((lat.to_degrees(), lon.to_degrees()))
     }
-    fn x_range(&self) -> (f64, f64) { (-90.0, 90.0) }
-    fn y_range(&self) -> (f64, f64) { (-180.0, 180.0) }
+    fn x_range(&self) -> (f64, f64) {
+        (-90.0, 90.0)
+    }
+    fn y_range(&self) -> (f64, f64) {
+        (-180.0, 180.0)
+    }
 }
 
 const UTM_SCALE: f64 = 180.0 / PI;
@@ -263,7 +340,9 @@ impl Projection for TransverseMercator {
         let dlon = (lon_deg - cm).to_radians();
         let lat_r = lat_deg.to_radians();
         let b = lat_r.cos() * dlon.sin();
-        if b.abs() >= 0.9999 { return None; }
+        if b.abs() >= 0.9999 {
+            return None;
+        }
         let x_tm = b.atanh();
         let y_tm = lat_r.sin().atan2(lat_r.cos() * dlon.cos());
         Some((cm + x_tm * UTM_SCALE, y_tm * UTM_SCALE))
@@ -274,14 +353,22 @@ impl Projection for TransverseMercator {
         let xr = (x - cm) / UTM_SCALE;
         let yr = y / UTM_SCALE;
         let sin_lat = yr.sin() / xr.cosh();
-        if sin_lat.abs() > 1.0 { return None; }
+        if sin_lat.abs() > 1.0 {
+            return None;
+        }
         let lat = sin_lat.asin();
         let dlon = xr.sinh().atan2(yr.cos());
-        if dlon.abs() > (3.0_f64).to_radians() + 0.001 { return None; }
+        if dlon.abs() > (3.0_f64).to_radians() + 0.001 {
+            return None;
+        }
         Some((lat.to_degrees(), cm + dlon.to_degrees()))
     }
-    fn x_range(&self) -> (f64, f64) { (-180.0, 180.0) }
-    fn y_range(&self) -> (f64, f64) { (-90.0, 90.0) }
+    fn x_range(&self) -> (f64, f64) {
+        (-180.0, 180.0)
+    }
+    fn y_range(&self) -> (f64, f64) {
+        (-90.0, 90.0)
+    }
 }
 
 const LAEA_SCALE: f64 = 90.0;
@@ -293,7 +380,9 @@ impl Projection for LambertAzimuthalEqualArea {
         let phi = lat_deg.to_radians();
         let lam = lon_deg.to_radians();
         let denom = 1.0 + phi.cos() * lam.cos();
-        if denom < 1e-10 { return None; }
+        if denom < 1e-10 {
+            return None;
+        }
         let k = (2.0 / denom).sqrt();
         let x = k * phi.cos() * lam.sin();
         let y = k * phi.sin();
@@ -303,8 +392,12 @@ impl Projection for LambertAzimuthalEqualArea {
         let xn = x / LAEA_SCALE;
         let yn = y / LAEA_SCALE;
         let rho = (xn * xn + yn * yn).sqrt();
-        if rho > 2.0 { return None; }
-        if rho < 1e-10 { return Some((0.0, 0.0)); }
+        if rho > 2.0 {
+            return None;
+        }
+        if rho < 1e-10 {
+            return Some((0.0, 0.0));
+        }
         let c = 2.0 * (rho / 2.0).asin();
         let lat = (yn * c.sin() / rho).asin();
         let lon = (xn * c.sin()).atan2(rho * c.cos());
@@ -332,9 +425,13 @@ impl Projection for GallPeters {
     }
     fn inverse(&self, x: f64, y: f64) -> Option<(f64, f64)> {
         let lon_deg = x / GP_COS_STD;
-        if lon_deg.abs() > 180.0 { return None; }
+        if lon_deg.abs() > 180.0 {
+            return None;
+        }
         let sin_lat = y / GP_SCALE_Y * GP_COS_STD;
-        if sin_lat.abs() > 1.0 { return None; }
+        if sin_lat.abs() > 1.0 {
+            return None;
+        }
         Some((sin_lat.asin().to_degrees(), lon_deg))
     }
     fn x_range(&self) -> (f64, f64) {
@@ -350,7 +447,9 @@ pub(crate) struct PeirceQuincuncial;
 const PEIRCE_SCALE: f64 = 90.0;
 
 fn elliptic_f(phi: f64, m: f64) -> f64 {
-    if m.abs() < 1e-15 { return phi; }
+    if m.abs() < 1e-15 {
+        return phi;
+    }
     if (m - 1.0).abs() < 1e-15 {
         return (phi / 2.0 + PI / 4.0).tan().ln();
     }
@@ -363,7 +462,9 @@ fn elliptic_f(phi: f64, m: f64) -> f64 {
         let rem = phi % PI;
         if rem.abs() > 1e-14 {
             let mut d_phi = (b * phi.tan() / a).atan();
-            if d_phi < 0.0 { d_phi += PI; }
+            if d_phi < 0.0 {
+                d_phi += PI;
+            }
             phi += d_phi + (phi / PI).floor() as f64 * PI;
         } else {
             phi += phi;
@@ -384,20 +485,14 @@ fn elliptic_fi(phi: f64, psi: f64, m: f64) -> (f64, f64) {
     if r > 1e-14 {
         let csc_phi = 1.0 / r.sin();
         let cot_phi2 = 1.0 / (r.tan() * r.tan());
-        let b = -(cot_phi2
-            + m * (sinh_psi * sinh_psi * csc_phi * csc_phi)
-            - 1.0
-            + m);
+        let b = -(cot_phi2 + m * (sinh_psi * sinh_psi * csc_phi * csc_phi) - 1.0 + m);
         let c = (m - 1.0) * cot_phi2;
         let disc = (b * b - 4.0 * c).max(0.0);
         let cot_lambda2 = (-b + disc.sqrt()) / 2.0;
         (
-            elliptic_f((1.0 / cot_lambda2.sqrt()).atan(), m)
-                * phi.signum(),
+            elliptic_f((1.0 / cot_lambda2.sqrt()).atan(), m) * phi.signum(),
             elliptic_f(
-                ((cot_lambda2 / cot_phi2 - 1.0).max(0.0) / m)
-                    .sqrt()
-                    .atan(),
+                ((cot_lambda2 / cot_phi2 - 1.0).max(0.0) / m).sqrt().atan(),
                 1.0 - m,
             ) * psi.signum(),
         )
@@ -438,25 +533,25 @@ fn elliptic_j(u: f64, m: f64) -> (f64, f64, f64) {
         let t = c[i] * phi.sin() / a[i];
         phi = (t.clamp(-1.0, 1.0).asin() + phi) / 2.0;
         i -= 1;
-        if i == 0 { break; }
+        if i == 0 {
+            break;
+        }
     }
     let cn = phi.cos();
     let diff_cos = (phi - b_prev).cos();
-    let dn = if diff_cos.abs() > 1e-30 { cn / diff_cos } else { 1.0 };
+    let dn = if diff_cos.abs() > 1e-30 {
+        cn / diff_cos
+    } else {
+        1.0
+    };
     (phi.sin(), cn, dn)
 }
 
 #[allow(dead_code)]
-fn elliptic_ji(
-    u: f64, v: f64, m: f64,
-) -> ([f64; 2], [f64; 2], [f64; 2]) {
+fn elliptic_ji(u: f64, v: f64, m: f64) -> ([f64; 2], [f64; 2], [f64; 2]) {
     if u.abs() < 1e-15 {
         let (sn, cn, dn) = elliptic_j(v, 1.0 - m);
-        return (
-            [0.0, sn / cn],
-            [1.0 / cn, 0.0],
-            [dn / cn, 0.0],
-        );
+        return ([0.0, sn / cn], [1.0 / cn, 0.0], [dn / cn, 0.0]);
     }
     let (sn_a, cn_a, dn_a) = elliptic_j(u, m);
     if v.abs() < 1e-15 {
@@ -476,10 +571,8 @@ fn complex_atan(x: f64, y: f64) -> (f64, f64) {
     let y_1 = y + 1.0;
     let t = 1.0 - x2 - y * y;
     (
-        0.5 * ((if x >= 0.0 { PI / 2.0 } else { -PI / 2.0 })
-            - t.atan2(2.0 * x)),
-        -0.25 * (t * t + 4.0 * x2).ln()
-            + 0.5 * (y_1 * y_1 + x2).ln(),
+        0.5 * ((if x >= 0.0 { PI / 2.0 } else { -PI / 2.0 }) - t.atan2(2.0 * x)),
+        -0.25 * (t * t + 4.0 * x2).ln() + 0.5 * (y_1 * y_1 + x2).ln(),
     )
 }
 
@@ -507,7 +600,10 @@ pub(crate) fn peirce_const() -> &'static PeirceConst {
         let dx = g_pos.0 - g_neg.0;
         let scale = PEIRCE_SCALE / (big_k * sqrt1_2);
         PeirceConst {
-            m, k_, big_k, dx,
+            m,
+            k_,
+            big_k,
+            dx,
             scale,
             inv_scale: 1.0 / scale,
             extent: PEIRCE_SCALE / sqrt1_2,
@@ -516,9 +612,7 @@ pub(crate) fn peirce_const() -> &'static PeirceConst {
     &C
 }
 
-fn guyou_fwd(
-    lambda: f64, phi: f64, k_: f64, m: f64, big_k: f64,
-) -> (f64, f64) {
+fn guyou_fwd(lambda: f64, phi: f64, k_: f64, m: f64, big_k: f64) -> (f64, f64) {
     let psi = (PI / 4.0 + phi.abs() / 2.0).tan().ln();
     let r = (-psi).exp() / k_.sqrt();
     let at = complex_atan(r * (-lambda).cos(), r * (-lambda).sin());
@@ -530,14 +624,14 @@ fn guyou_fwd(
 }
 
 #[allow(dead_code)]
-fn guyou_inv(
-    x: f64, y: f64, k_: f64, m: f64, big_k: f64,
-) -> (f64, f64) {
+fn guyou_inv(x: f64, y: f64, k_: f64, m: f64, big_k: f64) -> (f64, f64) {
     let j = elliptic_ji(0.5 * big_k - y, -x, m);
     let sn = j.0;
     let cn = j.1;
     let d = cn[0] * cn[0] + cn[1] * cn[1];
-    if d < 1e-30 { return (0.0, 0.0); }
+    if d < 1e-30 {
+        return (0.0, 0.0);
+    }
     let tn_re = (sn[0] * cn[0] + sn[1] * cn[1]) / d;
     let tn_im = (sn[1] * cn[0] - sn[0] * cn[1]) / d;
     let lambda = -tn_im.atan2(tn_re);
@@ -592,12 +686,10 @@ impl Projection for PeirceQuincuncial {
         let gx = (x0 + y0) * sqrt1_2;
         let gy = (y0 - x0) * sqrt1_2;
         let half_dx = 0.5 * c.dx;
-        let front = gx.abs() < half_dx + 0.001
-            && gy.abs() < half_dx + 0.001;
+        let front = gx.abs() < half_dx + 0.001 && gy.abs() < half_dx + 0.001;
 
         if front {
-            let (lam, phi) =
-                guyou_inv(gx, gy, c.k_, c.m, c.big_k);
+            let (lam, phi) = guyou_inv(gx, gy, c.k_, c.m, c.big_k);
             let lat = phi.to_degrees();
             let lon = lam.to_degrees();
             if lat.abs() <= 90.0 && lon.abs() <= 180.0 {
@@ -613,10 +705,8 @@ impl Projection for PeirceQuincuncial {
             let gx2 = (-x1 - y1) * sqrt1_2;
             let gy2 = (x1 - y1) * sqrt1_2;
 
-            let (lam, phi) =
-                guyou_inv(gx2, gy2, c.k_, c.m, c.big_k);
-            let lon = lam.to_degrees()
-                + if gx2 > 0.0 { 180.0 } else { -180.0 };
+            let (lam, phi) = guyou_inv(gx2, gy2, c.k_, c.m, c.big_k);
+            let lon = lam.to_degrees() + if gx2 > 0.0 { 180.0 } else { -180.0 };
             let lat = phi.to_degrees();
             if lat.abs() <= 90.0 && lon.abs() <= 180.0 {
                 Some((lat, lon))

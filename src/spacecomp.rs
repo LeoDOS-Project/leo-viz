@@ -1,7 +1,7 @@
 use crate::drawing::build_bidirectional_adj;
 use crate::drawing::compute_path_direction;
 use crate::drawing::graph_hop_count;
-use crate::walker::{WalkerConstellation, SatelliteState};
+use crate::walker::{SatelliteState, WalkerConstellation};
 
 pub struct SpaceCompResult {
     pub collectors: Vec<(usize, usize)>,
@@ -12,9 +12,12 @@ pub struct SpaceCompResult {
 }
 
 fn manhattan_hop_count(
-    p1: usize, s1: usize,
-    p2: usize, s2: usize,
-    num_planes: usize, sats_per_plane: usize,
+    p1: usize,
+    s1: usize,
+    p2: usize,
+    s2: usize,
+    num_planes: usize,
+    sats_per_plane: usize,
     is_star: bool,
 ) -> usize {
     let (_, plane_hops) = compute_path_direction(p1, p2, num_planes, is_star);
@@ -92,9 +95,10 @@ fn lapjv_assignment(cost: &[Vec<usize>]) -> Vec<(usize, usize)> {
 
             let scan_row = row_for_col[end_col];
             for j in 0..n {
-                if visited[j] { continue; }
-                let new_dist = cost[scan_row][j] as i64
-                    - u[scan_row] - v[j] + min_dist;
+                if visited[j] {
+                    continue;
+                }
+                let new_dist = cost[scan_row][j] as i64 - u[scan_row] - v[j] + min_dist;
                 if new_dist < dist[j] {
                     dist[j] = new_dist;
                     pred[j] = scan_row;
@@ -119,24 +123,31 @@ fn lapjv_assignment(cost: &[Vec<usize>]) -> Vec<(usize, usize)> {
             row_for_col[j] = i;
             let prev_j = col_for_row[i];
             col_for_row[i] = j;
-            if i == free_row { break; }
+            if i == free_row {
+                break;
+            }
             j = prev_j;
         }
-        u[free_row] = cost[free_row][col_for_row[free_row]] as i64
-            - v[col_for_row[free_row]];
+        u[free_row] = cost[free_row][col_for_row[free_row]] as i64 - v[col_for_row[free_row]];
     }
 
     (0..n).map(|i| (i, col_for_row[i])).collect()
 }
 
 pub fn compute_spacecomp_job(
-    aoi_lat: f64, aoi_lon: f64, aoi_radius_km: f64,
-    gs_lat: f64, gs_lon: f64, gs_radius_km: f64,
+    aoi_lat: f64,
+    aoi_lon: f64,
+    aoi_radius_km: f64,
+    gs_lat: f64,
+    gs_lon: f64,
+    gs_radius_km: f64,
     positions: &[SatelliteState],
     constellation: &WalkerConstellation,
     is_star: bool,
-    planet_radius: f64, body_rot_angle: f64,
+    planet_radius: f64,
+    body_rot_angle: f64,
     n: usize,
+    reducer_placement: crate::config::SpaceCompReducerPlacement,
 ) -> Option<SpaceCompResult> {
     let num_planes = constellation.num_planes;
     let sats_per_plane = constellation.sats_per_plane();
@@ -157,7 +168,8 @@ pub fn compute_spacecomp_job(
     let gs_max_angular = gs_radius_km / planet_radius;
 
     let try_ascending = |asc_filter: bool| -> Option<SpaceCompResult> {
-        let mut collector_candidates: Vec<((usize, usize), f64)> = positions.iter()
+        let mut collector_candidates: Vec<((usize, usize), f64)> = positions
+            .iter()
             .filter(|s| s.ascending == asc_filter)
             .filter(|s| haversine_dist(s, aoi_lat, aoi_lon) <= aoi_max_angular)
             .map(|s| ((s.plane, s.sat_index), haversine_dist(s, aoi_lat, aoi_lon)))
@@ -167,8 +179,10 @@ pub fn compute_spacecomp_job(
             return None;
         }
 
-        collector_candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        let collectors: Vec<(usize, usize)> = collector_candidates.iter()
+        collector_candidates
+            .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let collectors: Vec<(usize, usize)> = collector_candidates
+            .iter()
             .take(n)
             .map(|&(ps, _)| ps)
             .collect();
@@ -176,7 +190,8 @@ pub fn compute_spacecomp_job(
         let collector_set: std::collections::HashSet<(usize, usize)> =
             collectors.iter().copied().collect();
 
-        let gs_sat = positions.iter()
+        let gs_sat = positions
+            .iter()
             .filter(|s| s.ascending == asc_filter)
             .filter(|s| haversine_dist(s, gs_lat, gs_lon) <= gs_max_angular)
             .min_by(|a, b| {
@@ -191,36 +206,60 @@ pub fn compute_spacecomp_job(
         let pool_size = (n * 3).max(n + 4);
         let mut candidates: Vec<((usize, usize), (usize, usize))> = Vec::new();
         for max_hops in 1.. {
-            candidates = positions.iter()
+            candidates = positions
+                .iter()
                 .filter(|s| s.ascending == asc_filter)
                 .filter(|s| !collector_set.contains(&(s.plane, s.sat_index)))
                 .filter(|s| (s.plane, s.sat_index) != gs_sat)
                 .filter(|s| {
-                    collectors.iter().any(|&(cp, cs)| manhattan_hop_count(
-                        s.plane, s.sat_index, cp, cs,
-                        num_planes, sats_per_plane, is_star,
-                    ) <= max_hops)
+                    collectors.iter().any(|&(cp, cs)| {
+                        manhattan_hop_count(
+                            s.plane,
+                            s.sat_index,
+                            cp,
+                            cs,
+                            num_planes,
+                            sats_per_plane,
+                            is_star,
+                        ) <= max_hops
+                    })
                 })
                 .map(|s| {
-                    let to_collector = collectors.iter()
-                        .map(|&(cp, cs)| manhattan_hop_count(
-                            s.plane, s.sat_index, cp, cs,
-                            num_planes, sats_per_plane, is_star,
-                        ))
+                    let to_collector = collectors
+                        .iter()
+                        .map(|&(cp, cs)| {
+                            manhattan_hop_count(
+                                s.plane,
+                                s.sat_index,
+                                cp,
+                                cs,
+                                num_planes,
+                                sats_per_plane,
+                                is_star,
+                            )
+                        })
                         .min()
                         .unwrap();
                     let to_gs = manhattan_hop_count(
-                        s.plane, s.sat_index, gp, gsi,
-                        num_planes, sats_per_plane, is_star,
+                        s.plane,
+                        s.sat_index,
+                        gp,
+                        gsi,
+                        num_planes,
+                        sats_per_plane,
+                        is_star,
                     );
                     ((s.plane, s.sat_index), (to_collector, to_gs))
                 })
                 .collect();
-            if candidates.len() >= pool_size { break; }
+            if candidates.len() >= pool_size {
+                break;
+            }
         }
 
         candidates.sort_by_key(|&(_, key)| key);
-        let pool: Vec<(usize, usize)> = candidates.iter()
+        let pool: Vec<(usize, usize)> = candidates
+            .iter()
             .take(pool_size.min(candidates.len()))
             .map(|&(ps, _)| ps)
             .collect();
@@ -230,22 +269,24 @@ pub fn compute_spacecomp_job(
         }
 
         let m = pool.len();
-        let big_cost: Vec<Vec<usize>> = collectors.iter()
+        let big_cost: Vec<Vec<usize>> = collectors
+            .iter()
             .map(|&(cp, cs)| {
                 pool.iter()
-                    .map(|&(mp, ms)| manhattan_hop_count(
-                        cp, cs, mp, ms,
-                        num_planes, sats_per_plane, is_star,
-                    ))
+                    .map(|&(mp, ms)| {
+                        manhattan_hop_count(cp, cs, mp, ms, num_planes, sats_per_plane, is_star)
+                    })
                     .collect()
             })
             .collect();
 
-        let pad_cost: Vec<Vec<usize>> = (0..m).map(|i| {
-            (0..m).map(|j| {
-                if i < n { big_cost[i][j] } else { 0 }
-            }).collect()
-        }).collect();
+        let pad_cost: Vec<Vec<usize>> = (0..m)
+            .map(|i| {
+                (0..m)
+                    .map(|j| if i < n { big_cost[i][j] } else { 0 })
+                    .collect()
+            })
+            .collect();
 
         let full_assignments = lapjv_assignment(&pad_cost);
         let mut used_mappers = std::collections::HashSet::new();
@@ -259,9 +300,7 @@ pub fn compute_spacecomp_job(
             }
         }
 
-        let mappers: Vec<(usize, usize)> = mapper_indices.iter()
-            .map(|&ci| pool[ci])
-            .collect();
+        let mappers: Vec<(usize, usize)> = mapper_indices.iter().map(|&ci| pool[ci]).collect();
 
         if mappers.len() < n {
             return None;
@@ -270,24 +309,43 @@ pub fn compute_spacecomp_job(
         let mapper_set: std::collections::HashSet<(usize, usize)> =
             mappers.iter().copied().collect();
 
-        let reducer = positions.iter()
+        let reducer = positions
+            .iter()
             .filter(|s| s.ascending == asc_filter)
             .filter(|s| !collector_set.contains(&(s.plane, s.sat_index)))
             .filter(|s| !mapper_set.contains(&(s.plane, s.sat_index)))
             .filter(|s| (s.plane, s.sat_index) != gs_sat)
             .min_by_key(|s| {
-                let to_mapper = mappers.iter()
-                    .map(|&(mp, ms)| manhattan_hop_count(
-                        s.plane, s.sat_index, mp, ms,
-                        num_planes, sats_per_plane, is_star,
-                    ))
+                let to_mapper = mappers
+                    .iter()
+                    .map(|&(mp, ms)| {
+                        manhattan_hop_count(
+                            s.plane,
+                            s.sat_index,
+                            mp,
+                            ms,
+                            num_planes,
+                            sats_per_plane,
+                            is_star,
+                        )
+                    })
                     .min()
                     .unwrap();
                 let to_gs = manhattan_hop_count(
-                    s.plane, s.sat_index, gp, gsi,
-                    num_planes, sats_per_plane, is_star,
+                    s.plane,
+                    s.sat_index,
+                    gp,
+                    gsi,
+                    num_planes,
+                    sats_per_plane,
+                    is_star,
                 );
-                (to_mapper, to_gs)
+                match reducer_placement {
+                    crate::config::SpaceCompReducerPlacement::NearMappers => (to_mapper, to_gs),
+                    crate::config::SpaceCompReducerPlacement::NearGroundStation => {
+                        (to_gs, to_mapper)
+                    }
+                }
             })
             .map(|s| (s.plane, s.sat_index))?;
 
@@ -304,11 +362,17 @@ pub fn compute_spacecomp_job(
 }
 
 pub fn compute_spacecomp_job_graph(
-    aoi_lat: f64, aoi_lon: f64, aoi_radius_km: f64,
-    gs_lat: f64, gs_lon: f64, gs_radius_km: f64,
+    aoi_lat: f64,
+    aoi_lon: f64,
+    aoi_radius_km: f64,
+    gs_lat: f64,
+    gs_lon: f64,
+    gs_radius_km: f64,
     positions: &[SatelliteState],
-    planet_radius: f64, body_rot_angle: f64,
+    planet_radius: f64,
+    body_rot_angle: f64,
     n: usize,
+    reducer_placement: crate::config::SpaceCompReducerPlacement,
 ) -> Option<SpaceCompResult> {
     let adj = build_bidirectional_adj(positions);
 
@@ -328,24 +392,30 @@ pub fn compute_spacecomp_job_graph(
     let gs_max_angular = gs_radius_km / planet_radius;
 
     let try_ascending = |asc_filter: bool| -> Option<SpaceCompResult> {
-        let mut collector_candidates: Vec<(usize, f64)> = positions.iter()
+        let mut collector_candidates: Vec<(usize, f64)> = positions
+            .iter()
             .enumerate()
             .filter(|(_, s)| s.ascending == asc_filter)
             .filter(|(_, s)| haversine_dist(s, aoi_lat, aoi_lon) <= aoi_max_angular)
             .map(|(i, s)| (i, haversine_dist(s, aoi_lat, aoi_lon)))
             .collect();
 
-        if collector_candidates.is_empty() { return None; }
+        if collector_candidates.is_empty() {
+            return None;
+        }
 
-        collector_candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        let collectors: Vec<usize> = collector_candidates.iter()
+        collector_candidates
+            .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let collectors: Vec<usize> = collector_candidates
+            .iter()
             .take(n)
             .map(|&(i, _)| i)
             .collect();
         let n = collectors.len();
         let collector_set: std::collections::HashSet<usize> = collectors.iter().copied().collect();
 
-        let gs_idx = positions.iter()
+        let gs_idx = positions
+            .iter()
             .enumerate()
             .filter(|(_, s)| s.ascending == asc_filter)
             .filter(|(_, s)| haversine_dist(s, gs_lat, gs_lon) <= gs_max_angular)
@@ -359,16 +429,20 @@ pub fn compute_spacecomp_job_graph(
         let pool_size = (n * 3).max(n + 4);
         let mut candidates: Vec<(usize, (usize, usize))> = Vec::new();
         for max_hops in 1.. {
-            candidates = positions.iter()
+            candidates = positions
+                .iter()
                 .enumerate()
                 .filter(|(_, s)| s.ascending == asc_filter)
                 .filter(|(i, _)| !collector_set.contains(i))
                 .filter(|(i, _)| *i != gs_idx)
                 .filter(|(i, _)| {
-                    collectors.iter().any(|&ci| graph_hop_count(*i, ci, &adj) <= max_hops)
+                    collectors
+                        .iter()
+                        .any(|&ci| graph_hop_count(*i, ci, &adj) <= max_hops)
                 })
                 .map(|(i, _)| {
-                    let to_collector = collectors.iter()
+                    let to_collector = collectors
+                        .iter()
                         .map(|&ci| graph_hop_count(i, ci, &adj))
                         .min()
                         .unwrap();
@@ -376,20 +450,28 @@ pub fn compute_spacecomp_job_graph(
                     (i, (to_collector, to_gs))
                 })
                 .collect();
-            if candidates.len() >= pool_size { break; }
-            if max_hops > 20 { break; }
+            if candidates.len() >= pool_size {
+                break;
+            }
+            if max_hops > 20 {
+                break;
+            }
         }
 
         candidates.sort_by_key(|&(_, key)| key);
-        let pool: Vec<usize> = candidates.iter()
+        let pool: Vec<usize> = candidates
+            .iter()
             .take(pool_size.min(candidates.len()))
             .map(|&(i, _)| i)
             .collect();
 
-        if pool.len() < n { return None; }
+        if pool.len() < n {
+            return None;
+        }
 
         let m = pool.len();
-        let big_cost: Vec<Vec<usize>> = collectors.iter()
+        let big_cost: Vec<Vec<usize>> = collectors
+            .iter()
             .map(|&ci| {
                 pool.iter()
                     .map(|&mi| graph_hop_count(ci, mi, &adj))
@@ -397,11 +479,13 @@ pub fn compute_spacecomp_job_graph(
             })
             .collect();
 
-        let pad_cost: Vec<Vec<usize>> = (0..m).map(|i| {
-            (0..m).map(|j| {
-                if i < n { big_cost[i][j] } else { 0 }
-            }).collect()
-        }).collect();
+        let pad_cost: Vec<Vec<usize>> = (0..m)
+            .map(|i| {
+                (0..m)
+                    .map(|j| if i < n { big_cost[i][j] } else { 0 })
+                    .collect()
+            })
+            .collect();
 
         let full_assignments = lapjv_assignment(&pad_cost);
         let mut used_mappers = std::collections::HashSet::new();
@@ -415,35 +499,51 @@ pub fn compute_spacecomp_job_graph(
             }
         }
 
-        let mappers: Vec<usize> = mapper_indices.iter()
-            .map(|&ci| pool[ci])
-            .collect();
+        let mappers: Vec<usize> = mapper_indices.iter().map(|&ci| pool[ci]).collect();
 
-        if mappers.len() < n { return None; }
+        if mappers.len() < n {
+            return None;
+        }
 
         let mapper_set: std::collections::HashSet<usize> = mappers.iter().copied().collect();
 
-        let reducer_idx = positions.iter()
+        let reducer_idx = positions
+            .iter()
             .enumerate()
             .filter(|(_, s)| s.ascending == asc_filter)
             .filter(|(i, _)| !collector_set.contains(i))
             .filter(|(i, _)| !mapper_set.contains(i))
             .filter(|(i, _)| *i != gs_idx)
             .min_by_key(|(i, _)| {
-                let to_mapper = mappers.iter()
+                let to_mapper = mappers
+                    .iter()
                     .map(|&mi| graph_hop_count(*i, mi, &adj))
                     .min()
                     .unwrap();
                 let to_gs = graph_hop_count(*i, gs_idx, &adj);
-                (to_mapper, to_gs)
+                match reducer_placement {
+                    crate::config::SpaceCompReducerPlacement::NearMappers => (to_mapper, to_gs),
+                    crate::config::SpaceCompReducerPlacement::NearGroundStation => {
+                        (to_gs, to_mapper)
+                    }
+                }
             })
             .map(|(i, _)| i)?;
 
         Some(SpaceCompResult {
-            collectors: collectors.iter().map(|&i| (positions[i].plane, positions[i].sat_index)).collect(),
-            mappers: mappers.iter().map(|&i| (positions[i].plane, positions[i].sat_index)).collect(),
+            collectors: collectors
+                .iter()
+                .map(|&i| (positions[i].plane, positions[i].sat_index))
+                .collect(),
+            mappers: mappers
+                .iter()
+                .map(|&i| (positions[i].plane, positions[i].sat_index))
+                .collect(),
             assignments,
-            reducer: (positions[reducer_idx].plane, positions[reducer_idx].sat_index),
+            reducer: (
+                positions[reducer_idx].plane,
+                positions[reducer_idx].sat_index,
+            ),
             gs_sat: (positions[gs_idx].plane, positions[gs_idx].sat_index),
         })
     };

@@ -48,13 +48,19 @@ const H: [f64; NUM_COEFFS] = [
 pub(crate) const IGRF_GC: [f32; NUM_COEFFS] = {
     let mut out = [0.0f32; NUM_COEFFS];
     let mut i = 0;
-    while i < NUM_COEFFS { out[i] = G[i] as f32; i += 1; }
+    while i < NUM_COEFFS {
+        out[i] = G[i] as f32;
+        i += 1;
+    }
     out
 };
 pub(crate) const IGRF_HC: [f32; NUM_COEFFS] = {
     let mut out = [0.0f32; NUM_COEFFS];
     let mut i = 0;
-    while i < NUM_COEFFS { out[i] = H[i] as f32; i += 1; }
+    while i < NUM_COEFFS {
+        out[i] = H[i] as f32;
+        i += 1;
+    }
     out
 };
 
@@ -85,7 +91,12 @@ const fn precompute_recursion() -> RecursionCoeffs {
         }
         n += 1;
     }
-    RecursionCoeffs { sect, sub_diag, a, b }
+    RecursionCoeffs {
+        sect,
+        sub_diag,
+        a,
+        b,
+    }
 }
 
 const fn const_sqrt(x: f64) -> f64 {
@@ -103,7 +114,10 @@ const fn const_sqrt(x: f64) -> f64 {
 
 static RC: RecursionCoeffs = precompute_recursion();
 
-fn legendre_n(colat_rad: f64, n_max: usize) -> ([[f64; N_MAX + 1]; N_MAX + 1], [[f64; N_MAX + 1]; N_MAX + 1]) {
+fn legendre_n(
+    colat_rad: f64,
+    n_max: usize,
+) -> ([[f64; N_MAX + 1]; N_MAX + 1], [[f64; N_MAX + 1]; N_MAX + 1]) {
     let ct = colat_rad.cos();
     let st = colat_rad.sin();
 
@@ -382,7 +396,7 @@ pub(crate) struct IgrfRadGrid {
 #[allow(dead_code)]
 impl IgrfRadGrid {
     pub(crate) fn new(r_km: f64, _kp: f64) -> Self {
-        use crate::aep8::{Particle, SolarCycle, aep8_flux};
+        use crate::aep8::{aep8_flux, Particle, SolarCycle};
         let n = RAD_COLAT * RAD_LON;
         let mut protons = vec![0.0_f64; n];
         let mut electrons = vec![0.0_f64; n];
@@ -417,9 +431,17 @@ impl IgrfRadGrid {
                     for dl in -1i32..=1 {
                         let c = ci as i32 + dc;
                         let l = li as i32 + dl;
-                        if c < 0 || c >= RAD_COLAT as i32 { continue; }
+                        if c < 0 || c >= RAD_COLAT as i32 {
+                            continue;
+                        }
                         let l = ((l % RAD_LON as i32) + RAD_LON as i32) as usize % RAD_LON;
-                        let k = if dc == 0 && dl == 0 { 4.0 } else if dc == 0 || dl == 0 { 2.0 } else { 1.0 };
+                        let k = if dc == 0 && dl == 0 {
+                            4.0
+                        } else if dc == 0 || dl == 0 {
+                            2.0
+                        } else {
+                            1.0
+                        };
                         sum += src[c as usize * RAD_LON + l] * k;
                         w += k;
                     }
@@ -432,10 +454,11 @@ impl IgrfRadGrid {
     fn normalize(grid: &mut [f64]) {
         let max = grid.iter().cloned().fold(0.0_f64, f64::max);
         if max > 0.0 {
-            for v in grid.iter_mut() { *v /= max; }
+            for v in grid.iter_mut() {
+                *v /= max;
+            }
         }
     }
-
 
     fn bilerp(grid: &[f64], ci: usize, li: usize, cf: f64, lf: f64) -> f64 {
         let row = ci * RAD_LON;
@@ -452,7 +475,9 @@ impl IgrfRadGrid {
         let li = (li_f.floor() as usize).min(RAD_LON - 2);
         let cf = ci_f - ci as f64;
         let lf = li_f - li as f64;
-        (Self::bilerp(&self.protons, ci, li, cf, lf),
-         Self::bilerp(&self.electrons, ci, li, cf, lf))
+        (
+            Self::bilerp(&self.protons, ci, li, cf, lf),
+            Self::bilerp(&self.electrons, ci, li, cf, lf),
+        )
     }
 }

@@ -6,17 +6,18 @@ use chrono::{DateTime, Utc};
 use std::f64::consts::PI;
 
 fn true_anomaly_to_mean_anomaly(v: f64, ecc: f64) -> f64 {
-    if ecc < 1e-8 { return v; }
-    let e_anom = 2.0 * ((1.0 - ecc).sqrt() * (v / 2.0).sin())
-        .atan2((1.0 + ecc).sqrt() * (v / 2.0).cos());
+    if ecc < 1e-8 {
+        return v;
+    }
+    let e_anom =
+        2.0 * ((1.0 - ecc).sqrt() * (v / 2.0).sin()).atan2((1.0 + ecc).sqrt() * (v / 2.0).cos());
     (e_anom - ecc * e_anom.sin()).rem_euclid(2.0 * PI)
 }
 
 fn haversine_dist(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let dlat = lat2 - lat1;
     let dlon = lon2 - lon1;
-    let a = (dlat / 2.0).sin().powi(2)
-        + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
+    let a = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
     2.0 * a.sqrt().asin()
 }
 
@@ -50,8 +51,16 @@ fn sat_in_range(
     body: CelestialBody,
     start_timestamp: DateTime<Utc>,
 ) -> bool {
-    sat_angular_dist(wc, plane, sat_index, t, gs_lat_deg, gs_lon_deg, body, start_timestamp)
-        <= max_angular_dist
+    sat_angular_dist(
+        wc,
+        plane,
+        sat_index,
+        t,
+        gs_lat_deg,
+        gs_lon_deg,
+        body,
+        start_timestamp,
+    ) <= max_angular_dist
 }
 
 fn bisect_exit(
@@ -70,7 +79,17 @@ fn bisect_exit(
     let mut hi = t_out;
     for _ in 0..20 {
         let mid = (lo + hi) * 0.5;
-        if sat_in_range(wc, plane, sat_index, mid, gs_lat_deg, gs_lon_deg, max_angular_dist, body, start_timestamp) {
+        if sat_in_range(
+            wc,
+            plane,
+            sat_index,
+            mid,
+            gs_lat_deg,
+            gs_lon_deg,
+            max_angular_dist,
+            body,
+            start_timestamp,
+        ) {
             lo = mid;
         } else {
             hi = mid;
@@ -95,7 +114,17 @@ fn bisect_entry(
     let mut hi = t_in;
     for _ in 0..20 {
         let mid = (lo + hi) * 0.5;
-        if sat_in_range(wc, plane, sat_index, mid, gs_lat_deg, gs_lon_deg, max_angular_dist, body, start_timestamp) {
+        if sat_in_range(
+            wc,
+            plane,
+            sat_index,
+            mid,
+            gs_lat_deg,
+            gs_lon_deg,
+            max_angular_dist,
+            body,
+            start_timestamp,
+        ) {
             hi = mid;
         } else {
             lo = mid;
@@ -127,7 +156,9 @@ pub(crate) fn elevation_from_ground(gs_xyz: [f64; 3], sat_xyz: [f64; 3]) -> f64 
     let dy = sat_xyz[1] - gs_xyz[1];
     let dz = sat_xyz[2] - gs_xyz[2];
     let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-    if dist < 1e-9 { return 90.0; }
+    if dist < 1e-9 {
+        return 90.0;
+    }
     let dot = ux * dx + uy * dy + uz * dz;
     (dot / dist).asin().to_degrees()
 }
@@ -158,7 +189,8 @@ fn refine_pass_details(
         let elev = elevation_from_ground(gs_xyz, sat_xyz);
         if elev > max_elev {
             max_elev = elev;
-            let r = (sat_xyz[0] * sat_xyz[0] + sat_xyz[1] * sat_xyz[1] + sat_xyz[2] * sat_xyz[2]).sqrt();
+            let r = (sat_xyz[0] * sat_xyz[0] + sat_xyz[1] * sat_xyz[1] + sat_xyz[2] * sat_xyz[2])
+                .sqrt();
             alt_at_max = r - planet_radius;
         }
     }
@@ -190,21 +222,47 @@ fn find_pass_around(
     let mut t = lo;
     while t <= hi {
         let ir = sat_in_range(
-            wc, plane, sat_index, t,
-            gs_lat_deg, gs_lon_deg, max_angular_dist,
-            body, start_timestamp,
+            wc,
+            plane,
+            sat_index,
+            t,
+            gs_lat_deg,
+            gs_lon_deg,
+            max_angular_dist,
+            body,
+            start_timestamp,
         );
         if ir && !in_pass {
             in_pass = true;
             aos = if t == lo {
                 t
             } else {
-                bisect_entry(wc, plane, sat_index, prev_t, t,
-                    gs_lat_deg, gs_lon_deg, max_angular_dist, body, start_timestamp)
+                bisect_entry(
+                    wc,
+                    plane,
+                    sat_index,
+                    prev_t,
+                    t,
+                    gs_lat_deg,
+                    gs_lon_deg,
+                    max_angular_dist,
+                    body,
+                    start_timestamp,
+                )
             };
         } else if !ir && in_pass {
-            let los = bisect_exit(wc, plane, sat_index, prev_t, t,
-                gs_lat_deg, gs_lon_deg, max_angular_dist, body, start_timestamp);
+            let los = bisect_exit(
+                wc,
+                plane,
+                sat_index,
+                prev_t,
+                t,
+                gs_lat_deg,
+                gs_lon_deg,
+                max_angular_dist,
+                body,
+                start_timestamp,
+            );
             result = Some((aos, los));
             in_pass = false;
             break;
@@ -237,7 +295,8 @@ pub(crate) fn compute_passes(
     let gs_lat_rad = ground_lat.to_radians();
     let t_end = current_time + prediction_window_sec;
 
-    let wcs: Vec<WalkerConstellation> = constellations.iter()
+    let wcs: Vec<WalkerConstellation> = constellations
+        .iter()
         .map(|c| c.constellation(planet_radius, planet_mu, planet_j2, planet_eq_radius))
         .collect();
 
@@ -250,7 +309,9 @@ pub(crate) fn compute_passes(
         let omega = c.arg_periapsis.to_radians();
         let ecc = c.eccentricity;
 
-        if inc.abs() < 1e-10 { continue; }
+        if inc.abs() < 1e-10 {
+            continue;
+        }
 
         let k = gs_lat_rad.sin() / inc.sin();
         if k.abs() > 1.0 && gs_lat_rad.abs() > inc.abs() + max_angular_dist {
@@ -269,7 +330,11 @@ pub(crate) fn compute_passes(
         let u_checks: Vec<f64> = if k.abs() <= 1.0 {
             vec![k.asin(), PI - k.asin()]
         } else {
-            if gs_lat_rad > 0.0 { vec![PI / 2.0] } else { vec![3.0 * PI / 2.0] }
+            if gs_lat_rad > 0.0 {
+                vec![PI / 2.0]
+            } else {
+                vec![3.0 * PI / 2.0]
+            }
         };
 
         for &u_check in &u_checks {
@@ -286,16 +351,29 @@ pub(crate) fn compute_passes(
 
             while t_cross < t_end {
                 let dist = sat_angular_dist(
-                    wc, plane, sat_idx, t_cross,
-                    ground_lat, ground_lon, body, start_timestamp,
+                    wc,
+                    plane,
+                    sat_idx,
+                    t_cross,
+                    ground_lat,
+                    ground_lon,
+                    body,
+                    start_timestamp,
                 );
 
                 if dist <= max_angular_dist * 3.0 {
                     if let Some((aos, los)) = find_pass_around(
-                        wc, plane, sat_idx, t_cross,
-                        ground_lat, ground_lon, max_angular_dist,
-                        body, start_timestamp,
-                        current_time, t_end,
+                        wc,
+                        plane,
+                        sat_idx,
+                        t_cross,
+                        ground_lat,
+                        ground_lon,
+                        max_angular_dist,
+                        body,
+                        start_timestamp,
+                        current_time,
+                        t_end,
                     ) {
                         let (lat, _, _) = wc.single_satellite_lat_lon(plane, sat_idx, aos);
                         let sin_ratio = lat.to_radians().sin() / inc.sin();
@@ -305,9 +383,16 @@ pub(crate) fn compute_passes(
                             (sin_ratio.asin() + omega).cos() > 0.0
                         };
                         let (max_elev, altitude_km) = refine_pass_details(
-                            wc, plane, sat_idx, aos, los,
-                            ground_lat, ground_lon, planet_radius,
-                            body, start_timestamp,
+                            wc,
+                            plane,
+                            sat_idx,
+                            aos,
+                            los,
+                            ground_lat,
+                            ground_lon,
+                            planet_radius,
+                            body,
+                            start_timestamp,
                         );
                         passes.push(PassInfo {
                             constellation_idx: ci,

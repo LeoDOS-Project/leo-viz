@@ -14,16 +14,16 @@
 //! client. Writes are blocking but the frames are small (128 B) and
 //! the connections are loopback, so this is effectively a memcpy.
 
-use crate::bridge::ENDPOINT_GROUND;
-use crate::bridge::ENDPOINT_SATELLITE;
 use crate::bridge::EventFrame;
 use crate::bridge::GroundStateFrame;
 use crate::bridge::Hello;
-use crate::bridge::KIND_GROUND_STATE;
-use crate::bridge::KIND_PING_REQUEST;
 use crate::bridge::PingRequestFrame;
 use crate::bridge::StateFrame;
 use crate::bridge::VisibleSat;
+use crate::bridge::ENDPOINT_GROUND;
+use crate::bridge::ENDPOINT_SATELLITE;
+use crate::bridge::KIND_GROUND_STATE;
+use crate::bridge::KIND_PING_REQUEST;
 use crate::walker::SatelliteState;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -32,10 +32,10 @@ use std::io::Write;
 use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::net::TcpStream;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -156,14 +156,6 @@ impl BridgeServer {
             .unwrap_or_default()
     }
 
-    /// Returns the station ids of all currently-connected ground daemons.
-    pub fn connected_ground_ids(&self) -> Vec<u32> {
-        self.state
-            .lock()
-            .map(|s| s.ground_streams.keys().copied().collect())
-            .unwrap_or_default()
-    }
-
     /// Push a [`GroundStateFrame`] to one connected ground daemon.
     /// `visible` should already be ordered by elevation (highest first).
     /// Returns `true` if the frame was written; `false` if no daemon
@@ -174,9 +166,11 @@ impl BridgeServer {
         station_id: u32,
         sim_time_seconds: f64,
         visible: &[VisibleSat],
+        next_aos_secs: u32,
     ) -> bool {
         let sim_time_ms = (sim_time_seconds * 1000.0) as u64;
-        let frame = GroundStateFrame::new(self.seq, sim_time_ms, station_id, visible);
+        let frame =
+            GroundStateFrame::new(self.seq, sim_time_ms, station_id, visible, next_aos_secs);
         let Ok(mut state) = self.state.lock() else {
             return false;
         };
@@ -186,7 +180,10 @@ impl BridgeServer {
         if write_kinded(stream, KIND_GROUND_STATE, frame.as_bytes()) {
             true
         } else {
-            log::warn!("bridge server: dropping ground id={} (write failed)", station_id);
+            log::warn!(
+                "bridge server: dropping ground id={} (write failed)",
+                station_id
+            );
             state.ground_streams.remove(&station_id);
             false
         }
@@ -205,7 +202,10 @@ impl BridgeServer {
         if write_kinded(stream, KIND_PING_REQUEST, frame.as_bytes()) {
             true
         } else {
-            log::warn!("bridge server: dropping ground id={} (write failed)", station_id);
+            log::warn!(
+                "bridge server: dropping ground id={} (write failed)",
+                station_id
+            );
             state.ground_streams.remove(&station_id);
             false
         }
@@ -390,7 +390,11 @@ fn handle_new_connection(
             _ => "sat",
         };
         if let Some(old) = map.insert(id, stream) {
-            log::warn!("bridge server: replacing existing {} connection for id={}", label, id);
+            log::warn!(
+                "bridge server: replacing existing {} connection for id={}",
+                label,
+                id
+            );
             drop(old);
         } else {
             log::info!("bridge server: {} id={} connected", label, id);
@@ -403,11 +407,7 @@ fn handle_new_connection(
         .ok();
 }
 
-fn event_reader(
-    mut stream: TcpStream,
-    scid: u32,
-    events: Arc<Mutex<VecDeque<ReceivedEvent>>>,
-) {
+fn event_reader(mut stream: TcpStream, scid: u32, events: Arc<Mutex<VecDeque<ReceivedEvent>>>) {
     let mut buf = [0u8; core::mem::size_of::<EventFrame>()];
     loop {
         if stream.read_exact(&mut buf).is_err() {

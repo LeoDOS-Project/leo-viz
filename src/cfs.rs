@@ -23,10 +23,10 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -73,10 +73,7 @@ fn registry_remove(id: &str) {
 /// only the first install wins.
 pub fn install_signal_handler() {
     let _ = ctrlc::try_set_handler(|| {
-        let ids: Vec<String> = registry()
-            .lock()
-            .map(|g| g.clone())
-            .unwrap_or_default();
+        let ids: Vec<String> = registry().lock().map(|g| g.clone()).unwrap_or_default();
         for id in ids {
             log::info!("ctrl-c: killing container {}", id);
             let _ = Command::new("docker").args(["kill", &id]).output();
@@ -216,6 +213,9 @@ impl Cfs {
     pub fn launch(
         num_sats: usize,
         sats_per_plane: usize,
+        altitude_km: f64,
+        inclination_deg: f64,
+        phasing: f64,
         ground_stations: Vec<GroundStationSnapshot>,
     ) -> std::io::Result<Self> {
         let server = BridgeServer::bind()?;
@@ -231,11 +231,28 @@ impl Cfs {
             fs::set_permissions(&host_log_dir, fs::Permissions::from_mode(0o777))?;
         }
 
+        let num_planes = if sats_per_plane == 0 {
+            0
+        } else {
+            num_sats.div_ceil(sats_per_plane)
+        };
         let table_path = host_log_dir.join(ROUTER_GROUND_BIN_NAME);
-        let table_bytes = encode_ground_table(&ground_stations);
+        let table_bytes = encode_ground_table(
+            num_planes as u8,
+            sats_per_plane as u8,
+            (altitude_km * 1000.0) as f32,
+            inclination_deg as f32,
+            phasing as f32,
+            &ground_stations,
+        );
         fs::write(&table_path, &table_bytes)?;
         log::info!(
-            "wrote router_ground.bin ({} stations) to {}",
+            "wrote router_ground.bin ({}x{}, alt={}km, incl={}°, F={}, {} stations) to {}",
+            num_planes,
+            sats_per_plane,
+            altitude_km,
+            inclination_deg,
+            phasing,
             ground_stations.len(),
             table_path.display()
         );
@@ -260,8 +277,7 @@ impl Cfs {
             let host_log_dir = host_log_dir.clone();
             let tracker = server.tracker();
             let stop = Arc::clone(&stop);
-            let station_ids: Vec<u8> =
-                ground_stations.iter().map(|s| s.station_id).collect();
+            let station_ids: Vec<u8> = ground_stations.iter().map(|s| s.station_id).collect();
             thread::Builder::new()
                 .name("cfs-launch".into())
                 .spawn(move || {
@@ -363,7 +379,9 @@ pub fn render_cfs_log_window(ctx: &eframe::egui::Context, cons: &mut Constellati
     use eframe::egui;
     use egui_extras::Column;
     use egui_extras::TableBuilder;
-    let Some(cfs_arc) = cons.cfs.as_ref() else { return };
+    let Some(cfs_arc) = cons.cfs.as_ref() else {
+        return;
+    };
     let (mut open, logs_arc, mut selected, mut app_filter, mut kind_filter) = match cfs_arc.lock() {
         Ok(g) => (
             g.show_logs,
@@ -434,7 +452,9 @@ pub fn render_cfs_log_window(ctx: &eframe::egui::Context, cons: &mut Constellati
                 ui.label("event source:");
                 let current_app = match &app_filter {
                     None => egui::RichText::new("All").monospace(),
-                    Some(a) => egui::RichText::new(a.clone()).color(app_color(a)).monospace(),
+                    Some(a) => egui::RichText::new(a.clone())
+                        .color(app_color(a))
+                        .monospace(),
                 };
                 egui::ComboBox::from_id_salt(("cfs_log_app", cons.color_offset))
                     .selected_text(current_app)
@@ -445,9 +465,7 @@ pub fn render_cfs_log_window(ctx: &eframe::egui::Context, cons: &mut Constellati
                             egui::RichText::new("All").monospace(),
                         );
                         for a in &apps {
-                            let label = egui::RichText::new(a)
-                                .color(app_color(a))
-                                .monospace();
+                            let label = egui::RichText::new(a).color(app_color(a)).monospace();
                             ui.selectable_value(&mut app_filter, Some(a.clone()), label);
                         }
                     });
@@ -463,11 +481,9 @@ pub fn render_cfs_log_window(ctx: &eframe::egui::Context, cons: &mut Constellati
                             .map(|(scid, line)| LogRow::from_line(*scid, line)),
                     ),
                     Some(scid) => match buf.per_sat.get(scid as usize) {
-                        Some(lines) => Box::new(
-                            lines
-                                .iter()
-                                .map(move |line| LogRow::from_line(scid, line)),
-                        ),
+                        Some(lines) => {
+                            Box::new(lines.iter().map(move |line| LogRow::from_line(scid, line)))
+                        }
                         None => Box::new(std::iter::empty()),
                     },
                 };
@@ -504,16 +520,28 @@ pub fn render_cfs_log_window(ctx: &eframe::egui::Context, cons: &mut Constellati
                 .stick_to_bottom(true);
             builder
                 .header(18.0, |mut header| {
-                    header.col(|ui| { ui.strong("spacecraft id"); });
-                    header.col(|ui| { ui.strong("orbit"); });
-                    header.col(|ui| { ui.strong("sat in orbit"); });
+                    header.col(|ui| {
+                        ui.strong("spacecraft id");
+                    });
+                    header.col(|ui| {
+                        ui.strong("orbit");
+                    });
+                    header.col(|ui| {
+                        ui.strong("sat in orbit");
+                    });
                     header.col(|ui| {
                         ui.strong("mission time")
                             .on_hover_text("cFS mission time, not wall clock");
                     });
-                    header.col(|ui| { ui.strong("event source"); });
-                    header.col(|ui| { ui.strong("event id"); });
-                    header.col(|ui| { ui.strong("message"); });
+                    header.col(|ui| {
+                        ui.strong("event source");
+                    });
+                    header.col(|ui| {
+                        ui.strong("event id");
+                    });
+                    header.col(|ui| {
+                        ui.strong("message");
+                    });
                 })
                 .body(|body| {
                     body.rows(16.0, rows.len(), |mut row| {
@@ -611,7 +639,9 @@ impl LogRow {
 /// etc.) without changing the bridge protocol.
 pub fn render_cfs_send_window(ctx: &eframe::egui::Context, cons: &mut ConstellationConfig) {
     use eframe::egui;
-    let Some(cfs_arc) = cons.cfs.as_ref() else { return };
+    let Some(cfs_arc) = cons.cfs.as_ref() else {
+        return;
+    };
     let (
         mut open,
         mut target,
@@ -679,9 +709,7 @@ pub fn render_cfs_send_window(ctx: &eframe::egui::Context, cons: &mut Constellat
                             let frame = crate::bridge::PingRequestFrame::new(
                                 request_id, orb, sat, n, rto_ms, timeout_ms,
                             );
-                            let sent = g
-                                .server_mut()
-                                .send_ping_request(station_id as u32, &frame);
+                            let sent = g.server_mut().send_ping_request(station_id as u32, &frame);
                             let now = chrono::Local::now().format("%H:%M:%S");
                             let line = if sent {
                                 format!(
@@ -742,7 +770,9 @@ pub fn flash_intensities(
     fade_ms: u64,
 ) -> std::collections::HashMap<u32, f32> {
     let mut out = std::collections::HashMap::new();
-    let Some(cfs_arc) = cons.cfs.as_ref() else { return out };
+    let Some(cfs_arc) = cons.cfs.as_ref() else {
+        return out;
+    };
     let Ok(g) = cfs_arc.lock() else { return out };
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -759,16 +789,34 @@ pub fn flash_intensities(
     out
 }
 
-/// Encode `stations` as bytes matching the `RouterGroundTable_t` C
-/// struct in `apps/router/fsw/tables/router_ground.h`. Layout (52 B):
-/// `count: u8`, `_pad: [u8;3]`, then 4 entries each
-/// `{station_id: u8, _pad: [u8;3], lat_deg: f32 LE, lon_deg: f32 LE}`.
+/// Encode the constellation + ground-station snapshot as bytes
+/// matching the `RouterGroundTable_t` C struct in
+/// `apps/router/fsw/tables/router_ground.h`. Layout (16 + 4 + 52 B):
+///   `num_orbs:u8, num_sats:u8, _pad:[u8;2]`,
+///   `altitude_m:f32, inclination_deg:f32, phasing:f32`,
+///   `count:u8, _pad:[u8;3]`,
+///   then 4 entries each
+///   `{station_id:u8, _pad:[u8;3], lat_deg:f32 LE, lon_deg:f32 LE}`.
 /// Excess stations beyond `ROUTER_GROUND_MAX_STATIONS` are truncated.
-fn encode_ground_table(stations: &[GroundStationSnapshot]) -> Vec<u8> {
+fn encode_ground_table(
+    num_orbs: u8,
+    num_sats: u8,
+    altitude_m: f32,
+    inclination_deg: f32,
+    phasing: f32,
+    stations: &[GroundStationSnapshot],
+) -> Vec<u8> {
     const ENTRY_SIZE: usize = 1 + 3 + 4 + 4;
-    const TABLE_SIZE: usize = 1 + 3 + ROUTER_GROUND_MAX_STATIONS * ENTRY_SIZE;
+    const HEADER_SIZE: usize = 2 + 2 + 4 + 4 + 4 + 1 + 3;
+    const TABLE_SIZE: usize = HEADER_SIZE + ROUTER_GROUND_MAX_STATIONS * ENTRY_SIZE;
     let n = stations.len().min(ROUTER_GROUND_MAX_STATIONS);
     let mut out = Vec::with_capacity(TABLE_SIZE);
+    out.push(num_orbs);
+    out.push(num_sats);
+    out.extend_from_slice(&[0u8; 2]);
+    out.extend_from_slice(&altitude_m.to_le_bytes());
+    out.extend_from_slice(&inclination_deg.to_le_bytes());
+    out.extend_from_slice(&phasing.to_le_bytes());
     out.push(n as u8);
     out.extend_from_slice(&[0u8; 3]);
     for i in 0..ROUTER_GROUND_MAX_STATIONS {
@@ -792,16 +840,43 @@ pub fn render_cfs_button(
     ground_stations: &[GroundStationSnapshot],
 ) {
     use eframe::egui;
-    let status = cons.cfs.as_ref().and_then(|c| c.lock().ok().map(|g| g.status()));
+    let status = cons
+        .cfs
+        .as_ref()
+        .and_then(|c| c.lock().ok().map(|g| g.status()));
     match status {
         None => {
             let btn = egui::Button::new(egui::RichText::new("▶").color(egui::Color32::WHITE))
                 .fill(egui::Color32::from_rgb(60, 140, 60))
                 .small();
-            if ui.add(btn).on_hover_text("Launch cFS").clicked() {
+            let tooltip = "Launch cFS.\n\n\
+                Sats, orbits, altitude, inclination, and phasing are passed to the\n\
+                flight software and locked while it runs.\n\n\
+                Walker geometry not represented on the flight side\n\
+                (RAAN₀, Δ, d, Ecc, ω, propagator, walker type, drag)\n\
+                will be snapped to defaults to keep leo-viz consistent\n\
+                with the cFS view.";
+            if ui.add(btn).on_hover_text(tooltip).clicked() {
+                // cFS only knows about num_orbs/num_sats/altitude/inclination
+                // (and reads phasing implicitly via the LOS frames leo-viz
+                // sends). The rest of the Walker geometry isn't represented
+                // on the flight side, so snap it to canonical values before
+                // launch — keeps leo-viz consistent with what cFS expects.
+                cons.raan_offset = 0.0;
+                cons.raan_spacing = None;
+                cons.sat_spacing_km = None;
+                cons.eccentricity = 0.0;
+                cons.arg_periapsis = 0.0;
+                cons.walker_type = crate::walker::WalkerType::Delta;
+                cons.propagator = crate::config::Propagator::Keplerian;
+                cons.drag_enabled = false;
+
                 let n = cons.total_sats();
                 let spp = cons.sats_per_plane.max(1) as usize;
-                match Cfs::launch(n, spp, ground_stations.to_vec()) {
+                let alt = cons.altitude_km;
+                let incl = cons.inclination;
+                let f = cons.phasing;
+                match Cfs::launch(n, spp, alt, incl, f, ground_stations.to_vec()) {
                     Ok(c) => cons.cfs = Some(Arc::new(Mutex::new(c))),
                     Err(e) => log::warn!("cFS launch failed: {}", e),
                 }
@@ -849,7 +924,11 @@ pub fn render_cfs_button(
             let btn = egui::Button::new(egui::RichText::new("↻").color(egui::Color32::WHITE))
                 .fill(egui::Color32::from_rgb(160, 60, 60))
                 .small();
-            if ui.add(btn).on_hover_text(format!("Failed: {}", msg)).clicked() {
+            if ui
+                .add(btn)
+                .on_hover_text(format!("Failed: {}", msg))
+                .clicked()
+            {
                 cons.cfs = None;
             }
         }
@@ -886,7 +965,12 @@ fn parse_line(line: &str) -> ParsedLine<'_> {
     if let Some(p) = parse_syslog(line) {
         return p;
     }
-    ParsedLine { time: None, app: None, eid: None, msg: line }
+    ParsedLine {
+        time: None,
+        app: None,
+        eid: None,
+        msg: line,
+    }
 }
 
 fn parse_evs(line: &str) -> Option<ParsedLine<'_>> {
@@ -1031,7 +1115,9 @@ fn run_docker(
         *g = Some(id.clone());
     }
     if let Ok(mut s) = status.lock() {
-        *s = CfsStatus::Running { container_id: id.clone() };
+        *s = CfsStatus::Running {
+            container_id: id.clone(),
+        };
     }
     registry_add(&id);
 
@@ -1118,7 +1204,9 @@ fn tail_file(path: PathBuf, scid: u32, logs: Arc<Mutex<LogBuffer>>, stop: Arc<At
         }
         thread::sleep(TAIL_POLL);
     }
-    let Ok(file) = std::fs::File::open(&path) else { return };
+    let Ok(file) = std::fs::File::open(&path) else {
+        return;
+    };
     let mut reader = BufReader::new(file);
     let mut line = String::new();
     while !stop.load(Ordering::Relaxed) {

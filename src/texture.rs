@@ -25,14 +25,17 @@ pub struct EarthTexture {
 impl EarthTexture {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn load_from_path(path: &std::path::Path) -> Self {
-        let bytes = std::fs::read(path)
-            .expect("Failed to read earth texture");
+        let bytes = std::fs::read(path).expect("Failed to read earth texture");
         Self::from_bytes(&bytes).expect("Failed to load Earth texture")
     }
 
     #[cfg(target_arch = "wasm32")]
     pub fn default_placeholder() -> Self {
-        Self { width: 2, height: 1, pixels: vec![[30, 60, 120], [30, 60, 120]] }
+        Self {
+            width: 2,
+            height: 1,
+            pixels: vec![[30, 60, 120], [30, 60, 120]],
+        }
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
@@ -42,13 +45,18 @@ impl EarthTexture {
             .with_guessed_format()
             .map_err(|e| format!("Failed to guess format: {}", e))?;
         reader.no_limits();
-        let img = reader.decode()
+        let img = reader
+            .decode()
             .map_err(|e| format!("Failed to decode image: {}", e))?
             .to_rgb8();
         let width = img.width();
         let height = img.height();
         let pixels: Vec<[u8; 3]> = img.pixels().map(|p| p.0).collect();
-        Ok(Self { width, height, pixels })
+        Ok(Self {
+            width,
+            height,
+            pixels,
+        })
     }
 
     pub fn downscale(&self, factor: u32) -> Self {
@@ -83,7 +91,11 @@ impl EarthTexture {
                 ]);
             }
         }
-        Self { width: new_width, height: new_height, pixels }
+        Self {
+            width: new_width,
+            height: new_height,
+            pixels,
+        }
     }
 
     pub fn sample(&self, u: f64, v: f64) -> [u8; 3] {
@@ -106,9 +118,7 @@ impl EarthTexture {
         let p10 = self.pixels[(y0 * self.width + x1) as usize];
         let p01 = self.pixels[(y1 * self.width + x0) as usize];
         let p11 = self.pixels[(y1 * self.width + x1) as usize];
-        let lerp = |a: u8, b: u8, t: f32| -> u8 {
-            (a as f32 + (b as f32 - a as f32) * t) as u8
-        };
+        let lerp = |a: u8, b: u8, t: f32| -> u8 { (a as f32 + (b as f32 - a as f32) * t) as u8 };
         [
             lerp(lerp(p00[0], p10[0], tx), lerp(p01[0], p11[0], tx), ty),
             lerp(lerp(p00[1], p10[1], tx), lerp(p01[1], p11[1], tx), ty),
@@ -116,12 +126,26 @@ impl EarthTexture {
         ]
     }
 
-    pub fn render_sphere(&self, size: usize, rot: &Matrix3<f64>, flattening: f64) -> egui::ColorImage {
-        self.render_sphere_with_rings(size, rot, flattening, crate::celestial::CelestialBody::Earth, None)
+    pub fn render_sphere(
+        &self,
+        size: usize,
+        rot: &Matrix3<f64>,
+        flattening: f64,
+    ) -> egui::ColorImage {
+        self.render_sphere_with_rings(
+            size,
+            rot,
+            flattening,
+            crate::celestial::CelestialBody::Earth,
+            None,
+        )
     }
 
     pub fn render_sphere_with_rings(
-        &self, size: usize, rot: &Matrix3<f64>, flattening: f64,
+        &self,
+        size: usize,
+        rot: &Matrix3<f64>,
+        flattening: f64,
         body: crate::celestial::CelestialBody,
         ring_texture: Option<&RingTexture>,
     ) -> egui::ColorImage {
@@ -145,18 +169,22 @@ impl EarthTexture {
                         let dy = py as f64 - center;
                         let screen_pt = Vector3::new(dx / radius, -dy / radius, 0.0);
                         let world_pt = inv_rot * screen_pt;
-                        if world_pt.y.abs() > 0.05 { continue; }
+                        if world_pt.y.abs() > 0.05 {
+                            continue;
+                        }
                         let ring_r = (world_pt.x.powi(2) + world_pt.z.powi(2)).sqrt() * radius;
                         if ring_r >= inner && ring_r <= outer {
                             let ru = ((ring_r - inner) / (outer - inner)).clamp(0.0, 1.0);
                             let tx = (ru * ring_tex.width as f64) as u32;
                             let tx = tx.min(ring_tex.width - 1);
-                            let [r, g, b, a] = ring_tex.pixels[(ring_tex.height / 2 * ring_tex.width + tx) as usize];
+                            let [r, g, b, a] = ring_tex.pixels
+                                [(ring_tex.height / 2 * ring_tex.width + tx) as usize];
                             if a > 10 {
                                 let dist_sq = dx * dx + (dy / polar_scale).powi(2);
                                 let behind = dist_sq < radius * radius && world_pt.y < 0.0;
                                 let alpha = if behind { a / 3 } else { a };
-                                pixels[py * img_size + px] = Color32::from_rgba_unmultiplied(r, g, b, alpha);
+                                pixels[py * img_size + px] =
+                                    Color32::from_rgba_unmultiplied(r, g, b, alpha);
                             }
                         }
                     }
@@ -219,13 +247,18 @@ impl RingTexture {
             .with_guessed_format()
             .map_err(|e| format!("Failed to guess format: {}", e))?;
         reader.no_limits();
-        let img = reader.decode()
+        let img = reader
+            .decode()
             .map_err(|e| format!("Failed to decode image: {}", e))?
             .to_rgba8();
         let width = img.width();
         let height = img.height();
         let pixels: Vec<[u8; 4]> = img.pixels().map(|p| p.0).collect();
-        Ok(Self { width, height, pixels })
+        Ok(Self {
+            width,
+            height,
+            pixels,
+        })
     }
 }
 
@@ -281,7 +314,8 @@ pub(crate) async fn fetch_texture(url: &str) -> Result<EarthTexture, String> {
         .await
         .map_err(|e| format!("Fetch failed: {:?}", e))?;
 
-    let resp: Response = resp_value.dyn_into()
+    let resp: Response = resp_value
+        .dyn_into()
         .map_err(|_| "Response is not a Response")?;
 
     if !resp.ok() {
@@ -289,7 +323,8 @@ pub(crate) async fn fetch_texture(url: &str) -> Result<EarthTexture, String> {
     }
 
     let array_buffer = wasm_bindgen_futures::JsFuture::from(
-        resp.array_buffer().map_err(|e| format!("Failed to get array buffer: {:?}", e))?
+        resp.array_buffer()
+            .map_err(|e| format!("Failed to get array buffer: {:?}", e))?,
     )
     .await
     .map_err(|e| format!("Failed to read response: {:?}", e))?;

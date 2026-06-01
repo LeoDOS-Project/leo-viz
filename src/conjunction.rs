@@ -68,7 +68,9 @@ impl SpatialGrid {
                 let a = &self.sats[indices[i]];
                 for j in (i + 1)..indices.len() {
                     let b = &self.sats[indices[j]];
-                    if a.ci == b.ci && a.si == b.si { continue; }
+                    if a.ci == b.ci && a.si == b.si {
+                        continue;
+                    }
                     let d_sq = dist_sq(a, b);
                     if d_sq < thresh_sq {
                         results.push((a, b, d_sq.sqrt()));
@@ -83,7 +85,9 @@ impl SpatialGrid {
                         let a = &self.sats[ai];
                         for &bi in neighbor_indices {
                             let b = &self.sats[bi];
-                            if a.ci == b.ci && a.si == b.si { continue; }
+                            if a.ci == b.ci && a.si == b.si {
+                                continue;
+                            }
                             let d_sq = dist_sq(a, b);
                             if d_sq < thresh_sq {
                                 results.push((a, b, d_sq.sqrt()));
@@ -141,7 +145,14 @@ fn estimate_tca(
     (t_min, (px * px + py * py + pz * pz).sqrt())
 }
 
-pub(crate) type ConstellationData = (WalkerConstellation, Vec<SatelliteState>, usize, u8, usize, String);
+pub(crate) type ConstellationData = (
+    WalkerConstellation,
+    Vec<SatelliteState>,
+    usize,
+    u8,
+    usize,
+    String,
+);
 
 pub(crate) fn compute_conjunctions(
     conjunctions: &mut Vec<ConjunctionInfo>,
@@ -154,9 +165,10 @@ pub(crate) fn compute_conjunctions(
 
     for (ci, (_, positions, _, _, _, label)) in constellations_data.iter().enumerate() {
         for (idx, sat) in positions.iter().enumerate() {
-            let name = sat.name.clone().unwrap_or_else(|| {
-                format!("{}#{} P{}:S{}", label, ci, sat.plane, sat.sat_index)
-            });
+            let name = sat
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("{}#{} P{}:S{}", label, ci, sat.plane, sat.sat_index));
             grid.insert(SatRef {
                 ci,
                 si: idx,
@@ -173,16 +185,17 @@ pub(crate) fn compute_conjunctions(
 
     conjunctions.clear();
     for (a, b, dist) in pairs {
-        if a.name == b.name { continue; }
+        if a.name == b.name {
+            continue;
+        }
         let key_a = (a.ci, a.si);
         let key_b = (b.ci, b.si);
         let pos_a = [a.x, a.y, a.z];
         let pos_b = [b.x, b.y, b.z];
 
-        let (tca, min_dist) = if let (Some(&pa), Some(&pb)) = (
-            prev_positions.get(&key_a),
-            prev_positions.get(&key_b),
-        ) {
+        let (tca, min_dist) = if let (Some(&pa), Some(&pb)) =
+            (prev_positions.get(&key_a), prev_positions.get(&key_b))
+        {
             estimate_tca(pos_a, pos_b, pa, pb, dt)
         } else {
             (0.0, dist)
@@ -202,7 +215,8 @@ pub(crate) fn compute_conjunctions(
     }
 
     conjunctions.sort_by(|a, b| {
-        a.source_a.cmp(&b.source_a)
+        a.source_a
+            .cmp(&b.source_a)
             .then_with(|| a.source_b.cmp(&b.source_b))
             .then_with(|| a.distance_km.partial_cmp(&b.distance_km).unwrap())
             .then_with(|| a.name_a.cmp(&b.name_a))
@@ -231,9 +245,18 @@ pub(crate) fn predict_conjunctions(
     threshold_km: f64,
     window_seconds: f64,
 ) -> Vec<PredictedConjunction> {
-    let total_sats: usize = walker_data.iter().map(|(wc, _)| wc.total_sats).sum::<usize>()
+    let total_sats: usize = walker_data
+        .iter()
+        .map(|(wc, _)| wc.total_sats)
+        .sum::<usize>()
         + tle_groups.iter().map(|g| g.satellites.len()).sum::<usize>();
-    let max_steps = if total_sats > 500 { 2000 } else if total_sats > 100 { 10000 } else { 60000 };
+    let max_steps = if total_sats > 500 {
+        2000
+    } else if total_sats > 100 {
+        10000
+    } else {
+        60000
+    };
     let step = (window_seconds / max_steps as f64).max(10.0);
     let steps = (window_seconds / step).ceil() as usize;
     let mut best: HashMap<(String, String), (f64, f64)> = HashMap::new();
@@ -249,9 +272,10 @@ pub(crate) fn predict_conjunctions(
         for (wc, label) in walker_data {
             let positions = wc.satellite_positions(future_time);
             for (idx, sat) in positions.iter().enumerate() {
-                let name = sat.name.clone().unwrap_or_else(|| {
-                    format!("{} P{}:S{}", label, sat.plane, sat.sat_index)
-                });
+                let name = sat
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("{} P{}:S{}", label, sat.plane, sat.sat_index));
                 grid.insert(SatRef {
                     ci: ci_counter,
                     si: idx,
@@ -269,9 +293,10 @@ pub(crate) fn predict_conjunctions(
             let future_prop_min = group.propagation_minutes + dt / 60.0;
             for (idx, sat) in group.satellites.iter().enumerate() {
                 let mins_since_epoch = future_prop_min - sat.epoch_minutes;
-                let prediction = match sat.constants.propagate(
-                    sgp4::MinutesSinceEpoch(mins_since_epoch)
-                ) {
+                let prediction = match sat
+                    .constants
+                    .propagate(sgp4::MinutesSinceEpoch(mins_since_epoch))
+                {
                     Ok(p) => p,
                     Err(_) => continue,
                 };
@@ -281,7 +306,9 @@ pub(crate) fn predict_conjunctions(
                 grid.insert(SatRef {
                     ci: ci_counter,
                     si: idx,
-                    x, y, z,
+                    x,
+                    y,
+                    z,
                     name: sat.name.clone(),
                     source: group.label.clone(),
                 });
@@ -291,7 +318,9 @@ pub(crate) fn predict_conjunctions(
 
         let pairs = grid.find_close_pairs(threshold_km);
         for (a, b, dist) in pairs {
-            if a.name == b.name { continue; }
+            if a.name == b.name {
+                continue;
+            }
             let key = if a.name < b.name {
                 (a.name.clone(), b.name.clone())
             } else {
@@ -321,7 +350,9 @@ pub(crate) fn predict_conjunctions(
         .collect();
 
     results.sort_by(|a, b| {
-        a.time_until.partial_cmp(&b.time_until).unwrap()
+        a.time_until
+            .partial_cmp(&b.time_until)
+            .unwrap()
             .then_with(|| a.min_distance_km.partial_cmp(&b.min_distance_km).unwrap())
     });
     results
