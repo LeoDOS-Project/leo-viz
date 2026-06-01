@@ -187,6 +187,56 @@ fn nearest_refresh_hz(observed_hz: f64) -> f64 {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn web_requested_route() -> Option<&'static str> {
+    let loc = web_sys::window()?.location();
+    let path = loc.pathname().ok().unwrap_or_default();
+    let path = path.trim_end_matches('/');
+    if path.ends_with("/demo") {
+        return Some("demo");
+    }
+    if path.ends_with("/presentation") {
+        return Some("presentation");
+    }
+
+    let search = loc.search().ok().unwrap_or_default();
+    let query = search.strip_prefix('?').unwrap_or(&search);
+    for part in query.split('&') {
+        match part {
+            "route=demo" => return Some("demo"),
+            "route=presentation" => return Some("presentation"),
+            _ => {}
+        }
+    }
+    None
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_route_url(route: &str) -> Option<String> {
+    let loc = web_sys::window()?.location();
+    let path = loc.pathname().ok().unwrap_or_default();
+    let trimmed = path.trim_end_matches('/');
+    let base = trimmed
+        .strip_suffix("/demo")
+        .or_else(|| trimmed.strip_suffix("/presentation"))
+        .or_else(|| trimmed.strip_suffix("/index.html"))
+        .unwrap_or(trimmed);
+    let base = if base == "/" { "" } else { base };
+    Some(format!("{base}/{route}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn replace_web_route(route: &str) {
+    let Some(url) = web_route_url(route) else {
+        return;
+    };
+    if let Some(window) = web_sys::window() {
+        if let Ok(history) = window.history() {
+            let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&url));
+        }
+    }
+}
+
 impl App {
     pub(crate) fn new(cc: &eframe::CreationContext<'_>) -> Self {
         crate::slides::install(&cc.egui_ctx);
@@ -519,14 +569,14 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         {
             let loc = web_sys::window().and_then(|w| Some(w.location()));
-            let path = loc
-                .as_ref()
-                .and_then(|l| l.pathname().ok())
-                .unwrap_or_default();
             let hash = loc.as_ref().and_then(|l| l.hash().ok()).unwrap_or_default();
 
-            if path.ends_with("/demo") || path.ends_with("/demo/") {
+            if matches!(web_requested_route(), Some("demo")) {
                 app.setup_demo();
+                replace_web_route("demo");
+            } else if matches!(web_requested_route(), Some("presentation")) {
+                app.setup_presentation(crate::demo::Presentation::SpaceCoMP, &cc.egui_ctx);
+                replace_web_route("presentation");
             } else if hash.starts_with("#c=") {
                 use crate::config::ShareableConfig;
                 if let Some(cfg) = ShareableConfig::from_url_hash(&hash) {
@@ -2774,9 +2824,13 @@ impl eframe::App for App {
                             }
                             if demo_requested {
                                 self.setup_demo();
+                                #[cfg(target_arch = "wasm32")]
+                                replace_web_route("demo");
                             }
                             if let Some(presentation) = presentation_requested {
                                 self.setup_presentation(presentation, ctx);
+                                #[cfg(target_arch = "wasm32")]
+                                replace_web_route("presentation");
                             }
                         }
                         let play_label = if self.viewer.auto_cycle_tabs {
@@ -3169,6 +3223,9 @@ impl eframe::App for App {
         #[cfg(target_arch = "wasm32")]
         {
             use crate::config::ShareableConfig;
+            if matches!(web_requested_route(), Some("demo" | "presentation")) {
+                return;
+            }
             let active = self.viewer.active_tab_idx;
             if let Some(planet) = self.viewer.tabs.get(active).and_then(|t| t.planets.first()) {
                 let hash = if planet.constellations.is_empty() {
