@@ -1199,12 +1199,12 @@ impl Presentation {
     fn build(self, v: &mut ViewerState) {
         match self {
             Presentation::SpaceCoMP => {
-                spacecomp_slide_tabs(v, crate::slides::SPACECOMP_PRIMER, 1..11);
-                spacecomp_simulation_tabs(v, 11..17);
+                spacecomp_slide_tabs(v, crate::slides::SPACECOMP_PRIMER, 1..35);
+                spacecomp_simulation_tabs(v, 35..41);
                 spacecomp_slide_tabs(
                     v,
                     crate::slides::SPACECOMP_PRIMER,
-                    17..crate::slides::total_slide_count() + 1,
+                    41..crate::slides::total_slide_count() + 1,
                 );
             }
         }
@@ -1219,12 +1219,12 @@ fn spacecomp_simulation_tabs(v: &mut ViewerState, slide_numbers: std::ops::Range
 
 fn spacecomp_presentation_demo_tab(v: &mut ViewerState, slide_number: usize) {
     match slide_number {
-        11 => inclination_demo(v),
-        12 => walker_demo(v),
-        13 => isl_demo(v),
-        14 => torus_demo(v),
-        15 => routing_demo(v),
-        16 => {
+        35 => inclination_demo(v),
+        36 => walker_demo(v),
+        37 => isl_demo(v),
+        38 => torus_demo(v),
+        39 => routing_demo(v),
+        40 => {
             v.tab_counter += 1;
             v.tabs.push(spacecomp_demo_tab(
                 format!("Slide {}", slide_number),
