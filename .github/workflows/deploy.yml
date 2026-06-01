@@ -28,11 +28,13 @@ jobs:
       - name: Install trunk
         uses: jetli/trunk-action@v0.5.0
 
-      - name: Strip native-only path dependency
-        # leodos-lib42 lives in a sibling repo and is only used behind
+      - name: Strip native-only path dependencies
+        # These live in a sibling repo and are only used behind
         # cfg(not(target_arch = "wasm32")), but `cargo metadata` still
-        # reads the path. Drop the line for the WASM deploy build.
-        run: sed -i '/^leodos-lib42 = /d' Cargo.toml
+        # reads the paths. Drop the lines for the WASM deploy build.
+        run: |
+          sed -i '/^leodos-lib42 = /d' Cargo.toml
+          sed -i '/^leodos-bridge = /d' Cargo.toml
 
       - name: Build
         run: trunk build --release --cargo-profile release-wasm --public-url /leo-viz/
