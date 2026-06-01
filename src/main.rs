@@ -2,6 +2,7 @@
 
 mod aep8;
 mod app;
+#[cfg(not(target_arch = "wasm32"))]
 mod bridge;
 #[cfg(not(target_arch = "wasm32"))]
 mod bridge_server;
