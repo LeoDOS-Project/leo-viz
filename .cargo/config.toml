@@ -1,0 +1,2 @@
+[env]
+FORTYTWO_DIR = { value = "../LeoDOS/libs/42/", relative = true }

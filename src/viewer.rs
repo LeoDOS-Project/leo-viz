@@ -6,39 +6,39 @@
 
 use crate::celestial::{CelestialBody, Skin, TextureResolution};
 use crate::config::{
-    AreaOfInterest, ConstellationConfig, DeviceLayer, GroundStation, NumericalState, Preset, Propagator, TabConfig, View3DFlags,
+    AreaOfInterest, ConstellationConfig, DeviceLayer, GroundStation, NumericalState, Preset,
+    Propagator, TabConfig, View3DFlags,
 };
-use crate::drawing::{
-    draw_3d_view, draw_map_view, draw_torus, plane_color,
-};
+use crate::drawing::{draw_3d_view, draw_map_view, draw_torus, plane_color};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::geo::{GeoLoadState, GeoOverlayData};
-use crate::texture::{TextureLoadState, EarthTexture, RingTexture};
-use crate::tile::TileOverlayState;
-use crate::time::{body_rotation_angle, continuous_day_of_year, DAYS_PER_YEAR, SOLAR_DECLINATION_MAX};
-use crate::tle::{TlePreset, TleSatellite, TleShell, TleLoadState, mean_motion_to_altitude_km, SECONDS_PER_DAY};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::tle::fetch_tle_data;
-use crate::walker::{WalkerType, WalkerConstellation, SatelliteState};
 use crate::texture::asset_path;
 #[cfg(target_arch = "wasm32")]
 use crate::texture::{
-    fetch_texture,
-    TEXTURE_RESULT, STAR_TEXTURE_RESULT, MILKY_WAY_TEXTURE_RESULT,
-    NIGHT_TEXTURE_RESULT, CLOUD_TEXTURE_RESULT,
+    fetch_texture, CLOUD_TEXTURE_RESULT, MILKY_WAY_TEXTURE_RESULT, NIGHT_TEXTURE_RESULT,
+    STAR_TEXTURE_RESULT, TEXTURE_RESULT,
 };
+use crate::texture::{EarthTexture, RingTexture, TextureLoadState};
+use crate::tile::TileOverlayState;
+use crate::time::{
+    body_rotation_angle, continuous_day_of_year, DAYS_PER_YEAR, SOLAR_DECLINATION_MAX,
+};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::tle::fetch_tle_data;
 #[cfg(target_arch = "wasm32")]
+use crate::tle::{fetch_tle_text, parse_tle_data_async, TLE_FETCH_RESULT};
 use crate::tle::{
-    fetch_tle_text, parse_tle_data_async, TLE_FETCH_RESULT,
+    mean_motion_to_altitude_km, TleLoadState, TlePreset, TleSatellite, TleShell, SECONDS_PER_DAY,
 };
+use crate::walker::{SatelliteState, WalkerConstellation, WalkerType};
+use chrono::{DateTime, Utc};
 use eframe::egui;
-use egui_dock::{TabViewer, NodeIndex, SurfaceIndex};
 use egui_dock::tab_viewer::OnCloseResponse;
+use egui_dock::{NodeIndex, SurfaceIndex, TabViewer};
 use nalgebra::{Matrix3, Vector3};
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
-use std::sync::{Arc, mpsc};
-use chrono::{DateTime, Utc};
+use std::sync::{mpsc, Arc};
 
 pub(crate) struct ContextMenuState {
     pub(crate) screen_pos: egui::Pos2,
@@ -82,27 +82,48 @@ fn numerical_state_to_positions(
 
     let offsets: &[(isize, isize)] = match wc.isl_neighbors {
         4 => &[(0, 1), (1, 0), (0, -1), (-1, 0)],
-        8 => &[(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)],
+        8 => &[
+            (0, 1),
+            (1, 0),
+            (0, -1),
+            (-1, 0),
+            (1, 1),
+            (1, -1),
+            (-1, 1),
+            (-1, -1),
+        ],
         _ => &[],
     };
 
-    let mut positions: Vec<SatelliteState> = ns.sats.iter().enumerate().map(|(i, sat)| {
-        let plane = i / sats_per_plane;
-        let sat_index = i % sats_per_plane;
-        let [x, y, z] = sat.pos;
-        let r = (x * x + y * y + z * z).sqrt();
-        let lat = (y / r).asin().to_degrees();
-        let lon = -z.atan2(x).to_degrees();
-        // Ascending if moving northward (vy > 0)
-        let ascending = sat.vel[1] > 0.0;
-        SatelliteState {
-            plane, sat_index, x, y, z, lat, lon, ascending,
-            neighbors: Vec::new(),
-            name: None,
-            tle_inclination_deg: None,
-            tle_mean_motion: None,
-        }
-    }).collect();
+    let mut positions: Vec<SatelliteState> = ns
+        .sats
+        .iter()
+        .enumerate()
+        .map(|(i, sat)| {
+            let plane = i / sats_per_plane;
+            let sat_index = i % sats_per_plane;
+            let [x, y, z] = sat.pos;
+            let r = (x * x + y * y + z * z).sqrt();
+            let lat = (y / r).asin().to_degrees();
+            let lon = -z.atan2(x).to_degrees();
+            // Ascending if moving northward (vy > 0)
+            let ascending = sat.vel[1] > 0.0;
+            SatelliteState {
+                plane,
+                sat_index,
+                x,
+                y,
+                z,
+                lat,
+                lon,
+                ascending,
+                neighbors: Vec::new(),
+                name: None,
+                tle_inclination_deg: None,
+                tle_mean_motion: None,
+            }
+        })
+        .collect();
 
     // Build neighbor links (same logic as WalkerConstellation)
     for i in 0..positions.len() {
@@ -113,12 +134,20 @@ fn numerical_state_to_positions(
             let tp = plane + dp;
             let ts = sat_idx + ds;
             let tp = if no_plane_wrap {
-                if tp < 0 || tp >= np { continue; } else { tp }
+                if tp < 0 || tp >= np {
+                    continue;
+                } else {
+                    tp
+                }
             } else {
                 ((tp % np) + np) % np
             };
             let ts = if no_sat_wrap {
-                if ts < 0 || ts >= sp { continue; } else { ts }
+                if ts < 0 || ts >= sp {
+                    continue;
+                } else {
+                    ts
+                }
             } else {
                 ((ts % sp) + sp) % sp
             };
@@ -133,15 +162,126 @@ fn numerical_state_to_positions(
     positions
 }
 
+/// Look up cached neighbour lists for `key`, recomputing if the cache is
+/// missing or stale, and assign them onto `positions[i].neighbors`.
+fn apply_cached_isl_neighbors(
+    cache: &mut HashMap<(TlePreset, Option<usize>), TleIslCache>,
+    key: (TlePreset, Option<usize>),
+    positions: &mut [SatelliteState],
+    k: usize,
+    max_lat_deg: f64,
+    sim_time_s: f64,
+) {
+    let n = positions.len();
+    let idx_of: HashMap<usize, usize> = positions
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.sat_index, i))
+        .collect();
+
+    let needs_recompute = match cache.get(&key) {
+        Some(c) => c.k != k || (sim_time_s - c.sim_time_s).abs() > ISL_CACHE_RECOMPUTE_INTERVAL_S,
+        None => true,
+    };
+
+    if needs_recompute {
+        // Translate the previous (sat_index → sat_index) topology into the
+        // current array space so the kNN can apply hysteresis to it.
+        let prev_array: Option<Vec<Vec<usize>>> = cache.get(&key).map(|c| {
+            let mut v: Vec<Vec<usize>> = vec![Vec::new(); n];
+            for (sat_a, nbrs) in &c.neighbors {
+                let Some(&i) = idx_of.get(sat_a) else {
+                    continue;
+                };
+                for sat_b in nbrs {
+                    if let Some(&j) = idx_of.get(sat_b) {
+                        v[i].push(j);
+                    }
+                }
+            }
+            v
+        });
+        let neighbors_array =
+            crate::walker::compute_knn_neighbor_lists(positions, k, prev_array.as_deref());
+        // Store as (sat_index → [sat_index, ...]) so the cache survives any
+        // future reshuffle of the positions array.
+        let neighbors: Vec<(usize, Vec<usize>)> = neighbors_array
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| !n.is_empty())
+            .map(|(i, nbrs)| {
+                let sat_i = positions[i].sat_index;
+                let nbr_sats = nbrs.iter().map(|&j| positions[j].sat_index).collect();
+                (sat_i, nbr_sats)
+            })
+            .collect();
+        cache.insert(
+            key,
+            TleIslCache {
+                sim_time_s,
+                k,
+                neighbors,
+            },
+        );
+    }
+
+    for sat in positions.iter_mut() {
+        sat.neighbors.clear();
+    }
+    let entry = cache.get(&key).expect("just inserted");
+    // Latitude filter is applied at *apply* time (not bake time) so that a
+    // moving satellite's links visibly tear down and reform as it crosses
+    // the threshold, while the underlying topology stays cached.
+    for (sat_a, nbrs) in &entry.neighbors {
+        let Some(&i) = idx_of.get(sat_a) else {
+            continue;
+        };
+        if positions[i].lat.abs() > max_lat_deg {
+            continue;
+        }
+        for sat_b in nbrs {
+            if let Some(&j) = idx_of.get(sat_b) {
+                if positions[j].lat.abs() > max_lat_deg {
+                    continue;
+                }
+                positions[i].neighbors.push(j);
+            }
+        }
+    }
+}
+
+/// Cached k-nearest-neighbour topology for a TLE preset (or shell).
+///
+/// Keyed by satellite identity (`sat_index`, the stable TLE row index) rather
+/// than array position, so transient SGP4 failures that drop a single satellite
+/// from one frame's `positions` don't invalidate the whole topology.
+///
+/// Recomputed only when sim time advances past `ISL_CACHE_RECOMPUTE_INTERVAL_S`
+/// or `k` changes. Topology evolves on the order of minutes; rebuilding it
+/// every render frame is wasteful.
+pub(crate) struct TleIslCache {
+    pub(crate) sim_time_s: f64,
+    pub(crate) k: usize,
+    /// `(sat_index_a, [sat_index_b, ...])` with `sat_index_b > sat_index_a`.
+    pub(crate) neighbors: Vec<(usize, Vec<usize>)>,
+}
+
+/// Sim-time between ISL topology recomputes. Topology genuinely shifts only
+/// over many minutes of orbital evolution; recomputing more often introduces
+/// visible flicker at recompute boundaries (especially at high time-warp).
+const ISL_CACHE_RECOMPUTE_INTERVAL_S: f64 = 300.0;
+
 pub(crate) struct ViewerState {
     pub(crate) tabs: Vec<TabConfig>,
     pub(crate) camera_id_counter: usize,
     pub(crate) tab_counter: usize,
     pub(crate) torus_zoom: f64,
-    pub(crate) planet_textures: HashMap<(CelestialBody, Skin, TextureResolution), Arc<EarthTexture>>,
+    pub(crate) planet_textures:
+        HashMap<(CelestialBody, Skin, TextureResolution), Arc<EarthTexture>>,
     pub(crate) ring_textures: HashMap<CelestialBody, Arc<RingTexture>>,
     pub(crate) cloud_textures: HashMap<TextureResolution, Arc<EarthTexture>>,
-    pub(crate) planet_image_handles: HashMap<(CelestialBody, Skin, TextureResolution), egui::TextureHandle>,
+    pub(crate) planet_image_handles:
+        HashMap<(CelestialBody, Skin, TextureResolution), egui::TextureHandle>,
     pub(crate) texture_resolution: TextureResolution,
     pub(crate) last_rotation: Option<Matrix3<f64>>,
     pub(crate) earth_resolution: usize,
@@ -149,7 +289,9 @@ pub(crate) struct ViewerState {
     pub(crate) texture_load_state: TextureLoadState,
     pub(crate) pending_body: Option<(CelestialBody, Skin, TextureResolution)>,
     #[cfg(target_arch = "wasm32")]
-    pub(crate) pending_planet_texture_fetches: std::collections::HashSet<(CelestialBody, Skin, TextureResolution)>,
+    pub(crate) pending_planet_texture_fetches:
+        std::collections::HashSet<(CelestialBody, Skin, TextureResolution)>,
+    pub(crate) tle_isl_cache: HashMap<(TlePreset, Option<usize>), TleIslCache>,
     pub(crate) dark_mode: bool,
     pub(crate) show_info: bool,
     pub(crate) real_time: f64,
@@ -170,6 +312,10 @@ pub(crate) struct ViewerState {
     pub(crate) show_cities: bool,
     pub(crate) active_tab_idx: usize,
     pub(crate) prev_active_tab_idx: usize,
+    pub(crate) command_mode: bool,
+    pub(crate) command_buffer: String,
+    pub(crate) last_pointer_pos: Option<egui::Pos2>,
+    pub(crate) last_pointer_move_time: f64,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) geo_data: GeoLoadState,
     #[cfg(not(target_arch = "wasm32"))]
@@ -199,6 +345,7 @@ pub(crate) struct ViewerState {
     pub(crate) view_height: f32,
     pub(crate) solar_system_handles: HashMap<CelestialBody, egui::TextureHandle>,
     pub(crate) planet_sizes_handles: HashMap<CelestialBody, egui::TextureHandle>,
+    pub(crate) slide_textures: HashMap<String, egui::load::SizedTexture>,
     pub(crate) ss_last_render_instant: Option<web_time::Instant>,
     pub(crate) planet_sizes_t: f64,
     pub(crate) planet_sizes_auto_zoom: bool,
@@ -213,7 +360,8 @@ pub(crate) struct ViewerState {
     pub(crate) asteroid_sprite: Option<egui::TextureHandle>,
     pub(crate) asteroid_state: crate::solar_system::AsteroidLoadState,
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) asteroid_rx: Option<mpsc::Receiver<Result<Vec<crate::solar_system::Asteroid>, String>>>,
+    pub(crate) asteroid_rx:
+        Option<mpsc::Receiver<Result<Vec<crate::solar_system::Asteroid>, String>>>,
     pub(crate) hohmann: crate::solar_system::HohmannState,
     pub(crate) conjunction_body_a: CelestialBody,
     pub(crate) conjunction_body_b: CelestialBody,
@@ -229,17 +377,31 @@ pub(crate) struct ViewerState {
     pub(crate) editing_tab: Option<usize>,
 }
 
-
 impl TabViewer for ViewerState {
     type Tab = usize;
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        self.tabs.get(*tab).map(|t| t.name.as_str()).unwrap_or("?").into()
+        self.tabs
+            .get(*tab)
+            .map(|t| t.name.as_str())
+            .unwrap_or("?")
+            .into()
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         if *tab < self.tabs.len() {
-            if self.prev_active_tab_idx != *tab && self.prev_active_tab_idx < self.tabs.len() {
+            // Slide tabs are non-disruptive: switching to/from them must not
+            // reset the simulation state on the other side.
+            let prev_is_slides = self
+                .tabs
+                .get(self.prev_active_tab_idx)
+                .map_or(false, |t| t.slides.is_some());
+            let curr_is_slides = self.tabs[*tab].slides.is_some();
+            let crossing_slide_boundary = prev_is_slides || curr_is_slides;
+            if self.prev_active_tab_idx != *tab
+                && self.prev_active_tab_idx < self.tabs.len()
+                && !crossing_slide_boundary
+            {
                 // Full reset on tab switch so each demo opens in its designed
                 // initial state, regardless of whatever state the previous tab
                 // accumulated.
@@ -302,14 +464,19 @@ impl TabViewer for ViewerState {
         self.pending_add_tab = Some(new_idx);
     }
 
-    fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab, _surface: SurfaceIndex, _node: NodeIndex) {
+    fn context_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        tab: &mut Self::Tab,
+        _surface: SurfaceIndex,
+        _node: NodeIndex,
+    ) {
         if ui.button("Edit tab info...").clicked() {
             self.editing_tab = Some(*tab);
             ui.close();
         }
     }
 }
-
 
 impl ViewerState {
     #[cfg(not(target_arch = "wasm32"))]
@@ -342,6 +509,11 @@ impl ViewerState {
         }
         self.last_frame_instant = Some(now);
 
+        if self.tabs[tab_idx].slides.is_some() {
+            self.render_slides_ui(ui, tab_idx);
+            return;
+        }
+
         if self.tabs[tab_idx].show_fps {
             let fps_text = format!("{:.0} FPS", self.fps_smooth);
             let rect = ui.available_rect_before_wrap();
@@ -362,7 +534,11 @@ impl ViewerState {
                 egui::pos2(rect.left(), rect.bottom() - 3.0),
                 egui::vec2(rect.width() * frac, 3.0),
             );
-            ui.painter().rect_filled(bar_rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 80));
+            ui.painter().rect_filled(
+                bar_rect,
+                0.0,
+                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 80),
+            );
         }
 
         if self.auto_cycle_tabs && !self.show_tab_info {
@@ -393,11 +569,10 @@ impl ViewerState {
                             font.clone(),
                             egui::Color32::WHITE,
                         );
-                        let title_h = painter.layout_no_wrap(
-                            tab.title.clone(),
-                            font,
-                            egui::Color32::WHITE,
-                        ).rect.height();
+                        let title_h = painter
+                            .layout_no_wrap(tab.title.clone(), font, egui::Color32::WHITE)
+                            .rect
+                            .height();
                         y += title_h + 8.0;
                     }
                     if has_desc {
@@ -412,13 +587,7 @@ impl ViewerState {
                             font.clone(),
                             egui::Color32::BLACK,
                         );
-                        painter.text(
-                            pos,
-                            egui::Align2::LEFT_TOP,
-                            &plain,
-                            font,
-                            desc_color,
-                        );
+                        painter.text(pos, egui::Align2::LEFT_TOP, &plain, font, desc_color);
                     }
                 }
 
@@ -447,11 +616,14 @@ impl ViewerState {
                 let mut y = rect.bottom() - 20.0;
                 if has_desc {
                     let plain = crate::config::strip_bold_markers(&tab.description);
-                    y -= painter.layout_no_wrap(
-                        plain.clone(),
-                        egui::FontId::proportional(18.0),
-                        egui::Color32::WHITE,
-                    ).rect.height();
+                    y -= painter
+                        .layout_no_wrap(
+                            plain.clone(),
+                            egui::FontId::proportional(18.0),
+                            egui::Color32::WHITE,
+                        )
+                        .rect
+                        .height();
                     painter.text(
                         egui::pos2(rect.center().x, y),
                         egui::Align2::CENTER_BOTTOM,
@@ -477,7 +649,9 @@ impl ViewerState {
             for camera in std::mem::take(&mut planet.pending_cameras) {
                 planet.satellite_cameras.push(camera);
             }
-            planet.satellite_cameras.retain(|c| !planet.cameras_to_remove.contains(&c.id));
+            planet
+                .satellite_cameras
+                .retain(|c| !planet.cameras_to_remove.contains(&c.id));
             planet.cameras_to_remove.clear();
         }
 
@@ -510,9 +684,14 @@ impl ViewerState {
             );
 
             ui.scope_builder(egui::UiBuilder::new().max_rect(planet_rect), |ui| {
-                let (should_add, should_remove) = self.render_planet_ui(ui, tab_idx, planet_idx, num_planets);
-                if should_add { add_planet = true; }
-                if should_remove { planet_to_remove = Some(planet_idx); }
+                let (should_add, should_remove) =
+                    self.render_planet_ui(ui, tab_idx, planet_idx, num_planets);
+                if should_add {
+                    add_planet = true;
+                }
+                if should_remove {
+                    planet_to_remove = Some(planet_idx);
+                }
             });
 
             // Vertical separator between columns within the same row.
@@ -546,6 +725,25 @@ impl ViewerState {
             self.tabs[tab_idx].add_planet();
         }
 
+        if let Some(slide_number) = self.tabs[tab_idx].presentation_slide_number {
+            let text = slide_number.to_string();
+            let pos = available_rect.right_bottom() + egui::vec2(-22.0, -16.0);
+            ui.painter().text(
+                pos + egui::vec2(1.0, 1.0),
+                egui::Align2::RIGHT_BOTTOM,
+                &text,
+                egui::FontId::proportional(16.0),
+                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 120),
+            );
+            ui.painter().text(
+                pos,
+                egui::Align2::RIGHT_BOTTOM,
+                text,
+                egui::FontId::proportional(16.0),
+                ui.visuals().weak_text_color(),
+            );
+        }
+
         if self.dragging_place.is_some() {
             self.context_menu = None;
         }
@@ -559,22 +757,41 @@ impl ViewerState {
                     .fixed_pos(cm.screen_pos)
                     .order(egui::Order::Foreground)
                     .show(ui.ctx(), |ui| {
-                        egui::Frame::popup(ui.style()).show(ui, |ui| {
-                            ui.label(format!(
-                                "{:.2}°, {:.2}°",
-                                cm_lat, cm_lon,
-                            ));
-                            ui.separator();
-                            let add_gs = ui.button("Add Ground Station").on_hover_text("Place a ground station at this location").clicked();
-                            let add_aoi = ui.button("Add Area of Interest").on_hover_text("Define an area of interest at this location").clicked();
-                            (add_gs, add_aoi)
-                        }).inner
+                        egui::Frame::popup(ui.style())
+                            .show(ui, |ui| {
+                                ui.label(format!("{:.2}°, {:.2}°", cm_lat, cm_lon,));
+                                ui.separator();
+                                let gs_locked = self.tabs[tab_idx]
+                                    .planets
+                                    .get(cm_planet_idx)
+                                    .map(|p| p.has_running_cfs())
+                                    .unwrap_or(false);
+                                let add_gs = ui
+                                    .add_enabled(
+                                        !gs_locked,
+                                        egui::Button::new("Add Ground Station"),
+                                    )
+                                    .on_hover_text(if gs_locked {
+                                        "Locked: cFS is running"
+                                    } else {
+                                        "Place a ground station at this location"
+                                    })
+                                    .clicked();
+                                let add_aoi = ui
+                                    .button("Add Area of Interest")
+                                    .on_hover_text("Define an area of interest at this location")
+                                    .clicked();
+                                (add_gs, add_aoi)
+                            })
+                            .inner
                     });
                 let (add_gs, add_aoi) = area_resp.inner;
-                let clicked_outside = ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
-                    && !area_resp.response.rect.contains(
-                        ui.input(|i| i.pointer.interact_pos().unwrap_or_default()),
-                    );
+                let clicked_outside = ui
+                    .input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
+                    && !area_resp
+                        .response
+                        .rect
+                        .contains(ui.input(|i| i.pointer.interact_pos().unwrap_or_default()));
                 if add_gs {
                     if let Some(planet) = self.tabs[tab_idx].planets.get_mut(cm_planet_idx) {
                         let n = planet.ground_stations.len() + 1;
@@ -600,6 +817,8 @@ impl ViewerState {
                             ground_station_idx: None,
                             job_mode: crate::config::AoiJobMode::Route,
                             job_n: 3,
+                            reducer_placement:
+                                crate::config::SpaceCompReducerPlacement::NearMappers,
                             selected: false,
                         });
                     }
@@ -618,11 +837,15 @@ impl ViewerState {
                 let ep_screen_pos = ep.screen_pos;
                 let ep_just_opened = ep.just_opened;
                 let title = if ep_is_gs {
-                    self.tabs[tab_idx].planets.get(ep_planet_idx)
+                    self.tabs[tab_idx]
+                        .planets
+                        .get(ep_planet_idx)
                         .and_then(|p| p.ground_stations.get(ep_idx))
                         .map(|gs| format!("Edit GS: {}", gs.name))
                 } else {
-                    self.tabs[tab_idx].planets.get(ep_planet_idx)
+                    self.tabs[tab_idx]
+                        .planets
+                        .get(ep_planet_idx)
                         .and_then(|p| p.areas_of_interest.get(ep_idx))
                         .map(|aoi| format!("Edit AOI: {}", aoi.name))
                 };
@@ -735,6 +958,20 @@ impl ViewerState {
                                         if aoi.job_mode == crate::config::AoiJobMode::SpaceComp {
                                             ui.label("n");
                                             ui.add(egui::DragValue::new(&mut aoi.job_n).range(1..=50).speed(0.2));
+                                            egui::ComboBox::from_id_salt("edit_aoi_reducer_placement")
+                                                .selected_text(aoi.reducer_placement.label())
+                                                .show_ui(ui, |ui| {
+                                                    ui.selectable_value(
+                                                        &mut aoi.reducer_placement,
+                                                        crate::config::SpaceCompReducerPlacement::NearMappers,
+                                                        "Near mappers",
+                                                    );
+                                                    ui.selectable_value(
+                                                        &mut aoi.reducer_placement,
+                                                        crate::config::SpaceCompReducerPlacement::NearGroundStation,
+                                                        "Near GS",
+                                                    );
+                                                });
                                         }
                                     });
                                     ui.separator();
@@ -746,14 +983,19 @@ impl ViewerState {
                     let should_delete = delete.and_then(|r| r.inner).unwrap_or(false);
                     if !open || should_delete {
                         if should_delete {
-                            if let Some(planet) = self.tabs[tab_idx].planets.get_mut(ep_planet_idx) {
+                            if let Some(planet) = self.tabs[tab_idx].planets.get_mut(ep_planet_idx)
+                            {
                                 if ep_is_gs {
                                     if ep_idx < planet.ground_stations.len() {
                                         planet.ground_stations.remove(ep_idx);
                                         for aoi in &mut planet.areas_of_interest {
                                             match aoi.ground_station_idx {
-                                                Some(i) if i == ep_idx => aoi.ground_station_idx = None,
-                                                Some(i) if i > ep_idx => aoi.ground_station_idx = Some(i - 1),
+                                                Some(i) if i == ep_idx => {
+                                                    aoi.ground_station_idx = None
+                                                }
+                                                Some(i) if i > ep_idx => {
+                                                    aoi.ground_station_idx = Some(i - 1)
+                                                }
                                                 _ => {}
                                             }
                                         }
@@ -776,7 +1018,48 @@ impl ViewerState {
         }
     }
 
-    fn render_planet_ui(&mut self, ui: &mut egui::Ui, tab_idx: usize, planet_idx: usize, num_planets: usize) -> (bool, bool) {
+    fn render_slides_ui(&mut self, ui: &mut egui::Ui, tab_idx: usize) {
+        let Some(deck) = self.tabs[tab_idx].slides.as_ref() else {
+            return;
+        };
+        let total = deck.len();
+        if total == 0 {
+            return;
+        }
+        let current = deck.current.min(total - 1);
+        let uri = deck.uri(current);
+
+        let avail = ui.available_rect_before_wrap();
+        let preload_start = tab_idx.saturating_sub(2);
+        let preload_end = (tab_idx + 3).min(self.tabs.len());
+        for preload_idx in preload_start..preload_end {
+            if let Some(deck) = self.tabs[preload_idx].slides.as_ref() {
+                if deck.len() > 0 {
+                    let preload_uri = deck.uri(deck.current.min(deck.len() - 1));
+                    crate::slides::preload_uri(ui.ctx(), &preload_uri, avail.size());
+                }
+            }
+        }
+        ui.painter()
+            .rect_filled(avail, 0.0, ui.visuals().panel_fill);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(avail), |ui| {
+            ui.centered_and_justified(|ui| {
+                ui.add(
+                    egui::Image::new(uri.as_str())
+                        .maintain_aspect_ratio(true)
+                        .fit_to_exact_size(avail.size()),
+                );
+            });
+        });
+    }
+
+    fn render_planet_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        tab_idx: usize,
+        planet_idx: usize,
+        num_planets: usize,
+    ) -> (bool, bool) {
         #[cfg(not(target_arch = "wasm32"))]
         let constrained_width = ui.available_width();
         let mut add_planet = false;
@@ -800,111 +1083,140 @@ impl ViewerState {
                 ui.label(egui::RichText::new(&planet_name).strong().size(16.0));
             });
         } else if self.ui_visible {
-        egui::ScrollArea::horizontal()
-            .id_salt(("planet_hscroll", tab_idx, planet_idx))
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-            .show(ui, |ui| { ui.horizontal(|ui| {
-            ui.strong(&planet_name);
-            if ui.small_button("+").clicked() {
-                add_planet = true;
-            }
-            if num_planets > 1 {
-                let btn = egui::Button::new(
-                    egui::RichText::new("×").color(egui::Color32::WHITE)
-                ).fill(egui::Color32::from_rgb(180, 60, 60)).small();
-                if ui.add(btn).clicked() {
-                    remove_planet = true;
-                }
-            }
-
-            ui.separator();
-
-            egui::ComboBox::from_id_salt(format!("body_{}_{}", tab_idx, planet_idx))
-                .selected_text(current_body.label())
-                .show_ui(ui, |ui| {
-                    let mut last_cat = "";
-                    let mut last_parent = None::<CelestialBody>;
-                    for body in CelestialBody::ALL {
-                        let cat = body.category();
-                        if cat != last_cat {
-                            if !last_cat.is_empty() {
-                                ui.separator();
-                            }
-                            ui.label(egui::RichText::new(cat).small().weak());
-                            last_cat = cat;
-                            last_parent = None;
+            egui::ScrollArea::horizontal()
+                .id_salt(("planet_hscroll", tab_idx, planet_idx))
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.strong(&planet_name);
+                        if ui.small_button("+").clicked() {
+                            add_planet = true;
                         }
-                        if cat == "Moons" {
-                            let parent = body.parent_body();
-                            if parent != last_parent {
-                                if last_parent.is_some() {
-                                    ui.separator();
-                                }
-                                if let Some(p) = parent {
-                                    ui.label(egui::RichText::new(
-                                        format!("  {}", p.label())
-                                    ).small().weak());
-                                }
-                                last_parent = parent;
+                        if num_planets > 1 {
+                            let btn = egui::Button::new(
+                                egui::RichText::new("×").color(egui::Color32::WHITE),
+                            )
+                            .fill(egui::Color32::from_rgb(180, 60, 60))
+                            .small();
+                            if ui.add(btn).clicked() {
+                                remove_planet = true;
                             }
                         }
-                        if ui.selectable_value(&mut new_body, body, body.label()).changed() {
+
+                        ui.separator();
+
+                        egui::ComboBox::from_id_salt(format!("body_{}_{}", tab_idx, planet_idx))
+                            .selected_text(current_body.label())
+                            .show_ui(ui, |ui| {
+                                let mut last_cat = "";
+                                let mut last_parent = None::<CelestialBody>;
+                                for body in CelestialBody::ALL {
+                                    let cat = body.category();
+                                    if cat != last_cat {
+                                        if !last_cat.is_empty() {
+                                            ui.separator();
+                                        }
+                                        ui.label(egui::RichText::new(cat).small().weak());
+                                        last_cat = cat;
+                                        last_parent = None;
+                                    }
+                                    if cat == "Moons" {
+                                        let parent = body.parent_body();
+                                        if parent != last_parent {
+                                            if last_parent.is_some() {
+                                                ui.separator();
+                                            }
+                                            if let Some(p) = parent {
+                                                ui.label(
+                                                    egui::RichText::new(format!("  {}", p.label()))
+                                                        .small()
+                                                        .weak(),
+                                                );
+                                            }
+                                            last_parent = parent;
+                                        }
+                                    }
+                                    if ui
+                                        .selectable_value(&mut new_body, body, body.label())
+                                        .changed()
+                                    {
+                                        reset_skin = true;
+                                    }
+                                }
+                            });
+                        if ui.small_button("▶").clicked() {
+                            let current_idx = CelestialBody::ALL
+                                .iter()
+                                .position(|&b| b == current_body)
+                                .unwrap_or(0);
+                            let next_idx = (current_idx + 1) % CelestialBody::ALL.len();
+                            new_body = CelestialBody::ALL[next_idx];
                             reset_skin = true;
                         }
-                    }
-                });
-            if ui.small_button("▶").clicked() {
-                let current_idx = CelestialBody::ALL.iter().position(|&b| b == current_body).unwrap_or(0);
-                let next_idx = (current_idx + 1) % CelestialBody::ALL.len();
-                new_body = CelestialBody::ALL[next_idx];
-                reset_skin = true;
-            }
 
-            let available_skins = new_body.available_skins();
-            if available_skins.len() > 1 {
-                egui::ComboBox::from_id_salt(format!("skin_{}_{}", tab_idx, planet_idx))
-                    .selected_text(new_skin.label())
-                    .show_ui(ui, |ui| {
-                        for skin in available_skins {
-                            ui.selectable_value(&mut new_skin, *skin, skin.label());
+                        let available_skins = new_body.available_skins();
+                        if available_skins.len() > 1 {
+                            egui::ComboBox::from_id_salt(format!(
+                                "skin_{}_{}",
+                                tab_idx, planet_idx
+                            ))
+                            .selected_text(new_skin.label())
+                            .show_ui(ui, |ui| {
+                                for skin in available_skins {
+                                    ui.selectable_value(&mut new_skin, *skin, skin.label());
+                                }
+                            });
+                        }
+
+                        ui.separator();
+
+                        if ui.selectable_label(show_stats, "Stats").clicked() {
+                            self.tabs[tab_idx].show_stats = !show_stats;
+                        }
+                        if ui.selectable_label(show_places, "Ground").clicked() {
+                            self.tabs[tab_idx].planets[planet_idx].show_gs_aoi_window =
+                                !show_places;
+                        }
+                        if ui.selectable_label(show_config, "Space").clicked() {
+                            self.tabs[tab_idx].planets[planet_idx].show_config_window =
+                                !show_config;
+                        }
+                        if ui
+                            .add_enabled(show_config, egui::Button::new("Live").selected(show_tle))
+                            .clicked()
+                        {
+                            self.tabs[tab_idx].planets[planet_idx].show_tle_window = !show_tle;
+                        }
+                        let show_conj =
+                            self.tabs[tab_idx].planets[planet_idx].show_conjunction_window;
+                        if ui.selectable_label(show_conj, "Conj").clicked() {
+                            self.tabs[tab_idx].planets[planet_idx].show_conjunction_window =
+                                !show_conj;
+                        }
+                        let show_rad = self.tabs[tab_idx].planets[planet_idx].show_radiation_window;
+                        if ui.selectable_label(show_rad, "Rad").clicked() {
+                            self.tabs[tab_idx].planets[planet_idx].show_radiation_window =
+                                !show_rad;
+                        }
+                        {
+                            let has_moons = !self.tabs[tab_idx].planets[planet_idx]
+                                .celestial_body
+                                .moons()
+                                .is_empty();
+                            let show_m = self.tabs[tab_idx].planets[planet_idx].show_moons_window;
+                            if ui
+                                .add_enabled(has_moons, egui::Button::new("Moons").selected(show_m))
+                                .clicked()
+                            {
+                                self.tabs[tab_idx].planets[planet_idx].show_moons_window = !show_m;
+                            }
+                        }
+                        let show_fps = self.tabs[tab_idx].show_fps;
+                        if ui.selectable_label(show_fps, "FPS").clicked() {
+                            self.tabs[tab_idx].show_fps = !show_fps;
                         }
                     });
-            }
-
-            ui.separator();
-
-            if ui.selectable_label(show_stats, "Stats").clicked() {
-                self.tabs[tab_idx].show_stats = !show_stats;
-            }
-            if ui.selectable_label(show_places, "Ground").clicked() {
-                self.tabs[tab_idx].planets[planet_idx].show_gs_aoi_window = !show_places;
-            }
-            if ui.selectable_label(show_config, "Space").clicked() {
-                self.tabs[tab_idx].planets[planet_idx].show_config_window = !show_config;
-            }
-            if ui.add_enabled(show_config, egui::Button::new("Live").selected(show_tle)).clicked() {
-                self.tabs[tab_idx].planets[planet_idx].show_tle_window = !show_tle;
-            }
-            let show_conj = self.tabs[tab_idx].planets[planet_idx].show_conjunction_window;
-            if ui.selectable_label(show_conj, "Conj").clicked() {
-                self.tabs[tab_idx].planets[planet_idx].show_conjunction_window = !show_conj;
-            }
-            let show_rad = self.tabs[tab_idx].planets[planet_idx].show_radiation_window;
-            if ui.selectable_label(show_rad, "Rad").clicked() {
-                self.tabs[tab_idx].planets[planet_idx].show_radiation_window = !show_rad;
-            }
-            {
-                let has_moons = !self.tabs[tab_idx].planets[planet_idx].celestial_body.moons().is_empty();
-                let show_m = self.tabs[tab_idx].planets[planet_idx].show_moons_window;
-                if ui.add_enabled(has_moons, egui::Button::new("Moons").selected(show_m)).clicked() {
-                    self.tabs[tab_idx].planets[planet_idx].show_moons_window = !show_m;
-                }
-            }
-            let show_fps = self.tabs[tab_idx].show_fps;
-            if ui.selectable_label(show_fps, "FPS").clicked() {
-                self.tabs[tab_idx].show_fps = !show_fps;
-            }
-        }); });
+                });
         } // ui_visible
 
         if remove_planet {
@@ -940,7 +1252,9 @@ impl ViewerState {
 
             let current_time = self.tabs[tab_idx].settings.time;
             let body = planet.celestial_body;
-            let constellations_clone: Vec<_> = planet.constellations.iter()
+            let constellations_clone: Vec<_> = planet
+                .constellations
+                .iter()
                 .filter(|c| !c.hidden)
                 .cloned()
                 .collect();
@@ -948,7 +1262,9 @@ impl ViewerState {
             let mut pass_cache = planet.pass_cache.clone();
 
             let any_constellations = !constellations_clone.is_empty();
-            let selected_sats: Vec<(usize, usize, usize)> = planet.satellite_cameras.iter()
+            let selected_sats: Vec<(usize, usize, usize)> = planet
+                .satellite_cameras
+                .iter()
                 .map(|c| (c.constellation_idx, c.plane, c.sat_index))
                 .collect();
 
@@ -961,21 +1277,37 @@ impl ViewerState {
                 let window_sec = pass_cache.prediction_window_min * 60.0;
 
                 for (idx, gs) in ground_stations.iter().enumerate() {
-                    if !gs.selected { continue; }
+                    if !gs.selected {
+                        continue;
+                    }
                     let p = crate::pass::compute_passes(
-                        gs.lat, gs.lon, gs.radius_km,
-                        &constellations_clone, &selected_sats,
-                        current_time, window_sec, body, start_ts,
+                        gs.lat,
+                        gs.lon,
+                        gs.radius_km,
+                        &constellations_clone,
+                        &selected_sats,
+                        current_time,
+                        window_sec,
+                        body,
+                        start_ts,
                     );
                     pass_cache.passes.insert(idx, p);
                 }
                 let gs_count = ground_stations.len();
                 for (idx, aoi) in areas_of_interest.iter().enumerate() {
-                    if !aoi.selected { continue; }
+                    if !aoi.selected {
+                        continue;
+                    }
                     let p = crate::pass::compute_passes(
-                        aoi.lat, aoi.lon, aoi.radius_km,
-                        &constellations_clone, &selected_sats,
-                        current_time, window_sec, body, start_ts,
+                        aoi.lat,
+                        aoi.lon,
+                        aoi.radius_km,
+                        &constellations_clone,
+                        &selected_sats,
+                        current_time,
+                        window_sec,
+                        body,
+                        start_ts,
                     );
                     pass_cache.passes.insert(gs_count + idx, p);
                 }
@@ -984,6 +1316,7 @@ impl ViewerState {
 
             let pass_cache_for_ui = pass_cache.clone();
             let mut fast_forward_to: Option<(f64, f64, f64)> = None;
+            let gs_locked = planet.has_running_cfs();
 
             egui::Window::new(format!("Ground - {}", planet_name))
                 .open(&mut self.tabs[tab_idx].planets[planet_idx].show_gs_aoi_window)
@@ -997,22 +1330,25 @@ impl ViewerState {
                         let mut gs_pass_clicked: Option<usize> = None;
                         for (idx, gs) in ground_stations.iter_mut().enumerate() {
                             left.horizontal(|ui| {
-                                if ui.add_sized([70.0, 18.0], egui::TextEdit::singleline(&mut gs.name)).changed() {
+                                if ui.add_enabled(!gs_locked, egui::TextEdit::singleline(&mut gs.name).desired_width(70.0)).changed() {
                                     gs_changed = true;
                                 }
                                 ui.label("Lat:");
-                                if ui.add(egui::DragValue::new(&mut gs.lat).range(-90.0..=90.0).speed(0.5).suffix("°")).changed() {
+                                if ui.add_enabled(!gs_locked, egui::DragValue::new(&mut gs.lat).range(-90.0..=90.0).speed(0.5).suffix("°")).changed() {
                                     gs_changed = true;
                                 }
                                 ui.label("Lon:");
-                                if ui.add(egui::DragValue::new(&mut gs.lon).range(-180.0..=180.0).speed(0.5).suffix("°")).changed() {
+                                if ui.add_enabled(!gs_locked, egui::DragValue::new(&mut gs.lon).range(-180.0..=180.0).speed(0.5).suffix("°")).changed() {
                                     gs_changed = true;
                                 }
                                 ui.label("R:");
                                 if ui.add(egui::DragValue::new(&mut gs.radius_km).range(1.0..=5000.0).speed(10.0).suffix(" km")).changed() {
                                     gs_changed = true;
                                 }
-                                if ui.small_button("×").clicked() {
+                                if ui.add_enabled(!gs_locked, egui::Button::new("×").small())
+                                    .on_hover_text(if gs_locked { "Locked: cFS is running" } else { "Delete" })
+                                    .clicked()
+                                {
                                     gs_to_remove = Some(idx);
                                 }
                                 if ui.checkbox(&mut gs.selected, "Track").on_hover_text("Show satellite passes over this station").changed() {
@@ -1121,6 +1457,24 @@ impl ViewerState {
                                     if ui.add(egui::DragValue::new(&mut aoi.job_n).range(1..=50).speed(0.2)).changed() {
                                         aoi_changed = true;
                                     }
+                                    egui::ComboBox::from_id_salt(format!("aoi_reducer_placement_{}", idx))
+                                        .selected_text(aoi.reducer_placement.label())
+                                        .show_ui(ui, |ui| {
+                                            if ui.selectable_value(
+                                                &mut aoi.reducer_placement,
+                                                crate::config::SpaceCompReducerPlacement::NearMappers,
+                                                "Near mappers",
+                                            ).changed() {
+                                                aoi_changed = true;
+                                            }
+                                            if ui.selectable_value(
+                                                &mut aoi.reducer_placement,
+                                                crate::config::SpaceCompReducerPlacement::NearGroundStation,
+                                                "Near GS",
+                                            ).changed() {
+                                                aoi_changed = true;
+                                            }
+                                        });
                                 }
                             });
                         }
@@ -1147,6 +1501,7 @@ impl ViewerState {
                                 ground_station_idx: None,
                                 job_mode: crate::config::AoiJobMode::Route,
                                 job_n: 3,
+                                reducer_placement: crate::config::SpaceCompReducerPlacement::NearMappers,
                                 selected: false,
                             });
                             aoi_changed = true;
@@ -1351,7 +1706,8 @@ impl ViewerState {
             self.tabs[tab_idx].planets[planet_idx].pass_cache = pass_cache;
             if let Some((t, lat, lon)) = fast_forward_to {
                 self.tabs[tab_idx].settings.time = t;
-                let sim_time = self.start_timestamp + chrono::Duration::milliseconds((t * 1000.0) as i64);
+                let sim_time =
+                    self.start_timestamp + chrono::Duration::milliseconds((t * 1000.0) as i64);
                 let gmst = crate::time::greenwich_mean_sidereal_time(sim_time);
                 let body_rot = crate::time::body_rotation_angle(body, t, gmst);
                 let target_lon = if self.tabs[tab_idx].settings.earth_fixed_camera {
@@ -1359,7 +1715,8 @@ impl ViewerState {
                 } else {
                     lon.to_radians() + body_rot
                 };
-                self.tabs[tab_idx].settings.rotation = crate::math::lat_lon_to_matrix(lat.to_radians(), target_lon);
+                self.tabs[tab_idx].settings.rotation =
+                    crate::math::lat_lon_to_matrix(lat.to_radians(), target_lon);
             }
         }
 
@@ -1383,10 +1740,14 @@ impl ViewerState {
                     ui.label(format!("  Radius: {:.0} km", planet_radius));
                     ui.label(format!("  μ: {:.0} km³/s²", mu));
                     let surface_gravity = mu / (planet_radius * planet_radius);
-                    ui.label(format!("  Surface gravity: {:.2} m/s²", surface_gravity * 1000.0));
-                    let escape_velocity = (2.0 * mu * 1e9 / (planet_radius * 1000.0)).sqrt() / 1000.0;
+                    ui.label(format!(
+                        "  Surface gravity: {:.2} m/s²",
+                        surface_gravity * 1000.0
+                    ));
+                    let escape_velocity =
+                        (2.0 * mu * 1e9 / (planet_radius * 1000.0)).sqrt() / 1000.0;
                     ui.label(format!("  Escape velocity: {:.2} km/s", escape_velocity));
-                    let geo_orbit = (mu * (SECONDS_PER_DAY / (2.0 * PI)).powi(2)).powf(1.0/3.0);
+                    let geo_orbit = (mu * (SECONDS_PER_DAY / (2.0 * PI)).powi(2)).powf(1.0 / 3.0);
                     let geo_altitude = geo_orbit - planet_radius;
                     if geo_altitude > 0.0 {
                         ui.label(format!("  Geostationary alt: {:.0} km", geo_altitude));
@@ -1404,31 +1765,51 @@ impl ViewerState {
                                 let velocity_ms = (mu * 1e9 / orbit_radius_m).sqrt();
                                 let velocity_kmh = velocity_ms * 3.6;
 
-                                let intra_plane_dist = orbit_radius * (2.0 * (1.0 - (2.0 * PI / cons.sats_per_plane as f64).cos())).sqrt();
+                                let intra_plane_dist = orbit_radius
+                                    * (2.0 * (1.0 - (2.0 * PI / cons.sats_per_plane as f64).cos()))
+                                        .sqrt();
                                 let inc_rad = cons.inclination.to_radians();
-                                let base_inter = orbit_radius * (2.0 * (1.0 - (2.0 * PI / cons.num_planes as f64).cos())).sqrt();
+                                let base_inter = orbit_radius
+                                    * (2.0 * (1.0 - (2.0 * PI / cons.num_planes as f64).cos()))
+                                        .sqrt();
                                 let inter_plane_dist = base_inter * inc_rad.sin().abs().max(0.1);
                                 let ground_dist = cons.altitude_km;
 
-                                let intra_latency_ms = intra_plane_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
-                                let inter_latency_ms = inter_plane_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
+                                let intra_latency_ms =
+                                    intra_plane_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
+                                let inter_latency_ms =
+                                    inter_plane_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
                                 let ground_latency_ms = ground_dist / SPEED_OF_LIGHT_KM_S * 1000.0;
 
                                 ui.label(format!("  Velocity: {:.0} km/h", velocity_kmh));
-                                ui.label(format!("  Intra-plane: {:.0} km ({:.2} ms)", intra_plane_dist, intra_latency_ms));
-                                ui.label(format!("  Inter-plane: {:.0} km ({:.2} ms)", inter_plane_dist, inter_latency_ms));
-                                ui.label(format!("  Ground: {:.0} km ({:.2} ms)", ground_dist, ground_latency_ms));
+                                ui.label(format!(
+                                    "  Intra-plane: {:.0} km ({:.2} ms)",
+                                    intra_plane_dist, intra_latency_ms
+                                ));
+                                ui.label(format!(
+                                    "  Inter-plane: {:.0} km ({:.2} ms)",
+                                    inter_plane_dist, inter_latency_ms
+                                ));
+                                ui.label(format!(
+                                    "  Ground: {:.0} km ({:.2} ms)",
+                                    ground_dist, ground_latency_ms
+                                ));
                             }
                         }
                         ui.separator();
                     }
 
-                    let live_data: Vec<_> = TlePreset::ALL.iter()
+                    let live_data: Vec<_> = TlePreset::ALL
+                        .iter()
                         .filter_map(|preset| {
                             if let Some((selected, state, _)) = tle_selections.get(preset) {
                                 if *selected {
                                     if let TleLoadState::Loaded { satellites, .. } = state {
-                                        return Some((preset.label(), satellites.len(), preset.is_debris()));
+                                        return Some((
+                                            preset.label(),
+                                            satellites.len(),
+                                            preset.is_debris(),
+                                        ));
                                     }
                                 }
                             }
@@ -1443,13 +1824,25 @@ impl ViewerState {
                         for (name, count, is_debris) in &live_data {
                             let kind = if *is_debris { "debris" } else { "satellites" };
                             ui.label(format!("  {}: {} {}", name, count, kind));
-                            if *is_debris { total_debris += count; } else { total += count; }
+                            if *is_debris {
+                                total_debris += count;
+                            } else {
+                                total += count;
+                            }
                         }
-                        if total > 0 { ui.label(format!("  Satellites: {}", total)); }
-                        if total_debris > 0 { ui.label(format!("  Debris: {}", total_debris)); }
+                        if total > 0 {
+                            ui.label(format!("  Satellites: {}", total));
+                        }
+                        if total_debris > 0 {
+                            ui.label(format!("  Debris: {}", total_debris));
+                        }
                     }
                     ui.separator();
-                    if ui.button("Satellite List").on_hover_text("Open the satellite list window").clicked() {
+                    if ui
+                        .button("Satellite List")
+                        .on_hover_text("Open the satellite list window")
+                        .clicked()
+                    {
                         open_sat_list = true;
                     }
                 });
@@ -1485,7 +1878,9 @@ impl ViewerState {
                                     ui.end_row();
 
                                     for cons in &constellations {
-                                        if cons.hidden { continue; }
+                                        if cons.hidden {
+                                            continue;
+                                        }
                                         let label = cons.preset_name();
                                         let spp = cons.sats_per_plane;
                                         for p in 0..cons.num_planes {
@@ -1495,7 +1890,10 @@ impl ViewerState {
                                                 ui.label(format!("{:.0}", cons.altitude_km));
                                                 ui.label(format!("{:.1}", cons.inclination));
                                                 let r = planet_radius + cons.altitude_km;
-                                                let period = 2.0 * std::f64::consts::PI * (r * r * r / mu).sqrt() / 60.0;
+                                                let period = 2.0
+                                                    * std::f64::consts::PI
+                                                    * (r * r * r / mu).sqrt()
+                                                    / 60.0;
                                                 ui.label(format!("{:.1}", period));
                                                 ui.end_row();
                                             }
@@ -1503,13 +1901,18 @@ impl ViewerState {
                                     }
 
                                     for preset in TlePreset::ALL.iter() {
-                                        if let Some((selected, state, _)) = tle_selections.get(preset) {
-                                            if !*selected { continue; }
+                                        if let Some((selected, state, _)) =
+                                            tle_selections.get(preset)
+                                        {
+                                            if !*selected {
+                                                continue;
+                                            }
                                             if let TleLoadState::Loaded { satellites } = state {
                                                 for sat in satellites {
                                                     ui.label(&sat.name);
                                                     ui.label(preset.label());
-                                                    let alt = mean_motion_to_altitude_km(sat.mean_motion);
+                                                    let alt =
+                                                        mean_motion_to_altitude_km(sat.mean_motion);
                                                     ui.label(format!("{:.0}", alt));
                                                     ui.label(format!("{:.1}", sat.inclination_deg));
                                                     let period = 1440.0 / sat.mean_motion;
@@ -1526,21 +1929,21 @@ impl ViewerState {
         }
 
         if show_config && !self.show_tab_info {
-        ui.separator();
+            ui.separator();
 
-        let mut const_to_remove: Option<usize> = None;
-        let mut cameras_to_clean: Vec<usize> = Vec::new();
-        let planet = &mut self.tabs[tab_idx].planets[planet_idx];
-        let num_constellations = planet.constellations.len();
-        let show_tle = planet.show_tle_window;
+            let mut const_to_remove: Option<usize> = None;
+            let mut cameras_to_clean: Vec<usize> = Vec::new();
+            let planet = &mut self.tabs[tab_idx].planets[planet_idx];
+            let num_constellations = planet.constellations.len();
+            let show_tle = planet.show_tle_window;
 
-        #[cfg(not(target_arch = "wasm32"))]
-        let tle_fetch_tx = self.tle_fetch_tx.clone();
+            #[cfg(not(target_arch = "wasm32"))]
+            let tle_fetch_tx = self.tle_fetch_tx.clone();
 
-        let controls_height = 180.0;
-        {
-        let planet = &mut self.tabs[tab_idx].planets[planet_idx];
-        egui::ScrollArea::horizontal()
+            let controls_height = 180.0;
+            {
+                let planet = &mut self.tabs[tab_idx].planets[planet_idx];
+                egui::ScrollArea::horizontal()
             .id_salt(("planet_config_hscroll", tab_idx, planet_idx))
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
             .show(ui, |ui| { ui.horizontal(|ui| {
@@ -1582,6 +1985,17 @@ impl ViewerState {
                         ui.separator();
                         ui.label("ISL k:");
                         ui.add(egui::DragValue::new(&mut planet.tle_isl_k).range(0..=8).speed(0.1));
+                        ui.label("max |lat|:");
+                        ui.add(
+                            egui::DragValue::new(&mut planet.tle_isl_max_lat_deg)
+                                .range(0.0..=90.0)
+                                .speed(0.5)
+                                .suffix("°"),
+                        )
+                        .on_hover_text(
+                            "Drop ISLs whose endpoint latitude exceeds this. Models the \
+                             high-latitude cross-plane laser tear-down. 90° disables.",
+                        );
                     });
 
                     egui::ScrollArea::vertical()
@@ -1815,18 +2229,15 @@ impl ViewerState {
                                 cameras_to_clean.push(cidx);
                             }
                         }
-                        let phy_btn = if cons.show_physics_ui {
-                            egui::Button::new(egui::RichText::new("⚡").color(egui::Color32::WHITE))
+                        let adv_btn = if cons.show_advanced_ui {
+                            egui::Button::new(egui::RichText::new("⚙").color(egui::Color32::WHITE))
                                 .fill(egui::Color32::from_rgb(60, 100, 160)).small()
                         } else {
-                            egui::Button::new(egui::RichText::new("⚡"))
+                            egui::Button::new(egui::RichText::new("⚙"))
                                 .fill(egui::Color32::from_rgb(80, 80, 80)).small()
                         };
-                        if ui.add(phy_btn).on_hover_text("Toggle physics simulation").clicked() {
-                            cons.show_physics_ui = !cons.show_physics_ui;
-                            if !cons.show_physics_ui {
-                                cons.physics.enabled = false;
-                            }
+                        if ui.add(adv_btn).on_hover_text("Advanced options").clicked() {
+                            cons.show_advanced_ui = !cons.show_advanced_ui;
                         }
                         if num_constellations > 0 {
                             let btn = egui::Button::new(
@@ -1836,17 +2247,35 @@ impl ViewerState {
                                 const_to_remove = Some(cidx);
                             }
                         }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let snaps: Vec<crate::cfs::GroundStationSnapshot> = planet
+                                .ground_stations
+                                .iter()
+                                .enumerate()
+                                .map(|(i, gs)| crate::cfs::GroundStationSnapshot {
+                                    station_id: i as u8,
+                                    lat_deg: gs.lat,
+                                    lon_deg: gs.lon,
+                                })
+                                .collect();
+                            crate::cfs::render_cfs_button(ui, cons, &snaps);
+                        }
                     });
 
                     ui.horizontal_top(|ui| {
                     ui.vertical(|ui| {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let editable = cons.cfs.is_none();
+                    #[cfg(target_arch = "wasm32")]
+                    let editable = true;
                     ui.horizontal(|ui| {
                         let mut sats = cons.sats_per_plane as i32;
                         let mut planes = cons.num_planes as i32;
                         ui.label("Sats:");
-                        let sats_resp = ui.add(egui::DragValue::new(&mut sats).range(1..=100)).on_hover_text("Satellites per orbital plane");
+                        let sats_resp = ui.add_enabled(editable, egui::DragValue::new(&mut sats).range(1..=100)).on_hover_text("Satellites per orbital plane");
                         ui.label("Orbits:");
-                        let planes_resp = ui.add(egui::DragValue::new(&mut planes).range(1..=100)).on_hover_text("Number of orbital planes");
+                        let planes_resp = ui.add_enabled(editable, egui::DragValue::new(&mut planes).range(1..=100)).on_hover_text("Number of orbital planes");
                         if sats > 0 && planes > 0 {
                             cons.sats_per_plane = sats as usize;
                             cons.num_planes = planes as usize;
@@ -1857,12 +2286,12 @@ impl ViewerState {
                         let orbit_radius = planet.celestial_body.radius_km() + cons.altitude_km;
                         let default_sat_spacing = 2.0 * std::f64::consts::PI * orbit_radius / cons.sats_per_plane as f64;
                         let mut custom_sat_spacing = cons.sat_spacing_km.is_some();
-                        if ui.checkbox(&mut custom_sat_spacing, "d:").on_hover_text("Custom satellite spacing within each plane").changed() {
+                        if ui.add_enabled(editable, egui::Checkbox::new(&mut custom_sat_spacing, "d:")).on_hover_text("Custom satellite spacing within each plane").changed() {
                             cons.sat_spacing_km = if custom_sat_spacing { Some(default_sat_spacing) } else { None };
                             cons.preset = Preset::None;
                         }
                         if let Some(ref mut spacing) = cons.sat_spacing_km {
-                            if ui.add(egui::DragValue::new(spacing).range(0.001..=100000.0).suffix(" km").speed(0.1).max_decimals(3)).changed() {
+                            if ui.add_enabled(editable, egui::DragValue::new(spacing).range(0.001..=100000.0).suffix(" km").speed(0.1).max_decimals(3)).changed() {
                                 cons.preset = Preset::None;
                             }
                         } else {
@@ -1872,15 +2301,19 @@ impl ViewerState {
 
                     ui.horizontal(|ui| {
                         ui.label("Alt:");
-                        let alt_resp = ui.add(egui::DragValue::new(&mut cons.altitude_km).range(0.0..=50000.0).suffix(" km")).on_hover_text("Orbit altitude above surface");
+                        let alt_resp = ui.add_enabled(editable, egui::DragValue::new(&mut cons.altitude_km).range(0.0..=50000.0).suffix(" km")).on_hover_text("Orbit altitude above surface");
                         let orbit_label = if cons.altitude_km < 450.0 { "VLEO" }
                             else if cons.altitude_km < 2000.0 { "LEO" }
                             else if cons.altitude_km < 35000.0 { "MEO" }
                             else { "GEO" };
-                        egui::ComboBox::from_id_salt(format!("orbit_{}_{}_{}", tab_idx, planet_idx, cidx))
+                        let mut combo = egui::ComboBox::from_id_salt(format!("orbit_{}_{}_{}", tab_idx, planet_idx, cidx))
                             .selected_text(orbit_label)
-                            .width(50.0)
-                            .show_ui(ui, |ui| {
+                            .width(50.0);
+                        if !editable {
+                            combo = combo.wrap_mode(egui::TextWrapMode::Truncate);
+                        }
+                        ui.add_enabled_ui(editable, |ui| {
+                            combo.show_ui(ui, |ui| {
                                 if ui.selectable_label(orbit_label == "VLEO", "VLEO").clicked() {
                                     cons.altitude_km = 350.0;
                                     cons.preset = Preset::None;
@@ -1898,6 +2331,7 @@ impl ViewerState {
                                     cons.preset = Preset::None;
                                 }
                             });
+                        });
                         if alt_resp.changed() {
                             cons.preset = Preset::None;
                         }
@@ -1915,16 +2349,16 @@ impl ViewerState {
                                 cons.inclination = inc;
                             }
                         }
-                        ui.add_enabled(sso_possible, egui::Checkbox::new(&mut cons.sso, "SSO"))
+                        ui.add_enabled(editable && sso_possible, egui::Checkbox::new(&mut cons.sso, "SSO"))
                             .on_hover_text("Sun-synchronous orbit (auto-compute inclination)");
                         ui.label("Inc:");
-                        let inc_resp = ui.add_enabled(!cons.sso, egui::DragValue::new(&mut cons.inclination).range(0.0..=180.0).suffix("°")).on_hover_text("Orbital inclination angle");
+                        let inc_resp = ui.add_enabled(editable && !cons.sso, egui::DragValue::new(&mut cons.inclination).range(0.0..=180.0).suffix("°")).on_hover_text("Orbital inclination angle");
                         if inc_resp.changed() {
                             cons.preset = Preset::None;
                         }
                         ui.label("F:");
                         let max_f = (cons.num_planes - 1).max(1) as f64;
-                        let phase_resp = ui.add(egui::DragValue::new(&mut cons.phasing).range(0.0..=max_f).speed(0.1)).on_hover_text("Walker phasing parameter F");
+                        let phase_resp = ui.add_enabled(editable, egui::DragValue::new(&mut cons.phasing).range(0.0..=max_f).speed(0.1)).on_hover_text("Walker phasing parameter F");
                         if phase_resp.changed() {
                             cons.preset = Preset::None;
                         }
@@ -1932,7 +2366,7 @@ impl ViewerState {
 
                     ui.horizontal(|ui| {
                         ui.label("RAAN₀:");
-                        if ui.add(egui::DragValue::new(&mut cons.raan_offset).range(-180.0..=180.0).suffix("°").speed(1.0)).on_hover_text("RAAN offset of the first plane").changed() {
+                        if ui.add_enabled(editable, egui::DragValue::new(&mut cons.raan_offset).range(-180.0..=180.0).suffix("°").speed(1.0)).on_hover_text("RAAN offset of the first plane").changed() {
                             cons.preset = Preset::None;
                         }
                         let default_spacing = match cons.walker_type {
@@ -1940,12 +2374,12 @@ impl ViewerState {
                             WalkerType::Star => 180.0 / cons.num_planes as f64,
                         };
                         let mut custom_spacing = cons.raan_spacing.is_some();
-                        if ui.checkbox(&mut custom_spacing, "Δ:").on_hover_text("Custom RAAN spacing between planes").changed() {
+                        if ui.add_enabled(editable, egui::Checkbox::new(&mut custom_spacing, "Δ:")).on_hover_text("Custom RAAN spacing between planes").changed() {
                             cons.raan_spacing = if custom_spacing { Some(default_spacing) } else { None };
                             cons.preset = Preset::None;
                         }
                         if let Some(ref mut spacing) = cons.raan_spacing {
-                            if ui.add(egui::DragValue::new(spacing).range(0.0001..=180.0).suffix("°").speed(0.01).max_decimals(4)).changed() {
+                            if ui.add_enabled(editable, egui::DragValue::new(spacing).range(0.0001..=180.0).suffix("°").speed(0.01).max_decimals(4)).changed() {
                                 cons.preset = Preset::None;
                             }
                         } else {
@@ -1955,49 +2389,43 @@ impl ViewerState {
 
                     ui.horizontal(|ui| {
                         ui.label("Ecc:");
-                        if ui.add(egui::DragValue::new(&mut cons.eccentricity).range(0.0..=0.99).speed(0.001).max_decimals(4)).on_hover_text("Orbital eccentricity").changed() {
+                        if ui.add_enabled(editable, egui::DragValue::new(&mut cons.eccentricity).range(0.0..=0.99).speed(0.001).max_decimals(4)).on_hover_text("Orbital eccentricity").changed() {
                             cons.preset = Preset::None;
                         }
                         ui.label("ω:");
-                        if ui.add(egui::DragValue::new(&mut cons.arg_periapsis).range(0.0..=360.0).suffix("°").speed(1.0)).on_hover_text("Argument of periapsis").changed() {
+                        if ui.add_enabled(editable, egui::DragValue::new(&mut cons.arg_periapsis).range(0.0..=360.0).suffix("°").speed(1.0)).on_hover_text("Argument of periapsis").changed() {
                             cons.preset = Preset::None;
                         }
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label("ISLs/sat:");
-                        ui.selectable_value(&mut cons.isl_neighbors, 0, "Off")
-                            .on_hover_text("No inter-satellite links");
-                        ui.selectable_value(&mut cons.isl_neighbors, 4, "4")
-                            .on_hover_text("4 neighbors (cardinal: up/down/left/right)");
-                        ui.selectable_value(&mut cons.isl_neighbors, 8, "8")
-                            .on_hover_text("8 neighbors (cardinal + diagonal)");
                     });
 
                     ui.horizontal(|ui| {
                         ui.label("Propagator:");
-                        ui.selectable_value(&mut cons.propagator, Propagator::Keplerian, "Keplerian")
-                            .on_hover_text("Two-body Keplerian (RAAN drift only)");
-                        ui.selectable_value(&mut cons.propagator, Propagator::J2, "J2")
-                            .on_hover_text("J2 secular perturbations (RAAN drift, ω precession, mean motion correction)");
-                        ui.selectable_value(&mut cons.propagator, Propagator::Numerical, "RK4")
-                            .on_hover_text("Numerical RK4 integration with J2 (per-satellite state, forward-only)");
-                        #[cfg(not(target_arch = "wasm32"))]
-                        ui.selectable_value(&mut cons.propagator, Propagator::Lib42, "J2 Osc")
-                            .on_hover_text("J2 osculating via NASA 42 (secular drifts + periodic SMA corrections)");
+                        ui.add_enabled_ui(editable, |ui| {
+                            ui.selectable_value(&mut cons.propagator, Propagator::Keplerian, "Keplerian")
+                                .on_hover_text("Two-body Keplerian (RAAN drift only)");
+                            ui.selectable_value(&mut cons.propagator, Propagator::J2, "J2")
+                                .on_hover_text("J2 secular perturbations (RAAN drift, ω precession, mean motion correction)");
+                            ui.selectable_value(&mut cons.propagator, Propagator::Numerical, "RK4")
+                                .on_hover_text("Numerical RK4 integration with J2 (per-satellite state, forward-only)");
+                            #[cfg(not(target_arch = "wasm32"))]
+                            ui.selectable_value(&mut cons.propagator, Propagator::Lib42, "J2 Osc")
+                                .on_hover_text("J2 osculating via NASA 42 (secular drifts + periodic SMA corrections)");
+                        });
                     });
 
                     ui.horizontal(|ui| {
                         let old_type = cons.walker_type;
-                        ui.selectable_value(&mut cons.walker_type, WalkerType::Delta, "Delta")
-                            .on_hover_text("Walker-Delta: planes span 360° RAAN");
-                        ui.selectable_value(&mut cons.walker_type, WalkerType::Star, "Star")
-                            .on_hover_text("Walker-Star: planes span 180° RAAN");
-                        if ui.checkbox(&mut cons.drag_enabled, "Drag:").on_hover_text("Enable atmospheric drag decay simulation").changed() {
+                        ui.add_enabled_ui(editable, |ui| {
+                            ui.selectable_value(&mut cons.walker_type, WalkerType::Delta, "Delta")
+                                .on_hover_text("Walker-Delta: planes span 360° RAAN");
+                            ui.selectable_value(&mut cons.walker_type, WalkerType::Star, "Star")
+                                .on_hover_text("Walker-Star: planes span 180° RAAN");
+                        });
+                        if ui.add_enabled(editable, egui::Checkbox::new(&mut cons.drag_enabled, "Drag:")).on_hover_text("Enable atmospheric drag decay simulation").changed() {
                             cons.preset = Preset::None;
                         }
                         if cons.drag_enabled {
-                            if ui.add(egui::DragValue::new(&mut cons.ballistic_coeff).range(0.1..=500.0).suffix(" kg/m²").speed(1.0).max_decimals(1)).on_hover_text("Ballistic coefficient (mass/drag area)").changed() {
+                            if ui.add_enabled(editable, egui::DragValue::new(&mut cons.ballistic_coeff).range(0.1..=500.0).suffix(" kg/m²").speed(1.0).max_decimals(1)).on_hover_text("Ballistic coefficient (mass/drag area)").changed() {
                                 cons.preset = Preset::None;
                             }
                         } else {
@@ -2010,6 +2438,7 @@ impl ViewerState {
 
                     ui.horizontal(|ui| {
                         ui.label("Preset:");
+                        ui.add_enabled_ui(editable, |ui| {
                         egui::ComboBox::from_id_salt(format!("preset_{}_{}_{}", tab_idx, planet_idx, cidx))
                             .selected_text(cons.preset_name())
                             .show_ui(ui, |ui| {
@@ -2050,116 +2479,175 @@ impl ViewerState {
                                     cons.preset = Preset::Telesat;
                                 }
                             });
+                        });
                     });
                     }); // end left vertical
 
-                    if cons.show_physics_ui {
+                    if cons.show_advanced_ui {
                         ui.separator();
                         ui.vertical(|ui| {
                     egui::ScrollArea::vertical()
-                        .id_salt(format!("phy_scroll_{}_{}_{}", tab_idx, planet_idx, cidx))
-                        .max_height(200.0)
+                        .id_salt(format!("adv_scroll_{}_{}_{}", tab_idx, planet_idx, cidx))
+                        .max_height(260.0)
                         .show(ui, |ui| {
-                    let phy = &mut cons.physics;
-                    phy.enabled = true;
-                    {
-                        ui.horizontal(|ui| {
-                            ui.label("Color:");
-                            ui.selectable_value(&mut phy.color_mode, crate::physics::PhysicsColorMode::Normal, "Normal")
-                                .on_hover_text("Use default plane colors");
-                            ui.selectable_value(&mut phy.color_mode, crate::physics::PhysicsColorMode::Battery, "Battery")
-                                .on_hover_text("Color by state of charge (green=full, red=empty)");
-                            ui.selectable_value(&mut phy.color_mode, crate::physics::PhysicsColorMode::Temperature, "Temp")
-                                .on_hover_text("Color by temperature (blue=cold, red=hot)");
-                        });
-                        ui.checkbox(&mut phy.power_enabled, "Power model")
-                            .on_hover_text("Simulate battery charge/discharge with eclipse-gated solar panels");
-                        if phy.power_enabled {
-                            ui.indent("power_settings", |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label("Battery:");
-                                    ui.add(egui::DragValue::new(&mut phy.max_battery_ws).range(100.0..=1_000_000.0).speed(100.0).suffix(" Ws"))
-                                        .on_hover_text("Maximum battery capacity in watt-seconds (joules)");
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label("Charge rate:");
-                                    ui.add(egui::DragValue::new(&mut phy.charging_rate_w).range(0.0..=1000.0).speed(1.0).suffix(" W"))
-                                        .on_hover_text("Solar panel or RTG power generation rate");
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label("Idle power:");
-                                    ui.add(egui::DragValue::new(&mut phy.idle_power_w).range(0.0..=500.0).speed(0.5).suffix(" W"))
-                                        .on_hover_text("Constant power draw from satellite subsystems");
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label("Device:");
-                                    ui.selectable_value(&mut phy.power_device_type, crate::physics::PowerDeviceType::SolarPanel, "Solar")
-                                        .on_hover_text("Solar panels: only charge when not in eclipse");
-                                    ui.selectable_value(&mut phy.power_device_type, crate::physics::PowerDeviceType::Rtg, "RTG")
-                                        .on_hover_text("Radioisotope thermoelectric generator: charges regardless of eclipse");
-                                });
+
+                    ui.checkbox(&mut cons.physics.enabled, "Physics")
+                        .on_hover_text("Master toggle for the per-satellite physics simulation");
+                    if cons.physics.enabled {
+                        ui.indent("physics_settings", |ui| {
+                            let phy = &mut cons.physics;
+                            ui.horizontal(|ui| {
+                                ui.label("Color:");
+                                ui.selectable_value(&mut phy.color_mode, crate::physics::PhysicsColorMode::Normal, "Normal")
+                                    .on_hover_text("Use default plane colors");
+                                ui.selectable_value(&mut phy.color_mode, crate::physics::PhysicsColorMode::Battery, "Battery")
+                                    .on_hover_text("Color by state of charge (green=full, red=empty)");
+                                ui.selectable_value(&mut phy.color_mode, crate::physics::PhysicsColorMode::Temperature, "Temp")
+                                    .on_hover_text("Color by temperature (blue=cold, red=hot)");
                             });
-                        }
-                        ui.checkbox(&mut phy.thermal_enabled, "Thermal model")
-                            .on_hover_text("Single-node heat balance: solar, albedo, body IR, emission, and activity heat");
-                        if phy.thermal_enabled {
-                            ui.indent("thermal_settings", |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label("Mass:");
-                                    ui.add(egui::DragValue::new(&mut phy.mass_kg).range(1.0..=10000.0).speed(1.0).suffix(" kg"))
-                                        .on_hover_text("Spacecraft mass affecting thermal inertia");
+                            ui.checkbox(&mut phy.power_enabled, "Power model")
+                                .on_hover_text("Simulate battery charge/discharge with eclipse-gated solar panels");
+                            if phy.power_enabled {
+                                ui.indent("power_settings", |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label("Battery:");
+                                        ui.add(egui::DragValue::new(&mut phy.max_battery_ws).range(100.0..=1_000_000.0).speed(100.0).suffix(" Ws"))
+                                            .on_hover_text("Maximum battery capacity in watt-seconds (joules)");
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Charge rate:");
+                                        ui.add(egui::DragValue::new(&mut phy.charging_rate_w).range(0.0..=1000.0).speed(1.0).suffix(" W"))
+                                            .on_hover_text("Solar panel or RTG power generation rate");
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Idle power:");
+                                        ui.add(egui::DragValue::new(&mut phy.idle_power_w).range(0.0..=500.0).speed(0.5).suffix(" W"))
+                                            .on_hover_text("Constant power draw from satellite subsystems");
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Device:");
+                                        ui.selectable_value(&mut phy.power_device_type, crate::physics::PowerDeviceType::SolarPanel, "Solar")
+                                            .on_hover_text("Solar panels: only charge when not in eclipse");
+                                        ui.selectable_value(&mut phy.power_device_type, crate::physics::PowerDeviceType::Rtg, "RTG")
+                                            .on_hover_text("Radioisotope thermoelectric generator: charges regardless of eclipse");
+                                    });
                                 });
-                                ui.horizontal(|ui| {
-                                    ui.label("Thermal cap:");
-                                    ui.add(egui::DragValue::new(&mut phy.thermal_capacity).range(100.0..=5000.0).speed(10.0).suffix(" J/kgK"))
-                                        .on_hover_text("Specific heat capacity of the spacecraft structure");
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label("Heat ratio:");
-                                    ui.add(egui::DragValue::new(&mut phy.heat_ratio).range(0.0..=1.0).speed(0.01))
-                                        .on_hover_text("Fraction of electrical power dissipated as heat (0=none, 1=all)");
-                                });
-                            });
-                        }
-                        ui.checkbox(&mut phy.radiation_enabled, "Radiation model")
-                            .on_hover_text("Poisson-process radiation events: random restarts and permanent failures");
-                        if phy.radiation_enabled {
-                            ui.indent("radiation_settings", |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label("Failure rate:");
-                                    ui.add(egui::DragValue::new(&mut phy.failure_rate).range(0.0..=1e-6).speed(1e-12).min_decimals(13))
-                                        .on_hover_text("Probability per second of permanent satellite failure (single event latch-up)");
-                                    ui.label("/s");
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label("Restart rate:");
-                                    ui.add(egui::DragValue::new(&mut phy.restart_rate).range(0.0..=1e-4).speed(1e-10).min_decimals(11))
-                                        .on_hover_text("Probability per second of transient restart event (single event upset)");
-                                    ui.label("/s");
-                                });
-                            });
-                        }
-                        if !cons.physics_state.is_empty() {
-                            let alive = cons.physics_state.iter().filter(|s| !s.is_dead).count();
-                            let dead = cons.physics_state.len() - alive;
-                            let avg_soc = if alive > 0 {
-                                cons.physics_state.iter().filter(|s| !s.is_dead)
-                                    .map(|s| s.state_of_charge(&cons.physics)).sum::<f64>() / alive as f64
-                            } else { 0.0 };
-                            let avg_temp = if alive > 0 {
-                                cons.physics_state.iter().filter(|s| !s.is_dead)
-                                    .map(|s| s.temperature_k).sum::<f64>() / alive as f64
-                            } else { 0.0 };
-                            ui.label(format!("Alive: {}  Dead: {}  Avg Battery: {:.0}%  Avg T: {:.0} K",
-                                alive, dead, avg_soc * 100.0, avg_temp));
-                            if ui.button("Reset physics").on_hover_text("Clear all physics state and reinitialize").clicked() {
-                                cons.physics_state.clear();
                             }
-                        }
+                            ui.checkbox(&mut phy.thermal_enabled, "Thermal model")
+                                .on_hover_text("Single-node heat balance: solar, albedo, body IR, emission, and activity heat");
+                            if phy.thermal_enabled {
+                                ui.indent("thermal_settings", |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label("Mass:");
+                                        ui.add(egui::DragValue::new(&mut phy.mass_kg).range(1.0..=10000.0).speed(1.0).suffix(" kg"))
+                                            .on_hover_text("Spacecraft mass affecting thermal inertia");
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Thermal cap:");
+                                        ui.add(egui::DragValue::new(&mut phy.thermal_capacity).range(100.0..=5000.0).speed(10.0).suffix(" J/kgK"))
+                                            .on_hover_text("Specific heat capacity of the spacecraft structure");
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Heat ratio:");
+                                        ui.add(egui::DragValue::new(&mut phy.heat_ratio).range(0.0..=1.0).speed(0.01))
+                                            .on_hover_text("Fraction of electrical power dissipated as heat (0=none, 1=all)");
+                                    });
+                                });
+                            }
+                            ui.checkbox(&mut phy.radiation_enabled, "Radiation model")
+                                .on_hover_text("Poisson-process radiation events: random restarts and permanent failures");
+                            if phy.radiation_enabled {
+                                ui.indent("radiation_settings", |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label("Failure rate:");
+                                        ui.add(egui::DragValue::new(&mut phy.failure_rate).range(0.0..=1e-6).speed(1e-12).min_decimals(13))
+                                            .on_hover_text("Probability per second of permanent satellite failure (single event latch-up)");
+                                        ui.label("/s");
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Restart rate:");
+                                        ui.add(egui::DragValue::new(&mut phy.restart_rate).range(0.0..=1e-4).speed(1e-10).min_decimals(11))
+                                            .on_hover_text("Probability per second of transient restart event (single event upset)");
+                                        ui.label("/s");
+                                    });
+                                });
+                            }
+                            if !cons.physics_state.is_empty() {
+                                let alive = cons.physics_state.iter().filter(|s| !s.is_dead).count();
+                                let dead = cons.physics_state.len() - alive;
+                                let avg_soc = if alive > 0 {
+                                    cons.physics_state.iter().filter(|s| !s.is_dead)
+                                        .map(|s| s.state_of_charge(&cons.physics)).sum::<f64>() / alive as f64
+                                } else { 0.0 };
+                                let avg_temp = if alive > 0 {
+                                    cons.physics_state.iter().filter(|s| !s.is_dead)
+                                        .map(|s| s.temperature_k).sum::<f64>() / alive as f64
+                                } else { 0.0 };
+                                ui.label(format!("Alive: {}  Dead: {}  Avg Battery: {:.0}%  Avg T: {:.0} K",
+                                    alive, dead, avg_soc * 100.0, avg_temp));
+                                if ui.button("Reset physics").on_hover_text("Clear all physics state and reinitialize").clicked() {
+                                    cons.physics_state.clear();
+                                }
+                            }
+                        });
+                    }
+
+                    let mut isls_on = cons.isl_neighbors > 0;
+                    if ui.checkbox(&mut isls_on, "ISLs")
+                        .on_hover_text("Master toggle for inter-satellite laser links")
+                        .clicked()
+                    {
+                        cons.isl_neighbors = if isls_on { 4 } else { 0 };
+                    }
+                    if cons.isl_neighbors > 0 {
+                        ui.indent("isl_settings", |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Neighbors:");
+                                ui.selectable_value(&mut cons.isl_neighbors, 4, "4")
+                                    .on_hover_text("4 neighbors (cardinal: up/down/left/right)");
+                                ui.selectable_value(&mut cons.isl_neighbors, 8, "8")
+                                    .on_hover_text("8 neighbors (cardinal + diagonal)");
+                            });
+                            let lb = &mut cons.link_budget;
+                            ui.horizontal(|ui| {
+                                ui.label("B:");
+                                ui.add(egui::DragValue::new(&mut lb.bandwidth_ghz).range(0.1..=200.0).speed(0.1).suffix(" GHz"))
+                                    .on_hover_text("Channel bandwidth — width of the frequency band the modulator occupies");
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("P:");
+                                ui.add(egui::DragValue::new(&mut lb.tx_power_w).range(0.1..=100.0).speed(0.1).suffix(" W"))
+                                    .on_hover_text("Transmit power at the laser aperture");
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("G:");
+                                ui.add(egui::DragValue::new(&mut lb.antenna_gain_dbi).range(30.0..=130.0).speed(0.5).suffix(" dBi"))
+                                    .on_hover_text("Tx/Rx antenna gain (assumed equal). Higher = narrower beam / larger aperture");
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Nt:");
+                                ui.add(egui::DragValue::new(&mut lb.noise_temp_k).range(50.0..=2000.0).speed(5.0).suffix(" K"))
+                                    .on_hover_text("Receiver noise temperature — sets thermal noise floor N = k·Nt·B");
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("λ:");
+                                egui::ComboBox::from_id_salt(format!("lambda_{}_{}_{}", tab_idx, planet_idx, cidx))
+                                    .selected_text(format!("{} nm", lb.wavelength_nm as i32))
+                                    .show_ui(ui, |ui| {
+                                        for &nm in &[850.0_f64, 1064.0, 1310.0, 1550.0] {
+                                            ui.selectable_value(&mut lb.wavelength_nm, nm, format!("{} nm", nm as i32));
+                                        }
+                                    });
+                            });
+                            let c1 = lb.capacity_bps(1000.0) / 1e9;
+                            let c3 = lb.capacity_bps(3000.0) / 1e9;
+                            let c5 = lb.capacity_bps(5000.0) / 1e9;
+                            ui.label(format!("Shannon C @ 1000 / 3000 / 5000 km: {:.1} / {:.1} / {:.1} Gbps", c1, c3, c5));
+                        });
                     }
                     }); // end scroll area
                     }); // end right vertical
-                    } // end show_physics_ui
+                    } // end show_advanced_ui
                     }); // end horizontal_top
                 });
                 ui.separator();
@@ -2171,28 +2659,31 @@ impl ViewerState {
             }
         }); });
 
-        if let Some(cidx) = const_to_remove {
-            if cidx == usize::MAX {
-                self.tabs[tab_idx].planets[planet_idx].add_constellation();
-            } else {
-                cameras_to_clean.push(cidx);
-                self.tabs[tab_idx].planets[planet_idx].constellations.remove(cidx);
-                for cam in &mut self.tabs[tab_idx].planets[planet_idx].satellite_cameras {
-                    if cam.constellation_idx != usize::MAX && cam.constellation_idx > cidx {
-                        cam.constellation_idx -= 1;
+                if let Some(cidx) = const_to_remove {
+                    if cidx == usize::MAX {
+                        self.tabs[tab_idx].planets[planet_idx].add_constellation();
+                    } else {
+                        cameras_to_clean.push(cidx);
+                        self.tabs[tab_idx].planets[planet_idx]
+                            .constellations
+                            .remove(cidx);
+                        for cam in &mut self.tabs[tab_idx].planets[planet_idx].satellite_cameras {
+                            if cam.constellation_idx != usize::MAX && cam.constellation_idx > cidx {
+                                cam.constellation_idx -= 1;
+                            }
+                        }
                     }
                 }
+                {
+                    let p = &mut self.tabs[tab_idx].planets[planet_idx];
+                    p.satellite_cameras.retain(|c| {
+                        c.constellation_idx == usize::MAX
+                            || !cameras_to_clean.contains(&c.constellation_idx)
+                    });
+                }
             }
-        }
-        {
-            let p = &mut self.tabs[tab_idx].planets[planet_idx];
-            p.satellite_cameras.retain(|c|
-                c.constellation_idx == usize::MAX || !cameras_to_clean.contains(&c.constellation_idx)
-            );
-        }
-        }
 
-        ui.separator();
+            ui.separator();
         }
 
         let planet = &self.tabs[tab_idx].planets[planet_idx];
@@ -2211,7 +2702,9 @@ impl ViewerState {
         let mut constellations_data: Vec<_> = if hide_sats {
             Vec::new()
         } else {
-            planet.constellations.iter()
+            planet
+                .constellations
+                .iter()
                 .enumerate()
                 .filter(|(_, c)| !c.hidden)
                 .map(|(orig_idx, c)| {
@@ -2234,19 +2727,30 @@ impl ViewerState {
         // Render any selected TLE preset regardless of whether the TLE sidebar
         // is open — this lets demos include live satellites without forcing
         // the sidebar UI to be visible.
-        let any_tle_selected = planet.tle_selections
+        let any_tle_selected = planet
+            .tle_selections
             .iter()
             .any(|(_, (selected, _, _))| *selected);
         if planet.show_tle_window || any_tle_selected {
-            let propagation_minutes = self.start_timestamp.timestamp() as f64 / 60.0 + self.tabs[tab_idx].settings.time / 60.0;
+            let propagation_minutes = self.start_timestamp.timestamp() as f64 / 60.0
+                + self.tabs[tab_idx].settings.time / 60.0;
             for preset in TlePreset::ALL.iter() {
-                let Some((selected, state, shells)) = planet.tle_selections.get(preset) else { continue };
-                if !*selected { continue; }
-                let TleLoadState::Loaded { satellites, .. } = state else { continue };
+                let Some((selected, state, shells)) = planet.tle_selections.get(preset) else {
+                    continue;
+                };
+                if !*selected {
+                    continue;
+                }
+                let TleLoadState::Loaded { satellites, .. } = state else {
+                    continue;
+                };
                 let mut all_positions: Vec<SatelliteState> = Vec::new();
                 for (idx, sat) in satellites.iter().enumerate() {
                     let minutes_since_epoch = propagation_minutes - sat.epoch_minutes;
-                    let prediction = match sat.constants.propagate(sgp4::MinutesSinceEpoch(minutes_since_epoch)) {
+                    let prediction = match sat
+                        .constants
+                        .propagate(sgp4::MinutesSinceEpoch(minutes_since_epoch))
+                    {
                         Ok(p) => p,
                         Err(_) => continue,
                     };
@@ -2260,8 +2764,11 @@ impl ViewerState {
                     all_positions.push(SatelliteState {
                         plane: 0,
                         sat_index: idx,
-                        x, y, z,
-                        lat, lon,
+                        x,
+                        y,
+                        z,
+                        lat,
+                        lon,
                         ascending,
                         neighbors: Vec::new(),
                         name: Some(sat.name.clone()),
@@ -2269,21 +2776,33 @@ impl ViewerState {
                         tle_mean_motion: Some(sat.mean_motion),
                     });
                 }
-                if all_positions.is_empty() { continue; }
+                if all_positions.is_empty() {
+                    continue;
+                }
                 let tle_isl_k = planet.tle_isl_k;
+                let isl_max_lat = planet.tle_isl_max_lat_deg;
+                let isl_sim_time = self.tabs[tab_idx].settings.time;
 
                 if let Some(shells) = shells {
-                    let shell_indices: Vec<std::collections::HashSet<usize>> = shells.iter()
+                    let shell_indices: Vec<std::collections::HashSet<usize>> = shells
+                        .iter()
                         .map(|s| s.satellite_indices.iter().copied().collect())
                         .collect();
                     for (si, shell) in shells.iter().enumerate() {
-                        if !shell.selected { continue; }
-                        let mut positions: Vec<SatelliteState> = all_positions.iter()
+                        if !shell.selected {
+                            continue;
+                        }
+                        let mut positions: Vec<SatelliteState> = all_positions
+                            .iter()
                             .filter(|p| shell_indices[si].contains(&p.sat_index))
                             .map(|p| SatelliteState {
-                                plane: p.plane, sat_index: p.sat_index,
-                                x: p.x, y: p.y, z: p.z,
-                                lat: p.lat, lon: p.lon,
+                                plane: p.plane,
+                                sat_index: p.sat_index,
+                                x: p.x,
+                                y: p.y,
+                                z: p.z,
+                                lat: p.lat,
+                                lon: p.lon,
                                 ascending: p.ascending,
                                 neighbors: p.neighbors.clone(),
                                 name: p.name.clone(),
@@ -2291,9 +2810,18 @@ impl ViewerState {
                                 tle_mean_motion: p.tle_mean_motion,
                             })
                             .collect();
-                        if positions.is_empty() { continue; }
+                        if positions.is_empty() {
+                            continue;
+                        }
                         if tle_isl_k > 0 {
-                            crate::walker::compute_knn_neighbors(&mut positions, tle_isl_k);
+                            apply_cached_isl_neighbors(
+                                &mut self.tle_isl_cache,
+                                (*preset, Some(si)),
+                                &mut positions,
+                                tle_isl_k,
+                                isl_max_lat,
+                                isl_sim_time,
+                            );
                         }
                         let tle_wc = WalkerConstellation {
                             walker_type: WalkerType::Delta,
@@ -2313,10 +2841,19 @@ impl ViewerState {
                             planet_mu,
                             planet_j2,
                             planet_equatorial_radius: planet_eq_radius,
+                            link_budget: crate::config::LinkBudget::default(),
+                            ballistic_coeff: 100.0,
                         };
                         let label = format!("{} {}", preset.label(), shell.label);
                         let tle_kind = if preset.is_debris() { 2u8 } else { 1u8 };
-                        constellations_data.push((tle_wc, positions, shell.color_offset, tle_kind, usize::MAX, label));
+                        constellations_data.push((
+                            tle_wc,
+                            positions,
+                            shell.color_offset,
+                            tle_kind,
+                            usize::MAX,
+                            label,
+                        ));
                     }
                 } else {
                     let tle_wc = WalkerConstellation {
@@ -2337,12 +2874,28 @@ impl ViewerState {
                         planet_mu,
                         planet_j2,
                         planet_equatorial_radius: planet_eq_radius,
+                        link_budget: crate::config::LinkBudget::default(),
+                        ballistic_coeff: 100.0,
                     };
                     if tle_isl_k > 0 {
-                        crate::walker::compute_knn_neighbors(&mut all_positions, tle_isl_k);
+                        apply_cached_isl_neighbors(
+                            &mut self.tle_isl_cache,
+                            (*preset, None),
+                            &mut all_positions,
+                            tle_isl_k,
+                            isl_max_lat,
+                            isl_sim_time,
+                        );
                     }
                     let tle_kind = if preset.is_debris() { 2u8 } else { 1u8 };
-                    constellations_data.push((tle_wc, all_positions, preset.color_index(), tle_kind, usize::MAX, preset.label().to_string()));
+                    constellations_data.push((
+                        tle_wc,
+                        all_positions,
+                        preset.color_index(),
+                        tle_kind,
+                        usize::MAX,
+                        preset.label().to_string(),
+                    ));
                 }
             }
         }
@@ -2350,7 +2903,9 @@ impl ViewerState {
         {
             let current_time = self.tabs[tab_idx].settings.time;
             let planet = &self.tabs[tab_idx].planets[planet_idx];
-            if planet.kessler.course_correction_enabled && !planet.kessler.active_corrections.is_empty() {
+            if planet.kessler.course_correction_enabled
+                && !planet.kessler.active_corrections.is_empty()
+            {
                 let mut offset_map: HashMap<String, f64> = HashMap::new();
                 for corr in &planet.kessler.active_corrections {
                     let off = corr.offset_at(current_time);
@@ -2360,7 +2915,9 @@ impl ViewerState {
                 }
                 if !offset_map.is_empty() {
                     for (_, positions, _, tle_kind, _, label) in constellations_data.iter_mut() {
-                        if *tle_kind == 3 { continue; }
+                        if *tle_kind == 3 {
+                            continue;
+                        }
                         for sat in positions.iter_mut() {
                             let name = sat.name.clone().unwrap_or_else(|| {
                                 format!("{} P{}:S{}", label, sat.plane, sat.sat_index)
@@ -2390,11 +2947,15 @@ impl ViewerState {
                 for (idx, frag) in planet.kessler.debris.iter().enumerate() {
                     let [x, y, z] = crate::kessler::propagate_fragment(frag, time);
                     let r = (x * x + y * y + z * z).sqrt();
-                    if r < 1.0 { continue; }
+                    if r < 1.0 {
+                        continue;
+                    }
                     debris_positions.push(SatelliteState {
                         plane: 0,
                         sat_index: idx,
-                        x, y, z,
+                        x,
+                        y,
+                        z,
                         lat: (y / r).asin().to_degrees(),
                         lon: -z.atan2(x).to_degrees(),
                         ascending: false,
@@ -2423,8 +2984,17 @@ impl ViewerState {
                         planet_mu,
                         planet_j2,
                         planet_equatorial_radius: planet_eq_radius,
+                        link_budget: crate::config::LinkBudget::default(),
+                        ballistic_coeff: 100.0,
                     };
-                    constellations_data.push((dummy_wc, debris_positions, 0, 3, usize::MAX, "Kessler Debris".to_string()));
+                    constellations_data.push((
+                        dummy_wc,
+                        debris_positions,
+                        0,
+                        3,
+                        usize::MAX,
+                        "Kessler Debris".to_string(),
+                    ));
                 }
             }
         }
@@ -2441,20 +3011,27 @@ impl ViewerState {
             let timestamp = self.start_timestamp + chrono::Duration::seconds(time as i64);
             let day_of_year = timestamp.ordinal() as f64;
             let decl_rad = (crate::time::SOLAR_DECLINATION_MAX
-                * ((360.0 / crate::time::DAYS_PER_YEAR) * (day_of_year + 10.0)).to_radians().cos())
-                .to_radians();
+                * ((360.0 / crate::time::DAYS_PER_YEAR) * (day_of_year + 10.0))
+                    .to_radians()
+                    .cos())
+            .to_radians();
             let sun_ra = ((day_of_year - 80.0) * 360.0 / 365.0).to_radians();
             let sun_inertial = Vector3::new(
                 decl_rad.cos() * sun_ra.cos(),
                 decl_rad.sin(),
                 -decl_rad.cos() * sun_ra.sin(),
-            ).normalize();
+            )
+            .normalize();
             let frame_seed = (time * 1000.0) as u64;
             let planet = &mut self.tabs[tab_idx].planets[planet_idx];
             for (_, positions, _, _, orig_idx, _) in &constellations_data {
-                if *orig_idx == usize::MAX { continue; }
+                if *orig_idx == usize::MAX {
+                    continue;
+                }
                 let constellation = &mut planet.constellations[*orig_idx];
-                if !constellation.physics.enabled { continue; }
+                if !constellation.physics.enabled {
+                    continue;
+                }
                 let total = constellation.sats_per_plane * constellation.num_planes;
                 if constellation.physics_state.len() != total {
                     constellation.physics_state = (0..total)
@@ -2462,7 +3039,9 @@ impl ViewerState {
                         .collect();
                 }
                 for (si, sat) in positions.iter().enumerate() {
-                    if si >= constellation.physics_state.len() { break; }
+                    if si >= constellation.physics_state.len() {
+                        break;
+                    }
                     let sat_pos = Vector3::new(sat.x, sat.y, sat.z);
                     let alt = (sat_pos.norm() - planet_radius).max(0.0);
                     let seed = frame_seed.wrapping_add(*orig_idx as u64 * 10000 + si as u64);
@@ -2513,17 +3092,27 @@ impl ViewerState {
                     let n_frags = planet.kessler.fragments_per_collision;
                     let max_debris = planet.kessler.max_debris;
                     let max_per_frame = (sim_dt * 0.2).max(1.0).min(20.0) as usize;
-                    let mut already_hit: HashSet<String> = planet.kessler.collided_pairs.iter()
+                    let mut already_hit: HashSet<String> = planet
+                        .kessler
+                        .collided_pairs
+                        .iter()
                         .flat_map(|(a, b)| [a.clone(), b.clone()])
                         .collect();
-                    let candidates: Vec<_> = planet.conjunction_cache.conjunctions.iter()
+                    let candidates: Vec<_> = planet
+                        .conjunction_cache
+                        .conjunctions
+                        .iter()
                         .filter(|c| c.distance_km < coll_thresh)
-                        .filter(|c| !(c.source_a == "Kessler Debris" && c.source_b == "Kessler Debris"))
+                        .filter(|c| {
+                            !(c.source_a == "Kessler Debris" && c.source_b == "Kessler Debris")
+                        })
                         .map(|c| (c.pos_a, c.pos_b, c.name_a.clone(), c.name_b.clone()))
                         .collect();
                     let mut collisions_this_frame = 0usize;
                     for (pos_a, pos_b, name_a, name_b) in candidates {
-                        if collisions_this_frame >= max_per_frame { break; }
+                        if collisions_this_frame >= max_per_frame {
+                            break;
+                        }
                         // One object can only be destroyed once — prevents a single
                         // physical collision event from being counted many times when
                         // several pairs fall within the detection threshold.
@@ -2544,35 +3133,51 @@ impl ViewerState {
                         if planet.kessler.debris.len() < max_debris {
                             let capped_frags = n_frags.min(15);
                             let new_debris = crate::kessler::generate_collision_debris(
-                                pos_a, pos_b,
-                                planet_mu, planet_radius,
+                                pos_a,
+                                pos_b,
+                                planet_mu,
+                                planet_radius,
                                 current_time,
                                 capped_frags,
                                 planet.kessler.collision_id_counter,
                             );
                             let remaining = max_debris - planet.kessler.debris.len();
-                            planet.kessler.debris.extend(new_debris.into_iter().take(remaining));
+                            planet
+                                .kessler
+                                .debris
+                                .extend(new_debris.into_iter().take(remaining));
                         }
                     }
                 }
 
                 let recompute_interval = 2.0 * sim_speed.abs().max(1.0);
                 if planet.show_conjunction_window
-                    && (current_time - planet.conjunction_cache.last_prediction_time).abs() > recompute_interval
+                    && (current_time - planet.conjunction_cache.last_prediction_time).abs()
+                        > recompute_interval
                 {
-                    let walker_data: Vec<_> = planet.constellations.iter()
+                    let walker_data: Vec<_> = planet
+                        .constellations
+                        .iter()
                         .filter(|c| !c.hidden)
                         .map(|c| {
-                            let wc = c.constellation(planet_radius, planet_mu, planet_j2, planet_eq_radius);
+                            let wc = c.constellation(
+                                planet_radius,
+                                planet_mu,
+                                planet_j2,
+                                planet_eq_radius,
+                            );
                             (wc, c.preset_name().to_string())
                         })
                         .collect();
 
                     let propagation_minutes = start_ts + current_time / 60.0;
-                    let tle_groups: Vec<crate::conjunction::TleGroup> = crate::tle::TlePreset::ALL.iter()
+                    let tle_groups: Vec<crate::conjunction::TleGroup> = crate::tle::TlePreset::ALL
+                        .iter()
                         .filter_map(|preset| {
                             let (selected, state, _) = planet.tle_selections.get(preset)?;
-                            if !*selected { return None; }
+                            if !*selected {
+                                return None;
+                            }
                             if let crate::tle::TleLoadState::Loaded { satellites } = state {
                                 Some(crate::conjunction::TleGroup {
                                     label: preset.label().to_string(),
@@ -2597,7 +3202,10 @@ impl ViewerState {
 
                     if planet.kessler.course_correction_enabled {
                         let corr_alt = planet.kessler.correction_altitude_km;
-                        let existing: HashSet<String> = planet.kessler.active_corrections.iter()
+                        let existing: HashSet<String> = planet
+                            .kessler
+                            .active_corrections
+                            .iter()
                             .map(|c| c.sat_name.clone())
                             .collect();
                         for pred in &planet.conjunction_cache.predictions {
@@ -2633,7 +3241,10 @@ impl ViewerState {
                     }
                 }
 
-                planet.kessler.active_corrections.retain(|c| c.end_time > current_time);
+                planet
+                    .kessler
+                    .active_corrections
+                    .retain(|c| c.end_time > current_time);
             }
         }
 
@@ -2654,7 +3265,8 @@ impl ViewerState {
                                 .range(1.0..=500.0)
                                 .speed(1.0)
                                 .suffix(" km"),
-                        ).on_hover_text("Distance threshold for conjunction alerts");
+                        )
+                        .on_hover_text("Distance threshold for conjunction alerts");
                         ui.checkbox(&mut show_lines, "Lines")
                             .on_hover_text("Draw lines between conjuncting objects");
                         ui.checkbox(&mut conj_cache.show_heatmap, "Heatmap")
@@ -2670,7 +3282,11 @@ impl ViewerState {
                             ui.horizontal(|ui| {
                                 ui.checkbox(&mut kessler.enabled, "Enable")
                                     .on_hover_text("Simulate cascading debris collisions");
-                                if ui.button("Clear").on_hover_text("Remove all debris and reset counters").clicked() {
+                                if ui
+                                    .button("Clear")
+                                    .on_hover_text("Remove all debris and reset counters")
+                                    .clicked()
+                                {
                                     kessler.debris.clear();
                                     kessler.collision_count = 0;
                                     kessler.collision_id_counter = 0;
@@ -2685,7 +3301,8 @@ impl ViewerState {
                                             .range(0.1..=50.0)
                                             .speed(0.1)
                                             .suffix(" km"),
-                                    ).on_hover_text("Minimum distance to trigger a collision");
+                                    )
+                                    .on_hover_text("Minimum distance to trigger a collision");
                                 });
                                 ui.horizontal(|ui| {
                                     ui.label("Fragments/collision:");
@@ -2693,7 +3310,8 @@ impl ViewerState {
                                         egui::DragValue::new(&mut kessler.fragments_per_collision)
                                             .range(2..=50)
                                             .speed(1),
-                                    ).on_hover_text("Debris fragments created per collision");
+                                    )
+                                    .on_hover_text("Debris fragments created per collision");
                                 });
                                 ui.horizontal(|ui| {
                                     ui.label("Max debris:");
@@ -2701,7 +3319,8 @@ impl ViewerState {
                                         egui::DragValue::new(&mut kessler.max_debris)
                                             .range(100..=50000)
                                             .speed(100),
-                                    ).on_hover_text("Maximum debris objects to simulate");
+                                    )
+                                    .on_hover_text("Maximum debris objects to simulate");
                                 });
                                 ui.label(format!(
                                     "Collisions: {}  Debris: {}",
@@ -2717,11 +3336,16 @@ impl ViewerState {
                                     ui.horizontal(|ui| {
                                         ui.label("Maneuver altitude:");
                                         ui.add(
-                                            egui::DragValue::new(&mut kessler.correction_altitude_km)
-                                                .range(0.5..=50.0)
-                                                .speed(0.1)
-                                                .suffix(" km"),
-                                        ).on_hover_text("Altitude change for collision avoidance maneuver");
+                                            egui::DragValue::new(
+                                                &mut kessler.correction_altitude_km,
+                                            )
+                                            .range(0.5..=50.0)
+                                            .speed(0.1)
+                                            .suffix(" km"),
+                                        )
+                                        .on_hover_text(
+                                            "Altitude change for collision avoidance maneuver",
+                                        );
                                     });
                                     ui.label(format!(
                                         "Corrections: {}  Active: {}",
@@ -2732,43 +3356,47 @@ impl ViewerState {
                             }
 
                             let threshold = conj_cache.threshold_km;
-                            let current: Vec<_> = conj_cache.conjunctions.iter()
+                            let current: Vec<_> = conj_cache
+                                .conjunctions
+                                .iter()
                                 .filter(|c| c.distance_km <= threshold)
                                 .take(10)
                                 .collect();
                             if !current.is_empty() {
                                 ui.separator();
                                 ui.strong("Current");
-                                egui::Grid::new("conj_grid")
-                                    .striped(true)
-                                    .show(ui, |ui| {
-                                        ui.strong("Dist");
-                                        ui.strong("Object A");
-                                        ui.strong("");
-                                        ui.strong("Object B");
-                                        ui.strong("TCA");
-                                        ui.strong("Min Dist");
-                                        ui.end_row();
-                                        for conj in &current {
-                                            let urgency = 1.0 - (conj.distance_km / threshold).clamp(0.0, 1.0);
-                                            let r = (255.0 * urgency) as u8;
-                                            let g = (255.0 * (1.0 - urgency)) as u8;
-                                            let color = egui::Color32::from_rgb(r, g, 0);
-                                            ui.colored_label(color, format!("{:.1} km", conj.distance_km));
-                                            ui.label(format!("{} ({})", conj.name_a, conj.source_a));
-                                            ui.label("↔");
-                                            ui.label(format!("{} ({})", conj.name_b, conj.source_b));
-                                            if conj.tca_seconds.abs() < 1.0 {
-                                                ui.colored_label(egui::Color32::RED, "NOW");
-                                            } else if conj.tca_seconds > 0.0 {
-                                                ui.label(format!("{:.0}s", conj.tca_seconds));
-                                            } else {
-                                                ui.label(format!("{:.0}s ago", -conj.tca_seconds));
-                                            }
-                                            ui.label(format!("{:.1} km", conj.min_distance_km));
-                                            ui.end_row();
+                                egui::Grid::new("conj_grid").striped(true).show(ui, |ui| {
+                                    ui.strong("Dist");
+                                    ui.strong("Object A");
+                                    ui.strong("");
+                                    ui.strong("Object B");
+                                    ui.strong("TCA");
+                                    ui.strong("Min Dist");
+                                    ui.end_row();
+                                    for conj in &current {
+                                        let urgency =
+                                            1.0 - (conj.distance_km / threshold).clamp(0.0, 1.0);
+                                        let r = (255.0 * urgency) as u8;
+                                        let g = (255.0 * (1.0 - urgency)) as u8;
+                                        let color = egui::Color32::from_rgb(r, g, 0);
+                                        ui.colored_label(
+                                            color,
+                                            format!("{:.1} km", conj.distance_km),
+                                        );
+                                        ui.label(format!("{} ({})", conj.name_a, conj.source_a));
+                                        ui.label("↔");
+                                        ui.label(format!("{} ({})", conj.name_b, conj.source_b));
+                                        if conj.tca_seconds.abs() < 1.0 {
+                                            ui.colored_label(egui::Color32::RED, "NOW");
+                                        } else if conj.tca_seconds > 0.0 {
+                                            ui.label(format!("{:.0}s", conj.tca_seconds));
+                                        } else {
+                                            ui.label(format!("{:.0}s ago", -conj.tca_seconds));
                                         }
-                                    });
+                                        ui.label(format!("{:.1} km", conj.min_distance_km));
+                                        ui.end_row();
+                                    }
+                                });
                             }
 
                             ui.separator();
@@ -2779,7 +3407,8 @@ impl ViewerState {
                                         .range(1.0..=60.0)
                                         .speed(1.0)
                                         .suffix(" min"),
-                                ).on_hover_text("Look-ahead window for conjunction predictions");
+                                )
+                                .on_hover_text("Look-ahead window for conjunction predictions");
                             });
                             if conj_cache.predictions.is_empty() {
                                 ui.weak("No upcoming conjunctions predicted");
@@ -2796,13 +3425,26 @@ impl ViewerState {
                                         for pred in conj_cache.predictions.iter().take(10) {
                                             let secs = pred.time_until;
                                             if secs < 60.0 {
-                                                ui.colored_label(egui::Color32::RED, format!("{:.0}s", secs));
+                                                ui.colored_label(
+                                                    egui::Color32::RED,
+                                                    format!("{:.0}s", secs),
+                                                );
                                             } else {
-                                                ui.label(format!("{:.0}m {:.0}s", (secs / 60.0).floor(), secs % 60.0));
+                                                ui.label(format!(
+                                                    "{:.0}m {:.0}s",
+                                                    (secs / 60.0).floor(),
+                                                    secs % 60.0
+                                                ));
                                             }
-                                            ui.label(format!("{} ({})", pred.name_a, pred.source_a));
+                                            ui.label(format!(
+                                                "{} ({})",
+                                                pred.name_a, pred.source_a
+                                            ));
                                             ui.label("↔");
-                                            ui.label(format!("{} ({})", pred.name_b, pred.source_b));
+                                            ui.label(format!(
+                                                "{} ({})",
+                                                pred.name_b, pred.source_b
+                                            ));
                                             ui.label(format!("{:.1} km", pred.min_distance_km));
                                             ui.end_row();
                                         }
@@ -2829,7 +3471,8 @@ impl ViewerState {
                                 .range(0.0..=9.0)
                                 .speed(0.1)
                                 .max_decimals(1),
-                        ).on_hover_text("Geomagnetic activity index (0=quiet, 9=storm)");
+                        )
+                        .on_hover_text("Geomagnetic activity index (0=quiet, 9=storm)");
                         let kp_label = if rad.kp_index < 4.0 {
                             "Quiet"
                         } else if rad.kp_index < 6.0 {
@@ -2860,8 +3503,12 @@ impl ViewerState {
                         .on_hover_text("Fill the belt regions with color");
                     ui.horizontal(|ui| {
                         ui.label("Dots per line:");
-                        ui.add(egui::DragValue::new(&mut rad.dots_per_line).range(2..=100).speed(0.5))
-                            .on_hover_text("Sample points per field line");
+                        ui.add(
+                            egui::DragValue::new(&mut rad.dots_per_line)
+                                .range(2..=100)
+                                .speed(0.5),
+                        )
+                        .on_hover_text("Sample points per field line");
                     });
                     ui.checkbox(&mut rad.show_magnetopause, "Show magnetopause")
                         .on_hover_text("Draw the magnetopause boundary");
@@ -2874,25 +3521,50 @@ impl ViewerState {
                         .on_hover_text("Render radiation data on a spherical surface");
                     ui.horizontal(|ui| {
                         ui.label("Altitude (km):");
-                        ui.add(egui::DragValue::new(&mut rad.heatmap_altitude_km).range(0.0..=50000.0).speed(50.0).max_decimals(0))
-                            .on_hover_text("Altitude of the heatmap sphere");
+                        ui.add(
+                            egui::DragValue::new(&mut rad.heatmap_altitude_km)
+                                .range(0.0..=50000.0)
+                                .speed(50.0)
+                                .max_decimals(0),
+                        )
+                        .on_hover_text("Altitude of the heatmap sphere");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Resolution:");
-                        ui.add(egui::DragValue::new(&mut rad.heatmap_resolution).range(12..=120).speed(0.5))
-                            .on_hover_text("Grid resolution for heatmap rendering");
+                        ui.add(
+                            egui::DragValue::new(&mut rad.heatmap_resolution)
+                                .range(12..=120)
+                                .speed(0.5),
+                        )
+                        .on_hover_text("Grid resolution for heatmap rendering");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Mode:");
                         use crate::config::HeatmapMode;
-                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::Radiation, "Radiation")
-                            .on_hover_text("Simple dipole radiation model");
-                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::IgrfRadiation, "IGRF Rad")
-                            .on_hover_text("AE-8/AP-8 trapped particle model with IGRF field");
-                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::FieldStrength, "Dipole (nT)")
-                            .on_hover_text("Magnetic field strength from tilted dipole");
-                        ui.selectable_value(&mut rad.heatmap_mode, HeatmapMode::IgrfField, "IGRF-14 (nT)")
-                            .on_hover_text("Magnetic field strength from IGRF-14 model");
+                        ui.selectable_value(
+                            &mut rad.heatmap_mode,
+                            HeatmapMode::Radiation,
+                            "Radiation",
+                        )
+                        .on_hover_text("Simple dipole radiation model");
+                        ui.selectable_value(
+                            &mut rad.heatmap_mode,
+                            HeatmapMode::IgrfRadiation,
+                            "IGRF Rad",
+                        )
+                        .on_hover_text("AE-8/AP-8 trapped particle model with IGRF field");
+                        ui.selectable_value(
+                            &mut rad.heatmap_mode,
+                            HeatmapMode::FieldStrength,
+                            "Dipole (nT)",
+                        )
+                        .on_hover_text("Magnetic field strength from tilted dipole");
+                        ui.selectable_value(
+                            &mut rad.heatmap_mode,
+                            HeatmapMode::IgrfField,
+                            "IGRF-14 (nT)",
+                        )
+                        .on_hover_text("Magnetic field strength from IGRF-14 model");
                     });
                     if rad.heatmap_mode == crate::config::HeatmapMode::IgrfRadiation {
                         ui.horizontal(|ui| {
@@ -2909,33 +3581,60 @@ impl ViewerState {
                     ui.strong("Belt Rendering");
                     ui.horizontal(|ui| {
                         ui.label("Drift shells:");
-                        ui.add(egui::DragValue::new(&mut rad.num_shells).range(2..=100).speed(0.5))
-                            .on_hover_text("Number of L-shells to render");
+                        ui.add(
+                            egui::DragValue::new(&mut rad.num_shells)
+                                .range(2..=100)
+                                .speed(0.5),
+                        )
+                        .on_hover_text("Number of L-shells to render");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Meridians:");
-                        ui.add(egui::DragValue::new(&mut rad.num_meridians).range(2..=64).speed(0.5))
-                            .on_hover_text("Number of meridian slices per shell");
+                        ui.add(
+                            egui::DragValue::new(&mut rad.num_meridians)
+                                .range(2..=64)
+                                .speed(0.5),
+                        )
+                        .on_hover_text("Number of meridian slices per shell");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Shell phasing:");
-                        ui.add(egui::DragValue::new(&mut rad.shell_phasing).range(0.0..=2.0).speed(0.05).max_decimals(2))
-                            .on_hover_text("Rotational offset between adjacent shells");
+                        ui.add(
+                            egui::DragValue::new(&mut rad.shell_phasing)
+                                .range(0.0..=2.0)
+                                .speed(0.05)
+                                .max_decimals(2),
+                        )
+                        .on_hover_text("Rotational offset between adjacent shells");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Links:");
-                        ui.add(egui::DragValue::new(&mut rad.num_links).range(0..=20).speed(0.5))
-                            .on_hover_text("Cross-shell connection lines to draw");
+                        ui.add(
+                            egui::DragValue::new(&mut rad.num_links)
+                                .range(0..=20)
+                                .speed(0.5),
+                        )
+                        .on_hover_text("Cross-shell connection lines to draw");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Dipole offset (km):");
-                        ui.add(egui::DragValue::new(&mut rad.dipole_offset_km).range(0.0..=2000.0).speed(10.0).max_decimals(0))
-                            .on_hover_text("Offset of magnetic dipole from planet center");
+                        ui.add(
+                            egui::DragValue::new(&mut rad.dipole_offset_km)
+                                .range(0.0..=2000.0)
+                                .speed(10.0)
+                                .max_decimals(0),
+                        )
+                        .on_hover_text("Offset of magnetic dipole from planet center");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Dipole tilt (°):");
-                        ui.add(egui::DragValue::new(&mut rad.dipole_tilt).range(0.0..=90.0).speed(0.5).max_decimals(1))
-                            .on_hover_text("Tilt angle of the magnetic dipole axis");
+                        ui.add(
+                            egui::DragValue::new(&mut rad.dipole_tilt)
+                                .range(0.0..=90.0)
+                                .speed(0.5)
+                                .max_decimals(1),
+                        )
+                        .on_hover_text("Tilt angle of the magnetic dipole axis");
                     });
 
                     ui.separator();
@@ -2951,11 +3650,13 @@ impl ViewerState {
                         .collect();
                     let inner_color = egui::Color32::from_rgb(255, 120, 50);
                     let outer_color = egui::Color32::from_rgb(100, 130, 230);
-                    let inner_line: Vec<[f64; 2]> = profile_line.iter()
+                    let inner_line: Vec<[f64; 2]> = profile_line
+                        .iter()
                         .filter(|p| p[0] < 12000.0)
                         .copied()
                         .collect();
-                    let outer_line: Vec<[f64; 2]> = profile_line.iter()
+                    let outer_line: Vec<[f64; 2]> = profile_line
+                        .iter()
                         .filter(|p| p[0] >= 6000.0)
                         .copied()
                         .collect();
@@ -2968,14 +3669,20 @@ impl ViewerState {
                         .y_axis_label("Intensity")
                         .show(ui, |plot_ui| {
                             plot_ui.line(
-                                egui_plot::Line::new("Inner belt", egui_plot::PlotPoints::new(inner_line))
-                                    .color(inner_color)
-                                    .width(2.0),
+                                egui_plot::Line::new(
+                                    "Inner belt",
+                                    egui_plot::PlotPoints::new(inner_line),
+                                )
+                                .color(inner_color)
+                                .width(2.0),
                             );
                             plot_ui.line(
-                                egui_plot::Line::new("Outer belt", egui_plot::PlotPoints::new(outer_line))
-                                    .color(outer_color)
-                                    .width(2.0),
+                                egui_plot::Line::new(
+                                    "Outer belt",
+                                    egui_plot::PlotPoints::new(outer_line),
+                                )
+                                .color(outer_color)
+                                .width(2.0),
                             );
                         });
 
@@ -3016,7 +3723,11 @@ impl ViewerState {
                                     planet.enabled_moons.insert(moon_body);
                                 }
                             }
-                            if ui.button("None").on_hover_text("Disable all moons").clicked() {
+                            if ui
+                                .button("None")
+                                .on_hover_text("Disable all moons")
+                                .clicked()
+                            {
                                 planet.enabled_moons.clear();
                             }
                         });
@@ -3031,18 +3742,24 @@ impl ViewerState {
                                         planet.enabled_moons.remove(&moon_body);
                                     }
                                 }
-                                if ui.button("View Orbit").on_hover_text("Zoom to show this moon's orbit").clicked() {
+                                if ui
+                                    .button("View Orbit")
+                                    .on_hover_text("Zoom to show this moon's orbit")
+                                    .clicked()
+                                {
                                     settings.zoom = 10000.0 / (orbit_km * 1.3);
                                     let ci = incl_rad.cos();
                                     let si = incl_rad.sin();
                                     settings.rotation = nalgebra::Matrix3::new(
-                                        1.0, 0.0, 0.0,
-                                        0.0, ci, si,
-                                        0.0, -si, ci,
+                                        1.0, 0.0, 0.0, 0.0, ci, si, 0.0, -si, ci,
                                     );
                                     planet.enabled_moons.insert(moon_body);
                                 }
-                                if ui.button("View Moon").on_hover_text("Zoom to the moon's current position").clicked() {
+                                if ui
+                                    .button("View Moon")
+                                    .on_hover_text("Zoom to the moon's current position")
+                                    .clicked()
+                                {
                                     let time = settings.time;
                                     let angle = 2.0 * PI * time / (period_days * 86400.0);
                                     let x = orbit_km * angle.cos();
@@ -3072,7 +3789,12 @@ impl ViewerState {
                             ui.checkbox(&mut has_override, "Override inclination");
                             if has_override {
                                 let val = planet.moon_inclination_override.get_or_insert(90.0);
-                                ui.add(egui::DragValue::new(val).range(0.0..=180.0).speed(0.5).suffix("°"));
+                                ui.add(
+                                    egui::DragValue::new(val)
+                                        .range(0.0..=180.0)
+                                        .speed(0.5)
+                                        .suffix("°"),
+                                );
                             }
                         });
                         if !has_override {
@@ -3117,11 +3839,7 @@ impl ViewerState {
             } else {
                 let c = roll.cos();
                 let s = roll.sin();
-                let roll_mat = nalgebra::Matrix3::new(
-                    c, -s, 0.0,
-                    s,  c, 0.0,
-                    0.0, 0.0, 1.0,
-                );
+                let roll_mat = nalgebra::Matrix3::new(c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0);
                 roll_mat * base
             }
         };
@@ -3131,11 +3849,7 @@ impl ViewerState {
         let body_rot_angle = body_rotation_angle(celestial_body, time, self.current_gmst);
         let cos_a = body_rot_angle.cos();
         let sin_a = body_rot_angle.sin();
-        let body_y_rotation = Matrix3::new(
-            cos_a, 0.0, sin_a,
-            0.0, 1.0, 0.0,
-            -sin_a, 0.0, cos_a,
-        );
+        let body_y_rotation = Matrix3::new(cos_a, 0.0, sin_a, 0.0, 1.0, 0.0, -sin_a, 0.0, cos_a);
         // Sun-fixing rotation: cancels the Sun's RA drift around +y. This is
         // exactly what SSO locks onto — the RAAN–Sun_RA relationship stays
         // constant, so the orbit plane appears stationary in this frame.
@@ -3157,11 +3871,7 @@ impl ViewerState {
             let sun_ra = ((day_of_year - 80.0) * 360.0 / DAYS_PER_YEAR).to_radians();
             let cy = sun_ra.cos();
             let sy = sun_ra.sin();
-            Matrix3::new(
-                cy, 0.0, -sy,
-                0.0, 1.0, 0.0,
-                sy, 0.0, cy,
-            )
+            Matrix3::new(cy, 0.0, -sy, 0.0, 1.0, 0.0, sy, 0.0, cy)
         } else {
             Matrix3::identity()
         };
@@ -3173,10 +3883,13 @@ impl ViewerState {
         };
         let sat_radius = settings.sat_radius;
         let show_links = settings.show_links;
+        let show_gs_links = settings.show_gs_links;
         let hide_behind_earth = render_planet && settings.hide_behind_earth;
         let single_color = settings.single_color || constellations_data.len() > 1;
         let dark_mode = self.dark_mode;
         let show_routing_paths = settings.show_routing_paths;
+        let show_proxy_links = settings.show_routing_paths && settings.show_proxy_links;
+        let show_path_distance = settings.show_path_distance;
         let show_manhattan_path = settings.show_manhattan_path;
         let show_shortest_path = settings.show_shortest_path;
         let show_radiation_path = settings.show_radiation_path;
@@ -3193,7 +3906,9 @@ impl ViewerState {
         let show_inclination_bounds = settings.show_inclination_bounds;
         let show_ground_tracks = settings.show_ground_tracks;
         let tex_res = self.texture_resolution;
-        let planet_handle = self.planet_image_handles.get(&(celestial_body, skin, tex_res));
+        let planet_handle = self
+            .planet_image_handles
+            .get(&(celestial_body, skin, tex_res));
         let torus_rotation = {
             let base = settings.rotation;
             let roll = settings.camera_roll.to_radians();
@@ -3202,11 +3917,7 @@ impl ViewerState {
             } else {
                 let c = roll.cos();
                 let s = roll.sin();
-                let roll_mat = nalgebra::Matrix3::new(
-                    c, -s, 0.0,
-                    s,  c, 0.0,
-                    0.0, 0.0, 1.0,
-                );
+                let roll_mat = nalgebra::Matrix3::new(c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0);
                 roll_mat * base
             }
         };
@@ -3233,7 +3944,8 @@ impl ViewerState {
         let trackpad_rotate = settings.trackpad_rotate;
         let north_up = settings.north_up;
         let enabled_moons = self.tabs[tab_idx].planets[planet_idx].enabled_moons.clone();
-        let moon_inclination_override = self.tabs[tab_idx].planets[planet_idx].moon_inclination_override;
+        let moon_inclination_override =
+            self.tabs[tab_idx].planets[planet_idx].moon_inclination_override;
         let show_moon_orbits = settings.show_moon_orbits;
         let show_moon_lines = settings.show_moon_lines;
         let show_moon_labels = settings.show_moon_labels;
@@ -3245,8 +3957,15 @@ impl ViewerState {
         let detail_bounds = self.tile_overlay_detail_bounds(celestial_body);
         let gpu_available = self.render_state.is_some();
 
-        let num_views = [render_planet, show_torus, show_solar_system, show_planet_sizes]
-            .iter().filter(|v| **v).count();
+        let num_views = [
+            render_planet,
+            show_torus,
+            show_solar_system,
+            show_planet_sizes,
+        ]
+        .iter()
+        .filter(|v| **v)
+        .count();
 
         if num_views > 0 {
             let view_height = available.y - 20.0;
@@ -3265,27 +3984,43 @@ impl ViewerState {
                         // sub-satellite point moves over the Earth-fixed frame. Points
                         // older than the orbit period × 6 are trimmed to keep history bounded.
                         if show_ground_tracks {
-                            const GT_MIN_DT: f64 = 10.0;  // seconds of sim time between samples
+                            const GT_MIN_DT: f64 = 10.0; // seconds of sim time between samples
                             const GT_MAX_POINTS: usize = 20000;
-                            let tracked: Vec<(usize, usize, usize)> = planet.satellite_cameras
+                            let tracked: Vec<(usize, usize, usize)> = planet
+                                .satellite_cameras
                                 .iter()
                                 .filter(|c| c.constellation_idx != usize::MAX)
                                 .map(|c| (c.constellation_idx, c.plane, c.sat_index))
                                 .collect();
                             for (cons_idx, plane, sat_index) in tracked {
-                                let Some(cons) = planet.constellations.get(cons_idx) else { continue; };
-                                let wc = cons.constellation(planet_radius, planet_mu, planet_j2, planet_eq_radius);
+                                let Some(cons) = planet.constellations.get(cons_idx) else {
+                                    continue;
+                                };
+                                let wc = cons.constellation(
+                                    planet_radius,
+                                    planet_mu,
+                                    planet_j2,
+                                    planet_eq_radius,
+                                );
                                 let positions = wc.satellite_positions(time);
-                                let Some(sat) = positions.iter().find(|s| s.plane == plane && s.sat_index == sat_index) else { continue; };
+                                let Some(sat) = positions
+                                    .iter()
+                                    .find(|s| s.plane == plane && s.sat_index == sat_index)
+                                else {
+                                    continue;
+                                };
                                 let r = (sat.x * sat.x + sat.y * sat.y + sat.z * sat.z).sqrt();
-                                if r < 1e-6 { continue; }
+                                if r < 1e-6 {
+                                    continue;
+                                }
                                 let lat = (sat.y / r).asin().to_degrees();
                                 let bx = sat.x * cos_a - sat.z * sin_a;
                                 let bz = sat.x * sin_a + sat.z * cos_a;
                                 let lon = (-bz).atan2(bx).to_degrees();
                                 let key = (cons_idx, plane, sat_index);
                                 let entry = planet.ground_track_history.entry(key).or_default();
-                                let should_push = entry.last()
+                                let should_push = entry
+                                    .last()
                                     .map(|&(_, _, t)| (time - t).abs() >= GT_MIN_DT)
                                     .unwrap_or(true);
                                 if should_push {
@@ -3299,19 +4034,50 @@ impl ViewerState {
                             planet.ground_track_history.clear();
                         }
                         let view_flags = View3DFlags {
-                            show_orbits, show_axes, show_magnetic_axis, show_coverage, show_links,
-                            hide_behind_earth, single_color, dark_mode, show_routing_paths,
-                            show_manhattan_path, show_shortest_path, show_radiation_path, radiation_weight,
-                            routing_width, routing_node_scale,
+                            show_orbits,
+                            show_axes,
+                            show_magnetic_axis,
+                            show_coverage,
+                            show_links,
+                            show_gs_links,
+                            hide_behind_earth,
+                            single_color,
+                            dark_mode,
+                            show_routing_paths,
+                            show_proxy_links,
+                            show_path_distance,
+                            show_manhattan_path,
+                            show_shortest_path,
+                            show_radiation_path,
+                            radiation_weight,
+                            routing_width,
+                            routing_node_scale,
                             show_asc_desc_colors,
                             color_ascending,
                             color_descending,
                             color_links,
                             show_sat_labels,
-                            show_altitude_lines, altitude_line_width, show_inclination_bounds, render_planet, fixed_sizes, show_sat_border, show_polar_circle,
-                            show_equator, show_graticule, show_crosshairs, show_terminator, show_eclipse, show_sun, earth_fixed_camera,
-                            use_gpu_rendering: self.use_gpu_rendering, show_clouds, show_day_night, show_city_lights,
-                            show_stars, show_borders, show_cities,
+                            show_altitude_lines,
+                            altitude_line_width,
+                            show_inclination_bounds,
+                            render_planet,
+                            fixed_sizes,
+                            show_sat_border,
+                            show_polar_circle,
+                            show_equator,
+                            show_graticule,
+                            show_crosshairs,
+                            show_terminator,
+                            show_eclipse,
+                            show_sun,
+                            earth_fixed_camera,
+                            use_gpu_rendering: self.use_gpu_rendering,
+                            show_clouds,
+                            show_day_night,
+                            show_city_lights,
+                            show_stars,
+                            show_borders,
+                            show_cities,
                             trackpad_rotate,
                             north_up,
                             enabled_moons: enabled_moons.clone(),
@@ -3336,53 +4102,84 @@ impl ViewerState {
                             let decl_rad: f64 = if sun_fixed_camera {
                                 0.0
                             } else {
-                                let declination = SOLAR_DECLINATION_MAX * ((360.0 / DAYS_PER_YEAR) * (day_of_year + 10.0)).to_radians().cos();
+                                let declination = SOLAR_DECLINATION_MAX
+                                    * ((360.0 / DAYS_PER_YEAR) * (day_of_year + 10.0))
+                                        .to_radians()
+                                        .cos();
                                 declination.to_radians()
                             };
-                            let sun_ra = ((day_of_year - 80.0) * 360.0 / DAYS_PER_YEAR).to_radians();
+                            let sun_ra =
+                                ((day_of_year - 80.0) * 360.0 / DAYS_PER_YEAR).to_radians();
                             let sun_inertial = Vector3::new(
                                 decl_rad.cos() * sun_ra.cos(),
                                 decl_rad.sin(),
                                 -decl_rad.cos() * sun_ra.sin(),
                             );
                             let sun_shader = body_y_rotation.transpose() * sun_inertial;
-                            [sun_shader.x as f32, sun_shader.y as f32, sun_shader.z as f32]
+                            [
+                                sun_shader.x as f32,
+                                sun_shader.y as f32,
+                                sun_shader.z as f32,
+                            ]
                         };
-                        let device_layers_ref: &[DeviceLayer] = if show_devices { &planet.device_layers } else { &[] };
-                        let conj_lines: Vec<_> = if planet.show_conjunction_lines && !planet.conjunction_cache.show_heatmap {
+                        let device_layers_ref: &[DeviceLayer] = if show_devices {
+                            &planet.device_layers
+                        } else {
+                            &[]
+                        };
+                        let conj_lines: Vec<_> = if planet.show_conjunction_lines
+                            && !planet.conjunction_cache.show_heatmap
+                        {
                             let t = planet.conjunction_cache.threshold_km;
-                            planet.conjunction_cache.conjunctions.iter()
+                            planet
+                                .conjunction_cache
+                                .conjunctions
+                                .iter()
                                 .filter(|c| c.distance_km <= t)
-                                .map(|c| (c.clone(), t)).collect()
+                                .map(|c| (c.clone(), t))
+                                .collect()
                         } else {
                             Vec::new()
                         };
                         let conj_heatmap: Vec<_> = if planet.conjunction_cache.show_heatmap {
                             let t = planet.conjunction_cache.threshold_km;
-                            planet.conjunction_cache.conjunctions.iter()
+                            planet
+                                .conjunction_cache
+                                .conjunctions
+                                .iter()
                                 .filter(|c| c.tca_seconds > 0.0 && c.min_distance_km < t)
                                 .map(|c| (c.clone(), t))
                                 .collect()
                         } else {
                             Vec::new()
                         };
-                        let correcting_sats: HashSet<String> = if planet.kessler.course_correction_enabled {
-                            planet.kessler.active_corrections.iter()
-                                .filter(|c| c.offset_at(time).abs() > 1e-6)
-                                .map(|c| c.sat_name.clone())
-                                .collect()
-                        } else {
-                            HashSet::new()
-                        };
-                        let hit_sats: HashSet<String> = planet.kessler.collided_pairs.iter()
+                        let correcting_sats: HashSet<String> =
+                            if planet.kessler.course_correction_enabled {
+                                planet
+                                    .kessler
+                                    .active_corrections
+                                    .iter()
+                                    .filter(|c| c.offset_at(time).abs() > 1e-6)
+                                    .map(|c| c.sat_name.clone())
+                                    .collect()
+                            } else {
+                                HashSet::new()
+                            };
+                        let hit_sats: HashSet<String> = planet
+                            .kessler
+                            .collided_pairs
+                            .iter()
                             .flat_map(|(a, b)| [a.clone(), b.clone()])
                             .collect();
                         if show_radiation_belts || planet.show_radiation_window {
                             let sphere_r = planet_radius + planet.radiation.heatmap_altitude_km;
                             match planet.radiation.heatmap_mode {
                                 crate::config::HeatmapMode::IgrfField => {
-                                    if planet.radiation.igrf_grid_cache.as_ref().map(|(r, _)| *r) != Some(sphere_r) {
-                                        planet.radiation.igrf_grid_cache = Some((sphere_r, crate::igrf::IgrfGrid::new(sphere_r)));
+                                    if planet.radiation.igrf_grid_cache.as_ref().map(|(r, _)| *r)
+                                        != Some(sphere_r)
+                                    {
+                                        planet.radiation.igrf_grid_cache =
+                                            Some((sphere_r, crate::igrf::IgrfGrid::new(sphere_r)));
                                     }
                                 }
                                 crate::config::HeatmapMode::IgrfRadiation => {}
@@ -3392,15 +4189,23 @@ impl ViewerState {
                         let physics_colors: HashMap<(usize, usize), egui::Color32> = {
                             let mut map = HashMap::new();
                             for c in &planet.constellations {
-                                if !c.physics.enabled || c.physics_state.is_empty() { continue; }
-                                let cidx = planet.constellations.iter().position(|x| std::ptr::eq(x, c)).unwrap_or(usize::MAX);
+                                if !c.physics.enabled || c.physics_state.is_empty() {
+                                    continue;
+                                }
+                                let cidx = planet
+                                    .constellations
+                                    .iter()
+                                    .position(|x| std::ptr::eq(x, c))
+                                    .unwrap_or(usize::MAX);
                                 for (si, ps) in c.physics_state.iter().enumerate() {
                                     let color = if ps.is_dead {
                                         crate::physics::dead_color()
                                     } else {
                                         match c.physics.color_mode {
                                             crate::physics::PhysicsColorMode::Battery => {
-                                                crate::physics::battery_color(ps.state_of_charge(&c.physics))
+                                                crate::physics::battery_color(
+                                                    ps.state_of_charge(&c.physics),
+                                                )
                                             }
                                             crate::physics::PhysicsColorMode::Temperature => {
                                                 crate::physics::temperature_color(ps.temperature_k)
@@ -3416,10 +4221,23 @@ impl ViewerState {
                         let physics_info: HashMap<(usize, usize), (f64, f64, bool)> = {
                             let mut map = HashMap::new();
                             for c in &planet.constellations {
-                                if !c.physics.enabled || c.physics_state.is_empty() { continue; }
-                                let cidx = planet.constellations.iter().position(|x| std::ptr::eq(x, c)).unwrap_or(usize::MAX);
+                                if !c.physics.enabled || c.physics_state.is_empty() {
+                                    continue;
+                                }
+                                let cidx = planet
+                                    .constellations
+                                    .iter()
+                                    .position(|x| std::ptr::eq(x, c))
+                                    .unwrap_or(usize::MAX);
                                 for (si, ps) in c.physics_state.iter().enumerate() {
-                                    map.insert((cidx, si), (ps.state_of_charge(&c.physics), ps.temperature_k, ps.is_dead));
+                                    map.insert(
+                                        (cidx, si),
+                                        (
+                                            ps.state_of_charge(&c.physics),
+                                            ps.temperature_k,
+                                            ps.is_dead,
+                                        ),
+                                    );
                                 }
                             }
                             map
@@ -3427,12 +4245,38 @@ impl ViewerState {
                         let mut ctx_menu_req: Option<(egui::Pos2, f64, f64)> = None;
                         let mut label_click_req: Option<(bool, usize, egui::Pos2)> = None;
                         let ground_tracks_vec: Vec<Vec<(f64, f64)>> = if show_ground_tracks {
-                            planet.ground_track_history.values()
+                            planet
+                                .ground_track_history
+                                .values()
                                 .map(|v| v.iter().map(|&(lat, lon, _)| (lat, lon)).collect())
                                 .collect()
                         } else {
                             Vec::new()
                         };
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let flash_intensities: Vec<
+                            std::collections::HashMap<u32, f32>,
+                        > = constellations_data
+                            .iter()
+                            .map(|(_, _, _, _, orig_idx, _)| {
+                                if *orig_idx == usize::MAX {
+                                    std::collections::HashMap::new()
+                                } else {
+                                    crate::cfs::flash_intensities(
+                                        &planet.constellations[*orig_idx],
+                                        800,
+                                    )
+                                }
+                            })
+                            .collect();
+                        #[cfg(target_arch = "wasm32")]
+                        let flash_intensities: Vec<
+                            std::collections::HashMap<u32, f32>,
+                        > = constellations_data
+                            .iter()
+                            .map(|_| std::collections::HashMap::new())
+                            .collect();
+                        let gs_locked_for_draw = planet.has_running_cfs();
                         let (rot, new_zoom) = draw_3d_view(
                             ui,
                             &view_name,
@@ -3451,6 +4295,7 @@ impl ViewerState {
                             &mut self.camera_id_counter,
                             &mut planet.satellite_cameras,
                             &mut planet.cameras_to_remove,
+                            &mut planet.pinned_isls,
                             planet_radius,
                             flattening,
                             gpu_available,
@@ -3459,6 +4304,7 @@ impl ViewerState {
                             sun_dir,
                             time,
                             &mut planet.ground_stations,
+                            gs_locked_for_draw,
                             &mut planet.areas_of_interest,
                             device_layers_ref,
                             body_rot_angle,
@@ -3466,11 +4312,33 @@ impl ViewerState {
                             (tab_idx, planet_idx),
                             detail_bounds,
                             #[cfg(not(target_arch = "wasm32"))]
-                            { match &self.geo_data { GeoLoadState::Loaded(d) => if show_borders { d.borders.as_slice() } else { &[] }, _ => &[] } },
+                            {
+                                match &self.geo_data {
+                                    GeoLoadState::Loaded(d) => {
+                                        if show_borders {
+                                            d.borders.as_slice()
+                                        } else {
+                                            &[]
+                                        }
+                                    }
+                                    _ => &[],
+                                }
+                            },
                             #[cfg(target_arch = "wasm32")]
                             &[],
                             #[cfg(not(target_arch = "wasm32"))]
-                            { match &self.geo_data { GeoLoadState::Loaded(d) => if show_cities { d.cities.as_slice() } else { &[] }, _ => &[] } },
+                            {
+                                match &self.geo_data {
+                                    GeoLoadState::Loaded(d) => {
+                                        if show_cities {
+                                            d.cities.as_slice()
+                                        } else {
+                                            &[]
+                                        }
+                                    }
+                                    _ => &[],
+                                }
+                            },
                             #[cfg(target_arch = "wasm32")]
                             &[],
                             &conj_lines,
@@ -3488,6 +4356,7 @@ impl ViewerState {
                             &physics_colors,
                             &physics_info,
                             &ground_tracks_vec,
+                            &flash_intensities,
                         );
                         {
                             // Strip the sun-fix rotation before saving so it
@@ -3499,26 +4368,28 @@ impl ViewerState {
                             } else {
                                 let c = roll.cos();
                                 let s = roll.sin();
-                                let roll_inv = nalgebra::Matrix3::new(
-                                    c, s, 0.0,
-                                    -s, c, 0.0,
-                                    0.0, 0.0, 1.0,
-                                );
+                                let roll_inv =
+                                    nalgebra::Matrix3::new(c, s, 0.0, -s, c, 0.0, 0.0, 0.0, 1.0);
                                 self.tabs[tab_idx].settings.rotation = roll_inv * rot;
                             }
                         }
                         self.tabs[tab_idx].settings.zoom = new_zoom;
                         if let Some((screen_pos, lat, lon)) = ctx_menu_req {
                             self.context_menu = Some(crate::viewer::ContextMenuState {
-                                screen_pos, lat, lon,
-                                tab_idx, planet_idx,
+                                screen_pos,
+                                lat,
+                                lon,
+                                tab_idx,
+                                planet_idx,
                             });
                             self.editing_place = None;
                         }
                         if let Some((is_gs, idx, click_pos)) = label_click_req {
                             self.editing_place = Some(crate::viewer::EditingPlaceState {
-                                is_gs, idx,
-                                tab_idx, planet_idx,
+                                is_gs,
+                                idx,
+                                tab_idx,
+                                planet_idx,
                                 screen_pos: click_pos,
                                 just_opened: true,
                             });
@@ -3558,11 +4429,33 @@ impl ViewerState {
                             &planet.satellite_cameras,
                             planet_radius,
                             #[cfg(not(target_arch = "wasm32"))]
-                            { match &self.geo_data { GeoLoadState::Loaded(d) => if show_borders { d.borders.as_slice() } else { &[] }, _ => &[] } },
+                            {
+                                match &self.geo_data {
+                                    GeoLoadState::Loaded(d) => {
+                                        if show_borders {
+                                            d.borders.as_slice()
+                                        } else {
+                                            &[]
+                                        }
+                                    }
+                                    _ => &[],
+                                }
+                            },
                             #[cfg(target_arch = "wasm32")]
                             &[],
                             #[cfg(not(target_arch = "wasm32"))]
-                            { match &self.geo_data { GeoLoadState::Loaded(d) => if show_cities { d.cities.as_slice() } else { &[] }, _ => &[] } },
+                            {
+                                match &self.geo_data {
+                                    GeoLoadState::Loaded(d) => {
+                                        if show_cities {
+                                            d.cities.as_slice()
+                                        } else {
+                                            &[]
+                                        }
+                                    }
+                                    _ => &[],
+                                }
+                            },
                             #[cfg(target_arch = "wasm32")]
                             &[],
                             &planet.ground_stations,
@@ -3617,11 +4510,8 @@ impl ViewerState {
                         } else {
                             let c = roll.cos();
                             let s = roll.sin();
-                            let roll_inv = nalgebra::Matrix3::new(
-                                c, s, 0.0,
-                                -s, c, 0.0,
-                                0.0, 0.0, 1.0,
-                            );
+                            let roll_inv =
+                                nalgebra::Matrix3::new(c, s, 0.0, -s, c, 0.0, 0.0, 0.0, 1.0);
                             self.tabs[tab_idx].settings.rotation = roll_inv * trot;
                         }
                         self.torus_zoom = tzoom;
@@ -3630,7 +4520,8 @@ impl ViewerState {
 
                 if show_solar_system {
                     ui.vertical(|ui| {
-                        let ss_timestamp = self.start_timestamp + chrono::Duration::seconds(time as i64);
+                        let ss_timestamp =
+                            self.start_timestamp + chrono::Duration::seconds(time as i64);
                         let lp = log_power;
                         let plot = egui_plot::Plot::new(format!("solar_{}", view_name))
                             .width(view_width)
@@ -3705,7 +4596,8 @@ impl ViewerState {
                                     let cy = (bounds.min()[1] + bounds.max()[1]) / 2.0;
                                     let hw = (bounds.max()[0] - bounds.min()[0]) / 2.0;
                                     let hh = (bounds.max()[1] - bounds.min()[1]) / 2.0;
-                                    let (px, py) = plot_ui.pointer_coordinate()
+                                    let (px, py) = plot_ui
+                                        .pointer_coordinate()
                                         .map(|p| (p.x, p.y))
                                         .unwrap_or((cx, cy));
                                     let ncx = px + (cx - px) * factor;
@@ -3739,20 +4631,35 @@ impl ViewerState {
                                 hide_bodies,
                             );
                             if self.tabs[tab_idx].settings.show_hohmann {
-                                let ss_j2000 = ss_timestamp.signed_duration_since(*crate::solar_system::J2000_EPOCH_PUB).num_seconds() as f64 / 86400.0;
+                                let ss_j2000 = ss_timestamp
+                                    .signed_duration_since(*crate::solar_system::J2000_EPOCH_PUB)
+                                    .num_seconds()
+                                    as f64
+                                    / 86400.0;
                                 if self.hohmann.launched {
                                     let elapsed = ss_j2000 - self.hohmann.launch_j2000_days;
                                     self.hohmann.mission_elapsed_days = elapsed.max(0.0);
                                     if !self.hohmann.arrived {
-                                        let params = crate::solar_system::hohmann_transfer_params(self.hohmann.origin, self.hohmann.dest);
+                                        let params = crate::solar_system::hohmann_transfer_params(
+                                            self.hohmann.origin,
+                                            self.hohmann.dest,
+                                        );
                                         if let Some(p) = params {
-                                            if self.hohmann.mission_elapsed_days >= p.transfer_time_days {
-                                                self.hohmann.mission_elapsed_days = p.transfer_time_days;
+                                            if self.hohmann.mission_elapsed_days
+                                                >= p.transfer_time_days
+                                            {
+                                                self.hohmann.mission_elapsed_days =
+                                                    p.transfer_time_days;
                                                 self.hohmann.arrived = true;
                                             }
                                         }
                                     }
-                                    if let Some(pos) = crate::solar_system::hohmann_spacecraft_position_au(&self.hohmann, ss_j2000) {
+                                    if let Some(pos) =
+                                        crate::solar_system::hohmann_spacecraft_position_au(
+                                            &self.hohmann,
+                                            ss_j2000,
+                                        )
+                                    {
                                         let last = self.hohmann.trail.last();
                                         let dominated = last.map_or(false, |l| {
                                             (l[0] - pos[0]).powi(2) + (l[1] - pos[1]).powi(2) < 1e-8
@@ -3807,7 +4714,12 @@ impl ViewerState {
     }
 
     #[allow(unused_variables)]
-    pub(crate) fn load_texture_for_body(&mut self, body: CelestialBody, skin: Skin, ctx: &egui::Context) {
+    pub(crate) fn load_texture_for_body(
+        &mut self,
+        body: CelestialBody,
+        skin: Skin,
+        ctx: &egui::Context,
+    ) {
         let res = self.texture_resolution;
         let key = (body, skin, res);
         if self.planet_textures.contains_key(&key) {
@@ -3815,9 +4727,15 @@ impl ViewerState {
         }
 
         if skin == Skin::Abstract && body == CelestialBody::Earth {
-            let src_key = (CelestialBody::Earth, Skin::Default, TextureResolution::R8192);
+            let src_key = (
+                CelestialBody::Earth,
+                Skin::Default,
+                TextureResolution::R8192,
+            );
             if !self.planet_textures.contains_key(&src_key) {
-                if let Some(path) = Skin::Default.filename(CelestialBody::Earth, TextureResolution::R8192) {
+                if let Some(path) =
+                    Skin::Default.filename(CelestialBody::Earth, TextureResolution::R8192)
+                {
                     if let Ok(bytes) = std::fs::read(asset_path(path)) {
                         if let Ok(tex) = EarthTexture::from_bytes(&bytes) {
                             self.planet_textures.insert(src_key, Arc::new(tex));
@@ -3826,26 +4744,53 @@ impl ViewerState {
                 }
             }
             let texture = if let Some(src) = self.planet_textures.get(&src_key) {
-                let (ocean, land, ice) = self.tabs.iter()
+                let (ocean, land, ice) = self
+                    .tabs
+                    .iter()
                     .flat_map(|t| t.planets.iter())
                     .find(|p| p.celestial_body == body && p.skin == Skin::Abstract)
-                    .map(|p| (
-                        [p.abstract_ocean.r(), p.abstract_ocean.g(), p.abstract_ocean.b()],
-                        [p.abstract_land.r(), p.abstract_land.g(), p.abstract_land.b()],
-                        [p.abstract_ice.r(), p.abstract_ice.g(), p.abstract_ice.b()],
-                    ))
+                    .map(|p| {
+                        (
+                            [
+                                p.abstract_ocean.r(),
+                                p.abstract_ocean.g(),
+                                p.abstract_ocean.b(),
+                            ],
+                            [
+                                p.abstract_land.r(),
+                                p.abstract_land.g(),
+                                p.abstract_land.b(),
+                            ],
+                            [p.abstract_ice.r(), p.abstract_ice.g(), p.abstract_ice.b()],
+                        )
+                    })
                     .unwrap_or(([25, 40, 80], [60, 75, 85], [140, 150, 160]));
-                let pixels: Vec<[u8; 3]> = src.pixels.iter().map(|&[r, g, b]| {
-                    let brightness = (r as u16 + g as u16 + b as u16) / 3;
-                    let is_ocean = b as u16 > (r as u16 + g as u16) / 2 + 20
-                        && brightness < 180;
-                    let is_ice = brightness > 200;
-                    if is_ice { ice } else if is_ocean { ocean } else { land }
-                }).collect();
-                Arc::new(EarthTexture { width: src.width, height: src.height, pixels })
+                let pixels: Vec<[u8; 3]> = src
+                    .pixels
+                    .iter()
+                    .map(|&[r, g, b]| {
+                        let brightness = (r as u16 + g as u16 + b as u16) / 3;
+                        let is_ocean =
+                            b as u16 > (r as u16 + g as u16) / 2 + 20 && brightness < 180;
+                        let is_ice = brightness > 200;
+                        if is_ice {
+                            ice
+                        } else if is_ocean {
+                            ocean
+                        } else {
+                            land
+                        }
+                    })
+                    .collect();
+                Arc::new(EarthTexture {
+                    width: src.width,
+                    height: src.height,
+                    pixels,
+                })
             } else {
                 Arc::new(EarthTexture {
-                    width: 2, height: 1,
+                    width: 2,
+                    height: 1,
                     pixels: vec![[25, 40, 80], [25, 40, 80]],
                 })
             };
@@ -3869,7 +4814,9 @@ impl ViewerState {
                     Ok(texture) => {
                         let mut factor = res.downscale_factor(body, skin);
                         let max_gpu_size = 16384u32;
-                        while texture.width / factor > max_gpu_size || texture.height / factor > max_gpu_size {
+                        while texture.width / factor > max_gpu_size
+                            || texture.height / factor > max_gpu_size
+                        {
                             factor += 1;
                         }
                         let texture = if factor > 1 {
@@ -3938,7 +4885,9 @@ impl ViewerState {
             let filename = filename.to_string();
             wasm_bindgen_futures::spawn_local(async move {
                 let result = fetch_texture(&filename).await;
-                CLOUD_TEXTURE_RESULT.with(|cell| { *cell.borrow_mut() = Some((res, result)); });
+                CLOUD_TEXTURE_RESULT.with(|cell| {
+                    *cell.borrow_mut() = Some((res, result));
+                });
                 ctx.request_repaint();
             });
         }
@@ -3965,7 +4914,9 @@ impl ViewerState {
             let ctx = _ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let result = fetch_texture("textures/earth/Earth_Сities_16k.png").await;
-                NIGHT_TEXTURE_RESULT.with(|cell| { *cell.borrow_mut() = Some(result); });
+                NIGHT_TEXTURE_RESULT.with(|cell| {
+                    *cell.borrow_mut() = Some(result);
+                });
                 ctx.request_repaint();
             });
         }
@@ -3999,7 +4950,9 @@ impl ViewerState {
                 let ctx = _ctx.clone();
                 wasm_bindgen_futures::spawn_local(async move {
                     let result = fetch_texture("textures/stars/8k_stars.jpg").await;
-                    STAR_TEXTURE_RESULT.with(|cell| { *cell.borrow_mut() = Some(result); });
+                    STAR_TEXTURE_RESULT.with(|cell| {
+                        *cell.borrow_mut() = Some(result);
+                    });
                     ctx.request_repaint();
                 });
             }
@@ -4008,7 +4961,9 @@ impl ViewerState {
                 let ctx = _ctx.clone();
                 wasm_bindgen_futures::spawn_local(async move {
                     let result = fetch_texture("textures/stars/8k_stars_milky_way.jpg").await;
-                    MILKY_WAY_TEXTURE_RESULT.with(|cell| { *cell.borrow_mut() = Some(result); });
+                    MILKY_WAY_TEXTURE_RESULT.with(|cell| {
+                        *cell.borrow_mut() = Some(result);
+                    });
                     ctx.request_repaint();
                 });
             }

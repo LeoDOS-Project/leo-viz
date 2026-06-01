@@ -3,7 +3,7 @@
 //! Implements Walker Delta and Walker Star satellite constellation patterns,
 //! computing orbital positions, RAAN drift, and inter-satellite neighbor links.
 
-use crate::config::{NumericalSatState, NumericalState, Propagator};
+use crate::config::{LinkBudget, NumericalSatState, NumericalState, Propagator};
 
 use std::f64::consts::PI;
 
@@ -31,6 +31,8 @@ pub struct WalkerConstellation {
     pub planet_mu: f64,
     pub planet_j2: f64,
     pub planet_equatorial_radius: f64,
+    pub link_budget: LinkBudget,
+    pub ballistic_coeff: f64,
 }
 
 pub struct SatelliteState {
@@ -99,7 +101,12 @@ impl WalkerConstellation {
         (self.raan_step() * self.num_planes as f64) < max_spread - 1e-9
     }
 
-    pub fn single_satellite_lat_lon(&self, plane: usize, sat: usize, time: f64) -> (f64, f64, [f64; 3]) {
+    pub fn single_satellite_lat_lon(
+        &self,
+        plane: usize,
+        sat: usize,
+        time: f64,
+    ) -> (f64, f64, [f64; 3]) {
         let sats_per_plane = self.sats_per_plane();
         let perigee_radius = self.planet_radius + self.altitude_km;
         let ecc = self.eccentricity;
@@ -134,7 +141,9 @@ impl WalkerConstellation {
         let raan_sin = raan.sin();
         let phase_offset = phase_step * plane as f64;
 
-        let mean_anomaly = sat_step * sat as f64 - sat_center_offset + if dead { 0.0 } else { mean_motion * time } + phase_offset;
+        let mean_anomaly = sat_step * sat as f64 - sat_center_offset
+            + if dead { 0.0 } else { mean_motion * time }
+            + phase_offset;
         let true_anomaly = if ecc < 1e-8 {
             mean_anomaly
         } else {
@@ -219,7 +228,7 @@ impl WalkerConstellation {
 
                         let mut orb = leodos_lib42::sim::OrbitType::default();
                         orb.Regime = 2; // ORB_CENTRAL
-                        orb.World = 3;  // EARTH
+                        orb.World = 3; // EARTH
                         orb.Exists = 1;
                         orb.mu = mu_m;
                         orb.SMA = sma_m;
@@ -261,8 +270,11 @@ impl WalkerConstellation {
                         positions.push(SatelliteState {
                             plane,
                             sat_index: sat,
-                            x, y, z,
-                            lat, lon,
+                            x,
+                            y,
+                            z,
+                            lat,
+                            lon,
                             ascending,
                             neighbors: Vec::new(),
                             name: None,
@@ -273,98 +285,118 @@ impl WalkerConstellation {
                 }
             }
         } else {
-        let inc_cos = inc.cos();
-        let inc_sin = inc.sin();
-        let r_ratio = self.planet_equatorial_radius / semi_major;
-        let use_j2 = self.propagator == Propagator::J2;
+            let inc_cos = inc.cos();
+            let inc_sin = inc.sin();
+            let r_ratio = self.planet_equatorial_radius / semi_major;
+            let use_j2 = self.propagator == Propagator::J2;
 
-        // J2 secular perturbation rates
-        let e2 = ecc * ecc;
-        let one_minus_e2 = 1.0 - e2;
-        let p_factor = one_minus_e2 * one_minus_e2;
-        let j2_coeff = 1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion;
+            // J2 secular perturbation rates
+            let e2 = ecc * ecc;
+            let one_minus_e2 = 1.0 - e2;
+            let p_factor = one_minus_e2 * one_minus_e2;
+            let j2_coeff = 1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion;
 
-        // Sign note: with this codebase's convention `lon = -atan2(z, x)`, a
-        // positive rotation of the ascending node around +y corresponds to a
-        // *decreasing* longitude. J2 physically gives prograde RAAN regression
-        // (−cos(i) rate) in standard astronomy; we flip the sign here so the
-        // drift direction matches this code's lon convention — retrograde i
-        // produces RAAN motion eastward (matching the Sun's apparent motion).
-        let raan_rate = if use_j2 {
-            j2_coeff * inc_cos / p_factor
-        } else {
-            0.0
-        };
-        let omega_rate = if use_j2 {
-            j2_coeff * (2.0 - 2.5 * inc_sin * inc_sin) / p_factor
-        } else {
-            0.0
-        };
-        let m_dot = if use_j2 {
-            mean_motion + 0.75 * self.planet_j2 * r_ratio * r_ratio * mean_motion
-                * (3.0 * inc_cos * inc_cos - 1.0) * one_minus_e2.sqrt() / p_factor
-        } else {
-            mean_motion
-        };
+            // Sign note: with this codebase's convention `lon = -atan2(z, x)`, a
+            // positive rotation of the ascending node around +y corresponds to a
+            // *decreasing* longitude. J2 physically gives prograde RAAN regression
+            // (−cos(i) rate) in standard astronomy; we flip the sign here so the
+            // drift direction matches this code's lon convention — retrograde i
+            // produces RAAN motion eastward (matching the Sun's apparent motion).
+            let raan_rate = if use_j2 {
+                j2_coeff * inc_cos / p_factor
+            } else {
+                0.0
+            };
+            let omega_rate = if use_j2 {
+                j2_coeff * (2.0 - 2.5 * inc_sin * inc_sin) / p_factor
+            } else {
+                0.0
+            };
+            let m_dot = if use_j2 {
+                mean_motion
+                    + 0.75
+                        * self.planet_j2
+                        * r_ratio
+                        * r_ratio
+                        * mean_motion
+                        * (3.0 * inc_cos * inc_cos - 1.0)
+                        * one_minus_e2.sqrt()
+                        / p_factor
+            } else {
+                mean_motion
+            };
 
-        for plane in 0..self.num_planes {
-            let raan_initial = raan_offset + raan_step * plane as f64 - center_offset;
-            let raan = raan_initial + if dead { 0.0 } else { raan_rate * time };
-            let raan_cos = raan.cos();
-            let raan_sin = raan.sin();
-            let omega_t = omega + if dead { 0.0 } else { omega_rate * time };
-            let phase_offset = phase_step * plane as f64;
+            for plane in 0..self.num_planes {
+                let raan_initial = raan_offset + raan_step * plane as f64 - center_offset;
+                let raan = raan_initial + if dead { 0.0 } else { raan_rate * time };
+                let raan_cos = raan.cos();
+                let raan_sin = raan.sin();
+                let omega_t = omega + if dead { 0.0 } else { omega_rate * time };
+                let phase_offset = phase_step * plane as f64;
 
-            for sat in 0..sats_per_plane {
-                let raw_mean_anomaly = sat_step * sat as f64 - sat_center_offset
-                    + if dead { 0.0 } else { m_dot * time } + phase_offset;
-                let mean_anomaly = raw_mean_anomaly.rem_euclid(2.0 * PI);
+                for sat in 0..sats_per_plane {
+                    let raw_mean_anomaly = sat_step * sat as f64 - sat_center_offset
+                        + if dead { 0.0 } else { m_dot * time }
+                        + phase_offset;
+                    let mean_anomaly = raw_mean_anomaly.rem_euclid(2.0 * PI);
 
-                let true_anomaly = if ecc < 1e-8 {
-                    mean_anomaly
-                } else {
-                    let mut ea = mean_anomaly;
-                    for _ in 0..10 {
-                        ea -= (ea - ecc * ea.sin() - mean_anomaly) / (1.0 - ecc * ea.cos());
-                    }
-                    2.0 * ((1.0 + ecc).sqrt() * (ea / 2.0).sin())
-                        .atan2((1.0 - ecc).sqrt() * (ea / 2.0).cos())
-                };
+                    let true_anomaly = if ecc < 1e-8 {
+                        mean_anomaly
+                    } else {
+                        let mut ea = mean_anomaly;
+                        for _ in 0..10 {
+                            ea -= (ea - ecc * ea.sin() - mean_anomaly) / (1.0 - ecc * ea.cos());
+                        }
+                        2.0 * ((1.0 + ecc).sqrt() * (ea / 2.0).sin())
+                            .atan2((1.0 - ecc).sqrt() * (ea / 2.0).cos())
+                    };
 
-                let r = semi_major * (1.0 - ecc * ecc) / (1.0 + ecc * true_anomaly.cos());
-                let ascending = (true_anomaly + omega_t).cos() > 0.0;
+                    let r = semi_major * (1.0 - ecc * ecc) / (1.0 + ecc * true_anomaly.cos());
+                    let ascending = (true_anomaly + omega_t).cos() > 0.0;
 
-                let angle = true_anomaly + omega_t;
-                let x_orbital = r * angle.cos();
-                let y_orbital = -r * angle.sin();
+                    let angle = true_anomaly + omega_t;
+                    let x_orbital = r * angle.cos();
+                    let y_orbital = -r * angle.sin();
 
-                let x = x_orbital * raan_cos - y_orbital * inc_cos * raan_sin;
-                let z = x_orbital * raan_sin + y_orbital * inc_cos * raan_cos;
-                let y = -y_orbital * inc_sin;
+                    let x = x_orbital * raan_cos - y_orbital * inc_cos * raan_sin;
+                    let z = x_orbital * raan_sin + y_orbital * inc_cos * raan_cos;
+                    let y = -y_orbital * inc_sin;
 
-                let lat = (y / r).asin().to_degrees();
-                let lon = -z.atan2(x).to_degrees();
+                    let lat = (y / r).asin().to_degrees();
+                    let lon = -z.atan2(x).to_degrees();
 
-                positions.push(SatelliteState {
-                    plane,
-                    sat_index: sat,
-                    x, y, z,
-                    lat, lon,
-                    ascending,
-                    neighbors: Vec::new(),
-                    name: None,
-                    tle_inclination_deg: None,
-                    tle_mean_motion: None,
-                });
+                    positions.push(SatelliteState {
+                        plane,
+                        sat_index: sat,
+                        x,
+                        y,
+                        z,
+                        lat,
+                        lon,
+                        ascending,
+                        neighbors: Vec::new(),
+                        name: None,
+                        tle_inclination_deg: None,
+                        tle_mean_motion: None,
+                    });
+                }
             }
-        }
         }
 
         let no_plane_wrap = is_star || self.partial_coverage();
         let no_sat_wrap = self.partial_sat_coverage();
         let offsets: &[(isize, isize)] = match self.isl_neighbors {
             4 => &[(0, 1), (1, 0), (0, -1), (-1, 0)],
-            8 => &[(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)],
+            8 => &[
+                (0, 1),
+                (1, 0),
+                (0, -1),
+                (-1, 0),
+                (1, 1),
+                (1, -1),
+                (-1, 1),
+                (-1, -1),
+            ],
             _ => &[],
         };
         let np = self.num_planes as isize;
@@ -377,12 +409,20 @@ impl WalkerConstellation {
                 let tp = plane + dp;
                 let ts = sat_idx + ds;
                 let tp = if no_plane_wrap {
-                    if tp < 0 || tp >= np { continue; } else { tp }
+                    if tp < 0 || tp >= np {
+                        continue;
+                    } else {
+                        tp
+                    }
                 } else {
                     ((tp % np) + np) % np
                 };
                 let ts = if no_sat_wrap {
-                    if ts < 0 || ts >= sp { continue; } else { ts }
+                    if ts < 0 || ts >= sp {
+                        continue;
+                    } else {
+                        ts
+                    }
                 } else {
                     ((ts % sp) + sp) % sp
                 };
@@ -421,7 +461,8 @@ impl WalkerConstellation {
         } else {
             0.0
         };
-        let raan_initial = -self.raan_offset_deg.to_radians() + raan_step * plane as f64 - center_offset;
+        let raan_initial =
+            -self.raan_offset_deg.to_radians() + raan_step * plane as f64 - center_offset;
         let raan = raan_initial + raan_drift_rate * time;
         let inc_cos = inc.cos();
         let inc_sin = inc.sin();
@@ -475,8 +516,15 @@ impl WalkerConstellation {
         let j2_coeff = 1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion;
         let raan_rate = j2_coeff * inc_cos / p_factor;
         let omega_rate = j2_coeff * (2.0 - 2.5 * inc_sin * inc_sin) / p_factor;
-        let m_dot = mean_motion + 0.75 * self.planet_j2 * r_ratio * r_ratio * mean_motion
-            * (3.0 * inc_cos * inc_cos - 1.0) * (1.0 - e2).sqrt() / p_factor;
+        let m_dot = mean_motion
+            + 0.75
+                * self.planet_j2
+                * r_ratio
+                * r_ratio
+                * mean_motion
+                * (3.0 * inc_cos * inc_cos - 1.0)
+                * (1.0 - e2).sqrt()
+                / p_factor;
 
         let center_offset = if self.partial_coverage() {
             raan_step * (self.num_planes - 1) as f64 / 2.0
@@ -501,7 +549,8 @@ impl WalkerConstellation {
 
             for sat in 0..sats_per_plane {
                 let raw_mean_anomaly = sat_step * sat as f64 - sat_center_offset
-                    + if dead { 0.0 } else { m_dot * time } + phase_offset;
+                    + if dead { 0.0 } else { m_dot * time }
+                    + phase_offset;
                 let mean_anomaly = raw_mean_anomaly.rem_euclid(2.0 * PI);
 
                 let true_anomaly = if ecc < 1e-8 {
@@ -546,7 +595,11 @@ impl WalkerConstellation {
             }
         }
 
-        NumericalState { sats, time, config_hash }
+        NumericalState {
+            sats,
+            time,
+            config_hash,
+        }
     }
 }
 
@@ -582,14 +635,7 @@ fn acceleration(pos: &[f64; 3], mu: f64, j2: f64, re: f64) -> [f64; 3] {
 }
 
 /// RK4 step for a single satellite. Updates pos and vel in-place.
-fn rk4_step(
-    pos: &mut [f64; 3],
-    vel: &mut [f64; 3],
-    dt: f64,
-    mu: f64,
-    j2: f64,
-    re: f64,
-) {
+fn rk4_step(pos: &mut [f64; 3], vel: &mut [f64; 3], dt: f64, mu: f64, j2: f64, re: f64) {
     let p0 = *pos;
     let v0 = *vel;
     let a0 = acceleration(&p0, mu, j2, re);
@@ -618,16 +664,8 @@ fn rk4_step(
     ];
     let a2 = acceleration(&p2, mu, j2, re);
 
-    let p3 = [
-        p0[0] + dt * v2[0],
-        p0[1] + dt * v2[1],
-        p0[2] + dt * v2[2],
-    ];
-    let v3 = [
-        v0[0] + dt * a2[0],
-        v0[1] + dt * a2[1],
-        v0[2] + dt * a2[2],
-    ];
+    let p3 = [p0[0] + dt * v2[0], p0[1] + dt * v2[1], p0[2] + dt * v2[2]];
+    let v3 = [v0[0] + dt * a2[0], v0[1] + dt * a2[1], v0[2] + dt * a2[2]];
     let a3 = acceleration(&p3, mu, j2, re);
 
     for i in 0..3 {
@@ -672,36 +710,188 @@ pub fn step_numerical_state(
     true
 }
 
-pub fn compute_knn_neighbors(positions: &mut [SatelliteState], k: usize) {
+/// Compute k-nearest neighbours (upper-triangular, j > i) using a uniform 3D
+/// spatial grid. Falls back to a brute-force pass for tiny inputs where the
+/// grid setup is not worthwhile.
+///
+/// `prev_neighbors`, when supplied and length-matched, applies hysteresis:
+/// candidates that were already linked get a small effective-distance bonus,
+/// so links don't flicker when two candidates sit at near-equal range.
+pub fn compute_knn_neighbor_lists(
+    positions: &[SatelliteState],
+    k: usize,
+    prev_neighbors: Option<&[Vec<usize>]>,
+) -> Vec<Vec<usize>> {
     let n = positions.len();
     if k == 0 || n < 2 {
-        return;
+        return vec![Vec::new(); n];
     }
+
     let coords: Vec<(f64, f64, f64)> = positions.iter().map(|s| (s.x, s.y, s.z)).collect();
-    let mut all_neighbors: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let ascending: Vec<bool> = positions.iter().map(|s| s.ascending).collect();
+
+    // 0.49 = 0.7² — a previously-linked candidate at 1.0× wins over a fresh
+    // candidate up to 0.7× as close. Strong enough to pin stable links
+    // through small geometric shifts at recompute boundaries.
+    const HYSTERESIS_D2_FACTOR: f64 = 0.49;
+    let prev_links: std::collections::HashSet<(usize, usize)> = prev_neighbors
+        .filter(|p| p.len() == n)
+        .map(|p| {
+            let mut s = std::collections::HashSet::new();
+            for (i, nbrs) in p.iter().enumerate() {
+                for &j in nbrs {
+                    let (a, b) = if i < j { (i, j) } else { (j, i) };
+                    s.insert((a, b));
+                }
+            }
+            s
+        })
+        .unwrap_or_default();
+    let was_linked = |i: usize, j: usize| -> bool {
+        let (a, b) = if i < j { (i, j) } else { (j, i) };
+        prev_links.contains(&(a, b))
+    };
+
+    if n < 256 {
+        return brute_force_knn(&coords, &ascending, k, &was_linked, HYSTERESIS_D2_FACTOR);
+    }
+
+    // Cell size targets the expected nearest-neighbour spacing on a sphere
+    // covered by `n` points, so the typical 1-cell neighbourhood holds enough
+    // candidates for k ≤ 8.
+    let mut r = 0.0f64;
+    for &(x, y, z) in &coords {
+        let r2 = x * x + y * y + z * z;
+        if r2 > r {
+            r = r2;
+        }
+    }
+    let r = r.sqrt().max(1.0);
+    let cell = (4.0 * std::f64::consts::PI * r * r / n as f64)
+        .sqrt()
+        .max(1.0);
+
+    let mut min = (f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    for &(x, y, z) in &coords {
+        if x < min.0 {
+            min.0 = x;
+        }
+        if y < min.1 {
+            min.1 = y;
+        }
+        if z < min.2 {
+            min.2 = z;
+        }
+    }
+
+    let cell_of = |p: (f64, f64, f64)| -> (i32, i32, i32) {
+        (
+            ((p.0 - min.0) / cell).floor() as i32,
+            ((p.1 - min.1) / cell).floor() as i32,
+            ((p.2 - min.2) / cell).floor() as i32,
+        )
+    };
+
+    let mut grid: std::collections::HashMap<(i32, i32, i32), Vec<usize>> =
+        std::collections::HashMap::with_capacity(n);
+    for i in 0..n {
+        grid.entry(cell_of(coords[i])).or_default().push(i);
+    }
+
+    let mut out: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut scratch: Vec<(usize, f64)> = Vec::new();
+
+    for i in 0..n {
+        let (xi, yi, zi) = coords[i];
+        let (cx, cy, cz) = cell_of(coords[i]);
+
+        // Expand search radius until we have at least k candidates. Most
+        // queries succeed at radius 1.
+        let mut radius = 1i32;
+        scratch.clear();
+        loop {
+            scratch.clear();
+            for dx in -radius..=radius {
+                for dy in -radius..=radius {
+                    for dz in -radius..=radius {
+                        let Some(bucket) = grid.get(&(cx + dx, cy + dy, cz + dz)) else {
+                            continue;
+                        };
+                        for &j in bucket {
+                            if j == i {
+                                continue;
+                            }
+                            if ascending[j] != ascending[i] {
+                                continue;
+                            }
+                            let (xj, yj, zj) = coords[j];
+                            let ddx = xi - xj;
+                            let ddy = yi - yj;
+                            let ddz = zi - zj;
+                            let mut d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+                            if was_linked(i, j) {
+                                d2 *= HYSTERESIS_D2_FACTOR;
+                            }
+                            scratch.push((j, d2));
+                        }
+                    }
+                }
+            }
+            if scratch.len() >= k || radius >= 6 {
+                break;
+            }
+            radius += 1;
+        }
+
+        let k_actual = k.min(scratch.len());
+        if k_actual == 0 {
+            continue;
+        }
+        scratch.select_nth_unstable_by(k_actual - 1, |a, b| a.1.partial_cmp(&b.1).unwrap());
+        for &(j, _) in &scratch[..k_actual] {
+            if j > i {
+                out[i].push(j);
+            }
+        }
+    }
+    out
+}
+
+fn brute_force_knn(
+    coords: &[(f64, f64, f64)],
+    ascending: &[bool],
+    k: usize,
+    was_linked: &impl Fn(usize, usize) -> bool,
+    hysteresis_d2_factor: f64,
+) -> Vec<Vec<usize>> {
+    let n = coords.len();
+    let mut out: Vec<Vec<usize>> = vec![Vec::new(); n];
     for i in 0..n {
         let (xi, yi, zi) = coords[i];
         let mut dists: Vec<(usize, f64)> = (0..n)
-            .filter(|&j| j != i)
+            .filter(|&j| j != i && ascending[j] == ascending[i])
             .map(|j| {
                 let (xj, yj, zj) = coords[j];
                 let dx = xi - xj;
                 let dy = yi - yj;
                 let dz = zi - zj;
-                (j, dx * dx + dy * dy + dz * dz)
+                let mut d2 = dx * dx + dy * dy + dz * dz;
+                if was_linked(i, j) {
+                    d2 *= hysteresis_d2_factor;
+                }
+                (j, d2)
             })
             .collect();
         let k_actual = k.min(dists.len());
-        dists.select_nth_unstable_by(k_actual.saturating_sub(1), |a, b| {
-            a.1.partial_cmp(&b.1).unwrap()
-        });
+        if k_actual == 0 {
+            continue;
+        }
+        dists.select_nth_unstable_by(k_actual - 1, |a, b| a.1.partial_cmp(&b.1).unwrap());
         for &(j, _) in &dists[..k_actual] {
             if j > i {
-                all_neighbors[i].push(j);
+                out[i].push(j);
             }
         }
     }
-    for (i, nbrs) in all_neighbors.into_iter().enumerate() {
-        positions[i].neighbors = nbrs;
-    }
+    out
 }

@@ -6,8 +6,8 @@
 use crate::celestial::{CelestialBody, Skin};
 use crate::kessler::DebrisFragment;
 use crate::math::lat_lon_to_matrix;
-use crate::tle::{TlePreset, TleLoadState, TleShell};
-use crate::walker::{WalkerType, WalkerConstellation};
+use crate::tle::{TleLoadState, TlePreset, TleShell};
+use crate::walker::{WalkerConstellation, WalkerType};
 use eframe::egui;
 use nalgebra::Matrix3;
 use std::collections::{HashMap, HashSet};
@@ -34,7 +34,6 @@ pub struct NumericalState {
     pub config_hash: u64,
 }
 
-
 #[derive(Clone, Copy, PartialEq)]
 pub enum Preset {
     None,
@@ -44,6 +43,48 @@ pub enum Preset {
     Kuiper,
     Iris2,
     Telesat,
+}
+
+/// Optical inter-satellite link budget parameters.
+///
+/// Mirrors Table II of the SpaceCoMP paper: defaults reproduce the simulation
+/// parameters used there. Used by the per-link tooltip to compute Shannon
+/// capacity `C = B · log₂(1 + SNR(d))` with `SNR(d) = P·Gt·Gr / (N · FSPL(d))`
+/// and `FSPL(d) = (4πd/λ)²`.
+#[derive(Clone, Copy)]
+pub struct LinkBudget {
+    pub bandwidth_ghz: f64,
+    pub tx_power_w: f64,
+    pub antenna_gain_dbi: f64,
+    pub noise_temp_k: f64,
+    pub wavelength_nm: f64,
+}
+
+impl Default for LinkBudget {
+    fn default() -> Self {
+        Self {
+            bandwidth_ghz: 10.0,
+            tx_power_w: 5.0,
+            antenna_gain_dbi: 62.5,
+            noise_temp_k: 300.0,
+            wavelength_nm: 1550.0,
+        }
+    }
+}
+
+impl LinkBudget {
+    /// Shannon-Hartley capacity in bits/sec at link distance `d_km`.
+    pub fn capacity_bps(&self, d_km: f64) -> f64 {
+        const K_BOLTZMANN: f64 = 1.380_649e-23;
+        let bw_hz = self.bandwidth_ghz * 1e9;
+        let lambda_m = self.wavelength_nm * 1e-9;
+        let d_m = d_km * 1000.0;
+        let gain_lin = 10f64.powf(self.antenna_gain_dbi / 10.0);
+        let fspl = (4.0 * std::f64::consts::PI * d_m / lambda_m).powi(2);
+        let noise_w = K_BOLTZMANN * self.noise_temp_k * bw_hz;
+        let snr = self.tx_power_w * gain_lin * gain_lin / (noise_w * fspl);
+        bw_hz * (1.0 + snr).log2()
+    }
 }
 
 #[derive(Clone)]
@@ -68,10 +109,13 @@ pub struct ConstellationConfig {
     pub label: Option<String>,
     pub color_offset: usize,
     pub hidden: bool,
-    pub show_physics_ui: bool,
+    pub show_advanced_ui: bool,
+    pub link_budget: LinkBudget,
     pub physics: crate::physics::PhysicsConfig,
     pub physics_state: Vec<crate::physics::SatellitePhysics>,
     pub numerical: Option<NumericalState>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub cfs: Option<std::sync::Arc<std::sync::Mutex<crate::cfs::Cfs>>>,
 }
 
 impl ConstellationConfig {
@@ -97,10 +141,13 @@ impl ConstellationConfig {
             label: None,
             color_offset,
             hidden: false,
-            show_physics_ui: false,
+            show_advanced_ui: false,
+            link_budget: LinkBudget::default(),
             physics: crate::physics::PhysicsConfig::default(),
             physics_state: Vec::new(),
             numerical: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            cfs: None,
         }
     }
 
@@ -115,20 +162,31 @@ impl ConstellationConfig {
         h = h.wrapping_mul(31).wrapping_add(self.altitude_km.to_bits());
         h = h.wrapping_mul(31).wrapping_add(self.inclination.to_bits());
         h = h.wrapping_mul(31).wrapping_add(self.eccentricity.to_bits());
-        h = h.wrapping_mul(31).wrapping_add(self.arg_periapsis.to_bits());
+        h = h
+            .wrapping_mul(31)
+            .wrapping_add(self.arg_periapsis.to_bits());
         h = h.wrapping_mul(31).wrapping_add(self.phasing.to_bits());
         h = h.wrapping_mul(31).wrapping_add(self.raan_offset.to_bits());
         h
     }
 
-    pub fn sso_inclination(altitude_km: f64, eccentricity: f64, planet_mu: f64, planet_j2: f64, planet_mean_radius: f64, planet_eq_radius: f64, planet_year_days: f64) -> Option<f64> {
+    pub fn sso_inclination(
+        altitude_km: f64,
+        eccentricity: f64,
+        planet_mu: f64,
+        planet_j2: f64,
+        planet_mean_radius: f64,
+        planet_eq_radius: f64,
+        planet_year_days: f64,
+    ) -> Option<f64> {
         // a uses mean radius (matches walker.rs's semi_major calculation).
         // The J2 (Re/a)² scaling uses equatorial radius (matches walker.rs's r_ratio).
         let a = planet_mean_radius + altitude_km;
         let n = (planet_mu / (a * a * a)).sqrt();
         let rate_required = 2.0 * std::f64::consts::PI / (planet_year_days * 86400.0);
         let e2 = 1.0 - eccentricity * eccentricity;
-        let cos_i = -rate_required * e2 * e2 * a * a / (1.5 * n * planet_j2 * planet_eq_radius * planet_eq_radius);
+        let cos_i = -rate_required * e2 * e2 * a * a
+            / (1.5 * n * planet_j2 * planet_eq_radius * planet_eq_radius);
         if cos_i.abs() <= 1.0 {
             Some(cos_i.acos().to_degrees())
         } else {
@@ -136,7 +194,13 @@ impl ConstellationConfig {
         }
     }
 
-    pub fn constellation(&self, planet_radius: f64, planet_mu: f64, planet_j2: f64, planet_equatorial_radius: f64) -> WalkerConstellation {
+    pub fn constellation(
+        &self,
+        planet_radius: f64,
+        planet_mu: f64,
+        planet_j2: f64,
+        planet_equatorial_radius: f64,
+    ) -> WalkerConstellation {
         WalkerConstellation {
             walker_type: self.walker_type,
             total_sats: self.sats_per_plane * self.num_planes,
@@ -155,6 +219,8 @@ impl ConstellationConfig {
             planet_mu,
             planet_j2,
             planet_equatorial_radius,
+            link_budget: self.link_budget,
+            ballistic_coeff: self.ballistic_coeff,
         }
     }
 
@@ -190,6 +256,21 @@ pub enum AoiJobMode {
     SpaceComp,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum SpaceCompReducerPlacement {
+    NearMappers,
+    NearGroundStation,
+}
+
+impl SpaceCompReducerPlacement {
+    pub fn label(self) -> &'static str {
+        match self {
+            SpaceCompReducerPlacement::NearMappers => "Near mappers",
+            SpaceCompReducerPlacement::NearGroundStation => "Near GS",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AreaOfInterest {
     pub name: String,
@@ -200,6 +281,7 @@ pub struct AreaOfInterest {
     pub ground_station_idx: Option<usize>,
     pub job_mode: AoiJobMode,
     pub job_n: usize,
+    pub reducer_placement: SpaceCompReducerPlacement,
     pub selected: bool,
 }
 
@@ -208,6 +290,41 @@ pub struct DeviceLayer {
     pub name: String,
     pub color: egui::Color32,
     pub devices: Vec<(f64, f64)>,
+}
+
+/// Identifier for a user-pinned inter-satellite link.
+///
+/// Stored canonically so `(a, b)` and `(b, a)` compare equal: the endpoint
+/// with the lexicographically smaller `(plane, sat_index)` is always `a`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PinnedIsl {
+    pub constellation_idx: usize,
+    pub a_plane: usize,
+    pub a_sat: usize,
+    pub b_plane: usize,
+    pub b_sat: usize,
+}
+
+impl PinnedIsl {
+    pub fn canonical(c: usize, ap: usize, ai: usize, bp: usize, bi: usize) -> Self {
+        if (ap, ai) <= (bp, bi) {
+            Self {
+                constellation_idx: c,
+                a_plane: ap,
+                a_sat: ai,
+                b_plane: bp,
+                b_sat: bi,
+            }
+        } else {
+            Self {
+                constellation_idx: c,
+                a_plane: bp,
+                a_sat: bi,
+                b_plane: ap,
+                b_sat: ai,
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -224,6 +341,7 @@ pub struct PlanetConfig {
     pub satellite_cameras: Vec<SatelliteCamera>,
     pub pending_cameras: Vec<SatelliteCamera>,
     pub cameras_to_remove: Vec<usize>,
+    pub pinned_isls: HashSet<PinnedIsl>,
     pub show_tle_window: bool,
     pub show_gs_aoi_window: bool,
     pub show_config_window: bool,
@@ -244,6 +362,9 @@ pub struct PlanetConfig {
     pub moon_inclination_override: Option<f64>,
     pub auto_cluster_tle: bool,
     pub tle_isl_k: usize,
+    /// Drop ISLs whose endpoint latitude exceeds this absolute value (degrees).
+    /// Models the high-latitude cross-plane laser tear-down. `90.0` disables.
+    pub tle_isl_max_lat_deg: f64,
     /// Accumulated sub-satellite points per tracked satellite, keyed by
     /// (constellation_idx, plane, sat_index). Stored as (lat_deg, lon_deg, sim_time_s).
     pub ground_track_history: HashMap<(usize, usize, usize), Vec<(f64, f64, f64)>>,
@@ -253,6 +374,20 @@ pub struct PlanetConfig {
 }
 
 impl PlanetConfig {
+    /// Returns `true` if any constellation on this planet has a live
+    /// cFS instance. Ground stations are immutable while any cFS is
+    /// running because each launched router holds a frozen copy of
+    /// the table; mutations would diverge from what the router sees.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn has_running_cfs(&self) -> bool {
+        self.constellations.iter().any(|c| c.cfs.is_some())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn has_running_cfs(&self) -> bool {
+        false
+    }
+
     pub fn new(name: String) -> Self {
         let mut tle_selections = HashMap::new();
         for preset in TlePreset::ALL {
@@ -271,6 +406,7 @@ impl PlanetConfig {
             satellite_cameras: Vec::new(),
             pending_cameras: Vec::new(),
             cameras_to_remove: Vec::new(),
+            pinned_isls: HashSet::new(),
             show_tle_window: false,
             show_gs_aoi_window: false,
             show_config_window: true,
@@ -295,13 +431,15 @@ impl PlanetConfig {
             moon_inclination_override: None,
             auto_cluster_tle: false,
             tle_isl_k: 0,
+            tle_isl_max_lat_deg: 70.0,
             ground_track_history: HashMap::new(),
             projection_override: None,
         }
     }
 
     pub fn add_constellation(&mut self) {
-        self.constellations.push(ConstellationConfig::new(self.constellation_counter));
+        self.constellations
+            .push(ConstellationConfig::new(self.constellation_counter));
         self.constellation_counter += 1;
     }
 }
@@ -313,10 +451,13 @@ pub struct View3DFlags {
     pub show_magnetic_axis: bool,
     pub show_coverage: bool,
     pub show_links: bool,
+    pub show_gs_links: bool,
     pub hide_behind_earth: bool,
     pub single_color: bool,
     pub dark_mode: bool,
     pub show_routing_paths: bool,
+    pub show_proxy_links: bool,
+    pub show_path_distance: bool,
     pub show_manhattan_path: bool,
     pub show_shortest_path: bool,
     pub show_radiation_path: bool,
@@ -398,9 +539,12 @@ pub struct TabSettings {
     pub show_camera_windows: bool,
     pub show_orbits: bool,
     pub show_links: bool,
+    pub show_gs_links: bool,
     pub show_coverage: bool,
     pub coverage_angle: f64,
     pub show_routing_paths: bool,
+    pub show_proxy_links: bool,
+    pub show_path_distance: bool,
     pub show_manhattan_path: bool,
     pub show_shortest_path: bool,
     pub show_radiation_path: bool,
@@ -482,9 +626,12 @@ impl Default for TabSettings {
             show_camera_windows: false,
             show_orbits: true,
             show_links: true,
+            show_gs_links: false,
             show_coverage: false,
             coverage_angle: 50.0,
             show_routing_paths: false,
+            show_proxy_links: false,
+            show_path_distance: false,
             show_manhattan_path: true,
             show_shortest_path: true,
             show_radiation_path: false,
@@ -565,6 +712,8 @@ pub struct TabConfig {
     pub show_sat_list: bool,
     pub show_fps: bool,
     pub settings: TabSettings,
+    pub slides: Option<crate::slides::SlideDeck>,
+    pub presentation_slide_number: Option<usize>,
 }
 
 /// Build an egui `LayoutJob` from text with `**bold**` markdown inline spans.
@@ -659,6 +808,8 @@ impl TabConfig {
             show_sat_list: false,
             show_fps: false,
             settings: TabSettings::default(),
+            slides: None,
+            presentation_slide_number: None,
         }
     }
 
@@ -798,11 +949,24 @@ pub enum HeatmapMode {
 }
 
 pub(crate) const GEOMAGNETIC_PALETTE: [[u8; 3]; 18] = [
-    [9,33,52], [12,40,79], [16,47,113], [51,52,144],
-    [77,60,148], [100,72,143], [120,82,139], [140,90,133],
-    [160,100,131], [180,108,125], [202,118,114], [222,128,102],
-    [240,143,90], [242,164,81], [244,184,80], [247,203,86],
-    [250,222,96], [245,240,111],
+    [9, 33, 52],
+    [12, 40, 79],
+    [16, 47, 113],
+    [51, 52, 144],
+    [77, 60, 148],
+    [100, 72, 143],
+    [120, 82, 139],
+    [140, 90, 133],
+    [160, 100, 131],
+    [180, 108, 125],
+    [202, 118, 114],
+    [222, 128, 102],
+    [240, 143, 90],
+    [242, 164, 81],
+    [244, 184, 80],
+    [247, 203, 86],
+    [250, 222, 96],
+    [245, 240, 111],
 ];
 
 pub fn heatmap_color(t: f64, smooth: bool) -> egui::Color32 {
@@ -825,7 +989,6 @@ pub fn heatmap_color(t: f64, smooth: bool) -> egui::Color32 {
         egui::Color32::from_rgb(r, g, b)
     }
 }
-
 
 #[derive(Clone)]
 pub struct RadiationConfig {
@@ -856,7 +1019,11 @@ pub struct RadiationConfig {
     pub igrf_rad_cache: Option<(f64, f64, crate::igrf::IgrfRadGrid)>,
     #[cfg(not(target_arch = "wasm32"))]
     #[allow(dead_code)]
-    pub igrf_rad_pending: Option<(f64, f64, std::sync::Arc<std::sync::Mutex<Option<crate::igrf::IgrfRadGrid>>>)>,
+    pub igrf_rad_pending: Option<(
+        f64,
+        f64,
+        std::sync::Arc<std::sync::Mutex<Option<crate::igrf::IgrfRadGrid>>>,
+    )>,
 }
 
 impl Default for RadiationConfig {
@@ -946,19 +1113,23 @@ mod shareable {
         pub fn from_planet(planet: &PlanetConfig) -> Self {
             Self {
                 body: planet.celestial_body,
-                shells: planet.constellations.iter().map(|c| ShareableShell {
-                    s: c.sats_per_plane,
-                    p: c.num_planes,
-                    a: c.altitude_km,
-                    i: c.inclination,
-                    w: c.walker_type,
-                    ph: c.phasing,
-                    ro: c.raan_offset,
-                    rs: c.raan_spacing,
-                    ss: c.sat_spacing_km,
-                    e: c.eccentricity,
-                    ap: c.arg_periapsis,
-                }).collect(),
+                shells: planet
+                    .constellations
+                    .iter()
+                    .map(|c| ShareableShell {
+                        s: c.sats_per_plane,
+                        p: c.num_planes,
+                        a: c.altitude_km,
+                        i: c.inclination,
+                        w: c.walker_type,
+                        ph: c.phasing,
+                        ro: c.raan_offset,
+                        rs: c.raan_spacing,
+                        ss: c.sat_spacing_km,
+                        e: c.eccentricity,
+                        ap: c.arg_periapsis,
+                    })
+                    .collect(),
             }
         }
 
@@ -991,8 +1162,12 @@ mod shareable {
         }
 
         pub fn from_url_hash(hash: &str) -> Option<Self> {
-            let data = hash.strip_prefix("#c=").or_else(|| hash.strip_prefix("c="))?;
-            let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(data).ok()?;
+            let data = hash
+                .strip_prefix("#c=")
+                .or_else(|| hash.strip_prefix("c="))?;
+            let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(data)
+                .ok()?;
             serde_json::from_slice(&bytes).ok()
         }
     }

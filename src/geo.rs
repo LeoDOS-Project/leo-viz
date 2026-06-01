@@ -51,11 +51,18 @@ pub fn parse_geojson_borders(json: &str) -> Result<Vec<Vec<(f64, f64)>>, String>
 
 fn extract_coord_line(arr: &serde_json::Value) -> Option<Vec<(f64, f64)>> {
     let points = arr.as_array()?;
-    let coords: Vec<(f64, f64)> = points.iter().filter_map(|p| {
-        let a = p.as_array()?;
-        Some((a.get(1)?.as_f64()?, a.first()?.as_f64()?))
-    }).collect();
-    if coords.is_empty() { None } else { Some(coords) }
+    let coords: Vec<(f64, f64)> = points
+        .iter()
+        .filter_map(|p| {
+            let a = p.as_array()?;
+            Some((a.get(1)?.as_f64()?, a.first()?.as_f64()?))
+        })
+        .collect();
+    if coords.is_empty() {
+        None
+    } else {
+        Some(coords)
+    }
 }
 
 pub fn parse_geojson_cities(json: &str) -> Result<Vec<CityLabel>, String> {
@@ -69,15 +76,25 @@ pub fn parse_geojson_cities(json: &str) -> Result<Vec<CityLabel>, String> {
             let lon = coords[0].as_f64().unwrap_or(0.0);
             let lat = coords[1].as_f64().unwrap_or(0.0);
             let name = props["name"].as_str().unwrap_or("").to_string();
-            let pop = props["pop_max"].as_f64()
+            let pop = props["pop_max"]
+                .as_f64()
                 .or_else(|| props["pop_min"].as_f64())
                 .unwrap_or(0.0);
             if !name.is_empty() {
-                cities.push(CityLabel { lat, lon, name, population: pop });
+                cities.push(CityLabel {
+                    lat,
+                    lon,
+                    name,
+                    population: pop,
+                });
             }
         }
     }
-    cities.sort_by(|a, b| b.population.partial_cmp(&a.population).unwrap_or(std::cmp::Ordering::Equal));
+    cities.sort_by(|a, b| {
+        b.population
+            .partial_cmp(&a.population)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok(cities)
 }
 

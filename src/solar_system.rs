@@ -58,7 +58,11 @@ pub fn hohmann_transfer_params(
     let phase_angle = PI * (1.0 - ratio);
 
     let synodic = (1.0 / t1 - 1.0 / t2).abs();
-    let synodic_period = if synodic > 1e-12 { 1.0 / synodic } else { f64::INFINITY };
+    let synodic_period = if synodic > 1e-12 {
+        1.0 / synodic
+    } else {
+        f64::INFINITY
+    };
 
     Some(HohmannParams {
         transfer_sma: a_t,
@@ -82,20 +86,30 @@ pub fn next_launch_window_days(
     let angle_o = pos_o[1].atan2(pos_o[0]);
     let angle_d = pos_d[1].atan2(pos_d[0]);
     let mut current_phase = angle_d - angle_o;
-    while current_phase < -PI { current_phase += 2.0 * PI; }
-    while current_phase > PI { current_phase -= 2.0 * PI; }
+    while current_phase < -PI {
+        current_phase += 2.0 * PI;
+    }
+    while current_phase > PI {
+        current_phase -= 2.0 * PI;
+    }
 
     let required = params.phase_angle_rad;
     let t1 = origin.orbital_period_days()?;
     let t2 = dest.orbital_period_days()?;
     let rel_rate = 2.0 * PI / t2 - 2.0 * PI / t1;
-    if rel_rate.abs() < 1e-15 { return None; }
+    if rel_rate.abs() < 1e-15 {
+        return None;
+    }
 
     let mut diff = required - current_phase;
     if rel_rate > 0.0 {
-        while diff < 0.0 { diff += 2.0 * PI; }
+        while diff < 0.0 {
+            diff += 2.0 * PI;
+        }
     } else {
-        while diff > 0.0 { diff -= 2.0 * PI; }
+        while diff > 0.0 {
+            diff -= 2.0 * PI;
+        }
     }
     let wait = diff / rel_rate;
     Some(wait.max(0.0))
@@ -106,11 +120,7 @@ pub fn heliocentric_longitude(body: CelestialBody, j2000_days: f64) -> Option<f6
     Some(pos[1].atan2(pos[0]))
 }
 
-pub fn next_conjunction_days(
-    a: CelestialBody,
-    b: CelestialBody,
-    j2000_days: f64,
-) -> Option<f64> {
+pub fn next_conjunction_days(a: CelestialBody, b: CelestialBody, j2000_days: f64) -> Option<f64> {
     let t_a = a.orbital_period_days()?;
     let t_b = b.orbital_period_days()?;
     let rate_a = 2.0 * PI / t_a;
@@ -155,11 +165,7 @@ pub fn next_conjunction_days(
     Some(wait.max(0.0))
 }
 
-pub fn next_opposition_days(
-    a: CelestialBody,
-    b: CelestialBody,
-    j2000_days: f64,
-) -> Option<f64> {
+pub fn next_opposition_days(a: CelestialBody, b: CelestialBody, j2000_days: f64) -> Option<f64> {
     let t_a = a.orbital_period_days()?;
     let t_b = b.orbital_period_days()?;
     let rate_a = 2.0 * PI / t_a;
@@ -228,8 +234,14 @@ pub fn planet_angular_spread(bodies: &[CelestialBody], j2000_days: f64) -> Optio
     Some(2.0 * PI - max_gap)
 }
 
-pub fn next_alignment_days(bodies: &[CelestialBody], j2000_days: f64, search_years: f64) -> Option<(f64, f64)> {
-    if bodies.len() < 2 { return None; }
+pub fn next_alignment_days(
+    bodies: &[CelestialBody],
+    j2000_days: f64,
+    search_years: f64,
+) -> Option<(f64, f64)> {
+    if bodies.len() < 2 {
+        return None;
+    }
 
     let mut best_spread = f64::MAX;
     let mut best_day = 0.0;
@@ -327,8 +339,7 @@ pub fn draw_circular_calendar(
     let mean_lon = CelestialBody::Earth.mean_longitude_j2000_deg().to_radians();
 
     let month_names = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
     let month_colors: [eframe::egui::Color32; 12] = [
         eframe::egui::Color32::from_rgba_unmultiplied(135, 206, 235, 80),
@@ -357,10 +368,8 @@ pub fn draw_circular_calendar(
         let date = chrono::NaiveDate::from_ymd_opt(current_year, m as u32 + 1, 1);
         if let Some(date) = date {
             let dt = date.and_hms_opt(0, 0, 0).unwrap().and_utc();
-            let boundary_j2000 =
-                (dt - ts_epoch).num_seconds() as f64 / 86400.0;
-            let angle = mean_lon
-                + 2.0 * PI * boundary_j2000 / earth_period;
+            let boundary_j2000 = (dt - ts_epoch).num_seconds() as f64 / 86400.0;
+            let angle = mean_lon + 2.0 * PI * boundary_j2000 / earth_period;
             month_boundaries.push(angle);
         }
     }
@@ -368,7 +377,9 @@ pub fn draw_circular_calendar(
         month_boundaries.push(month_boundaries[0] + 2.0 * PI);
     }
 
-    let mut painter = plot_ui.ctx().layer_painter(eframe::egui::LayerId::background());
+    let mut painter = plot_ui
+        .ctx()
+        .layer_painter(eframe::egui::LayerId::background());
     let clip = plot_ui.response().rect;
     painter.set_clip_rect(clip);
 
@@ -430,9 +441,7 @@ pub fn draw_circular_calendar(
         );
     }
 
-    if let Some(earth_pos) =
-        compute_body_position_au(CelestialBody::Earth, j2000_days)
-    {
+    if let Some(earth_pos) = compute_body_position_au(CelestialBody::Earth, j2000_days) {
         let earth_angle = earth_pos[1].atan2(earth_pos[0]);
         let [s1x, s1y] = scale_position(0.0, 0.0, log_power);
         let marker_outer = earth_sma * 1.04;
@@ -482,12 +491,15 @@ fn transfer_point(
     going_outward: bool,
     departure_angle: f64,
 ) -> [f64; 2] {
-    let m = if going_outward { PI * fraction } else { PI * (1.0 + fraction) };
+    let m = if going_outward {
+        PI * fraction
+    } else {
+        PI * (1.0 + fraction)
+    };
     let ea = solve_kepler(m, e);
     let r = a_t * (1.0 - e * ea.cos());
-    let true_anomaly = 2.0
-        * ((1.0 + e).sqrt() * (ea / 2.0).sin())
-            .atan2((1.0 - e).sqrt() * (ea / 2.0).cos());
+    let true_anomaly =
+        2.0 * ((1.0 + e).sqrt() * (ea / 2.0).sin()).atan2((1.0 - e).sqrt() * (ea / 2.0).cos());
     let angle = if going_outward {
         departure_angle + true_anomaly
     } else {
@@ -496,10 +508,7 @@ fn transfer_point(
     [r * angle.cos(), r * angle.sin()]
 }
 
-pub fn hohmann_spacecraft_position_au(
-    state: &HohmannState,
-    j2000_days: f64,
-) -> Option<[f64; 2]> {
+pub fn hohmann_spacecraft_position_au(state: &HohmannState, j2000_days: f64) -> Option<[f64; 2]> {
     if state.arrived {
         return compute_body_position_au(state.dest, j2000_days);
     }
@@ -509,12 +518,14 @@ pub fn hohmann_spacecraft_position_au(
     let r2 = state.dest.semi_major_axis_au()?;
     let going_outward = r2 >= r1;
 
-    let fraction = (state.mission_elapsed_days / params.transfer_time_days)
-        .clamp(0.0, 1.0);
+    let fraction = (state.mission_elapsed_days / params.transfer_time_days).clamp(0.0, 1.0);
 
     Some(transfer_point(
-        fraction, params.transfer_sma, params.eccentricity,
-        going_outward, state.departure_angle,
+        fraction,
+        params.transfer_sma,
+        params.eccentricity,
+        going_outward,
+        state.departure_angle,
     ))
 }
 
@@ -538,7 +549,9 @@ pub fn draw_hohmann_overlay(
         None => return,
     };
 
-    if !state.launched { return; }
+    if !state.launched {
+        return;
+    }
 
     let depart_angle = state.departure_angle;
     let going_outward = r2 >= r1;
@@ -548,8 +561,11 @@ pub fn draw_hohmann_overlay(
     for i in 0..=n_pts {
         let frac = i as f64 / n_pts as f64;
         let pt = transfer_point(
-            frac, params.transfer_sma, params.eccentricity,
-            going_outward, depart_angle,
+            frac,
+            params.transfer_sma,
+            params.eccentricity,
+            going_outward,
+            depart_angle,
         );
         ellipse_pts.push(scale_position(pt[0], pt[1], log_power));
     }
@@ -584,35 +600,22 @@ pub fn draw_hohmann_overlay(
             } else {
                 eframe::egui::Color32::from_rgba_unmultiplied(200, 150, 0, 120)
             };
-            plot_ui.line(
-                Line::new("", trail_pts)
-                    .color(trail_color)
-                    .width(2.5),
-            );
+            plot_ui.line(Line::new("", trail_pts).color(trail_color).width(2.5));
         }
 
         let bounds = plot_ui.plot_bounds();
-        let view_size = (bounds.max()[0] - bounds.min()[0])
-            .max(bounds.max()[1] - bounds.min()[1]);
+        let view_size = (bounds.max()[0] - bounds.min()[0]).max(bounds.max()[1] - bounds.min()[1]);
         let marker_r = view_size * 0.008;
         let marker_pts = circle_points(sp[0], sp[1], marker_r, 16);
         let sc_color = eframe::egui::Color32::from_rgb(255, 220, 50);
-        plot_ui.line(
-            Line::new("", marker_pts)
-                .color(sc_color)
-                .width(3.0),
-        );
+        plot_ui.line(Line::new("", marker_pts).color(sc_color).width(3.0));
         plot_ui.points(
             egui_plot::Points::new("", vec![sp])
                 .color(sc_color)
                 .radius(5.0),
         );
 
-        let dep_pos = scale_position(
-            r1 * depart_angle.cos(),
-            r1 * depart_angle.sin(),
-            log_power,
-        );
+        let dep_pos = scale_position(r1 * depart_angle.cos(), r1 * depart_angle.sin(), log_power);
         let dv1_text = format!("\u{0394}v1: {:.2} km/s", params.departure_dv_km_s);
         plot_ui.text(
             Text::new(
@@ -626,11 +629,7 @@ pub fn draw_hohmann_overlay(
         );
 
         let arr_angle = depart_angle + PI;
-        let arr_pos = scale_position(
-            r2 * arr_angle.cos(),
-            r2 * arr_angle.sin(),
-            log_power,
-        );
+        let arr_pos = scale_position(r2 * arr_angle.cos(), r2 * arr_angle.sin(), log_power);
         let dv2_text = format!("\u{0394}v2: {:.2} km/s", params.arrival_dv_km_s);
         plot_ui.text(
             Text::new(
@@ -678,40 +677,64 @@ struct MoonOrbit {
 fn moon_orbit(body: CelestialBody) -> Option<MoonOrbit> {
     match body {
         CelestialBody::Moon => Some(MoonOrbit {
-            parent: CelestialBody::Earth, distance_au: 0.00257, period_days: 27.32,
+            parent: CelestialBody::Earth,
+            distance_au: 0.00257,
+            period_days: 27.32,
         }),
         CelestialBody::Ganymede => Some(MoonOrbit {
-            parent: CelestialBody::Jupiter, distance_au: 0.00716, period_days: 7.155,
+            parent: CelestialBody::Jupiter,
+            distance_au: 0.00716,
+            period_days: 7.155,
         }),
         CelestialBody::Callisto => Some(MoonOrbit {
-            parent: CelestialBody::Jupiter, distance_au: 0.01258, period_days: 16.689,
+            parent: CelestialBody::Jupiter,
+            distance_au: 0.01258,
+            period_days: 16.689,
         }),
         CelestialBody::Io => Some(MoonOrbit {
-            parent: CelestialBody::Jupiter, distance_au: 0.00282, period_days: 1.769,
+            parent: CelestialBody::Jupiter,
+            distance_au: 0.00282,
+            period_days: 1.769,
         }),
         CelestialBody::Europa => Some(MoonOrbit {
-            parent: CelestialBody::Jupiter, distance_au: 0.00449, period_days: 3.551,
+            parent: CelestialBody::Jupiter,
+            distance_au: 0.00449,
+            period_days: 3.551,
         }),
         CelestialBody::Titan => Some(MoonOrbit {
-            parent: CelestialBody::Saturn, distance_au: 0.00817, period_days: 15.945,
+            parent: CelestialBody::Saturn,
+            distance_au: 0.00817,
+            period_days: 15.945,
         }),
         CelestialBody::Triton => Some(MoonOrbit {
-            parent: CelestialBody::Neptune, distance_au: 0.00237, period_days: -5.877,
+            parent: CelestialBody::Neptune,
+            distance_au: 0.00237,
+            period_days: -5.877,
         }),
         CelestialBody::Charon => Some(MoonOrbit {
-            parent: CelestialBody::Pluto, distance_au: 0.000131, period_days: 6.387,
+            parent: CelestialBody::Pluto,
+            distance_au: 0.000131,
+            period_days: 6.387,
         }),
         CelestialBody::Enceladus => Some(MoonOrbit {
-            parent: CelestialBody::Saturn, distance_au: 0.00159, period_days: 1.370,
+            parent: CelestialBody::Saturn,
+            distance_au: 0.00159,
+            period_days: 1.370,
         }),
         CelestialBody::Mimas => Some(MoonOrbit {
-            parent: CelestialBody::Saturn, distance_au: 0.00124, period_days: 0.942,
+            parent: CelestialBody::Saturn,
+            distance_au: 0.00124,
+            period_days: 0.942,
         }),
         CelestialBody::Iapetus => Some(MoonOrbit {
-            parent: CelestialBody::Saturn, distance_au: 0.0238, period_days: 79.32,
+            parent: CelestialBody::Saturn,
+            distance_au: 0.0238,
+            period_days: 79.32,
         }),
         CelestialBody::Phobos => Some(MoonOrbit {
-            parent: CelestialBody::Mars, distance_au: 0.0000628, period_days: 0.319,
+            parent: CelestialBody::Mars,
+            distance_au: 0.0000628,
+            period_days: 0.319,
         }),
         _ => None,
     }
@@ -752,13 +775,12 @@ pub fn fetch_asteroids() -> Result<Vec<Asteroid>, String> {
         .map_err(|e| format!("Read error: {e}"))?;
     let json: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("JSON error: {e}"))?;
-    let data = json["data"]
-        .as_array()
-        .ok_or("Missing data field")?;
+    let data = json["data"].as_array().ok_or("Missing data field")?;
     let mut asteroids = Vec::with_capacity(data.len());
     for row in data {
         let arr = row.as_array().ok_or("Row not array")?;
-        let name = arr.get(0)
+        let name = arr
+            .get(0)
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .trim()
@@ -834,10 +856,7 @@ fn scale_position(x: f64, y: f64, power: f64) -> [f64; 2] {
     [x * s, y * s]
 }
 
-pub fn compute_body_position_au(
-    body: CelestialBody,
-    j2000_days: f64,
-) -> Option<[f64; 2]> {
+pub fn compute_body_position_au(body: CelestialBody, j2000_days: f64) -> Option<[f64; 2]> {
     if body == CelestialBody::Sun {
         return Some([0.0, 0.0]);
     }
@@ -892,8 +911,7 @@ pub fn draw_solar_system_view(
     };
 
     let bounds = plot_ui.plot_bounds();
-    let view_size = (bounds.max()[0] - bounds.min()[0])
-        .max(bounds.max()[1] - bounds.min()[1]);
+    let view_size = (bounds.max()[0] - bounds.min()[0]).max(bounds.max()[1] - bounds.min()[1]);
     let inflation = (1.0 - log_power).max(0.0);
     let min_radius = view_size * 0.004 * inflation;
 
@@ -911,7 +929,8 @@ pub fn draw_solar_system_view(
 
         let scaled = scale_position(pos[0], pos[1], log_power);
 
-        let visual_radius = (sun_visual_radius * (body.radius_km() / sun_km).powf(log_power)).max(min_radius);
+        let visual_radius =
+            (sun_visual_radius * (body.radius_km() / sun_km).powf(log_power)).max(min_radius);
 
         bodies.push((body, scaled[0], scaled[1], visual_radius));
     }
@@ -948,11 +967,7 @@ pub fn draw_solar_system_view(
         };
         let orbit_width = if body == focused_body { 5.0 } else { 4.0 };
 
-        plot_ui.line(
-            Line::new("", points)
-                .color(orbit_color)
-                .width(orbit_width),
-        );
+        plot_ui.line(Line::new("", points).color(orbit_color).width(orbit_width));
     }
 
     for &moon_body in &CelestialBody::ALL {
@@ -969,7 +984,7 @@ pub fn draw_solar_system_view(
         let edge_scaled = scale_position(edge_pos[0], edge_pos[1], log_power);
         let orbit_r = ((edge_scaled[0] - parent_scaled[0]).powi(2)
             + (edge_scaled[1] - parent_scaled[1]).powi(2))
-            .sqrt();
+        .sqrt();
         if orbit_r > view_size * 0.005 {
             let orbit_pts = circle_points(parent_scaled[0], parent_scaled[1], orbit_r, 200);
             let orbit_color = if focused_body == moon_body {
@@ -977,11 +992,7 @@ pub fn draw_solar_system_view(
             } else {
                 moon_body.display_color().gamma_multiply(0.4)
             };
-            plot_ui.line(
-                Line::new("", orbit_pts)
-                    .color(orbit_color)
-                    .width(1.0),
-            );
+            plot_ui.line(Line::new("", orbit_pts).color(orbit_color).width(1.0));
         }
     }
 
@@ -1026,11 +1037,7 @@ pub fn draw_solar_system_view(
                     [edge * t.cos(), edge * t.sin()]
                 })
                 .collect();
-            plot_ui.line(
-                Line::new("", pts)
-                    .color(edge_color)
-                    .width(1.5),
-            );
+            plot_ui.line(Line::new("", pts).color(edge_color).width(1.5));
         }
         // Belt label, placed just outside the outer edge on the +y axis so it
         // doesn't overlap with Ceres' orbit (which lies inside the belt).
@@ -1102,7 +1109,11 @@ pub fn draw_solar_system_view(
         let draw_body = !hide_bodies || body == CelestialBody::Sun;
         if draw_body {
             if let Some(handle) = sphere_handles.get(&body) {
-                let ring_scale = body.ring_params().map(|(_, _, o)| o as f64).unwrap_or(1.0).max(1.0);
+                let ring_scale = body
+                    .ring_params()
+                    .map(|(_, _, o)| o as f64)
+                    .unwrap_or(1.0)
+                    .max(1.0);
                 let img_size = (visual_radius * 2.0 * ring_scale) as f32;
                 plot_ui.image(PlotImage::new(
                     "",
@@ -1133,7 +1144,11 @@ pub fn draw_solar_system_view(
 
             let label_text = if body != CelestialBody::Sun {
                 let offset_p = SCALE_OFFSET.powf(log_power);
-                let au = if dist_from_center > 1e-6 { (dist_from_center + offset_p).powf(1.0 / log_power) - SCALE_OFFSET } else { 0.0 };
+                let au = if dist_from_center > 1e-6 {
+                    (dist_from_center + offset_p).powf(1.0 / log_power) - SCALE_OFFSET
+                } else {
+                    0.0
+                };
                 let km = au * 149_597_870.7;
                 if km >= 1_000_000.0 {
                     format!("{} ({:.1}M km)", body.label(), km / 1_000_000.0)
@@ -1170,7 +1185,11 @@ pub fn draw_solar_system_view(
 
             let sr = (pointer.x.powi(2) + pointer.y.powi(2)).sqrt();
             let offset_p = SCALE_OFFSET.powf(log_power);
-            let real_au = if sr > 1e-6 { (sr + offset_p).powf(1.0 / log_power) - SCALE_OFFSET } else { 0.0 };
+            let real_au = if sr > 1e-6 {
+                (sr + offset_p).powf(1.0 / log_power) - SCALE_OFFSET
+            } else {
+                0.0
+            };
             let screen_pos = plot_ui.screen_from_plot(PlotPoint::new(pointer.x, pointer.y));
             let offset_screen = eframe::egui::Pos2::new(screen_pos.x + 12.0, screen_pos.y - 12.0);
             let offset_plot = plot_ui.plot_from_screen(offset_screen);
@@ -1178,8 +1197,7 @@ pub fn draw_solar_system_view(
                 Text::new(
                     "",
                     offset_plot,
-                    eframe::egui::RichText::new(format!("{:.2} AU", real_au))
-                        .size(12.0),
+                    eframe::egui::RichText::new(format!("{:.2} AU", real_au)).size(12.0),
                 )
                 .color(label_color)
                 .anchor(eframe::egui::Align2::LEFT_BOTTOM),
@@ -1216,7 +1234,11 @@ pub fn draw_solar_system_view(
                 .gap(12.0)
                 .show(|ui| {
                     ui.set_min_width(200.0);
-                    ui.label(eframe::egui::RichText::new(body.label()).strong().size(16.0));
+                    ui.label(
+                        eframe::egui::RichText::new(body.label())
+                            .strong()
+                            .size(16.0),
+                    );
                     ui.separator();
                     eframe::egui::Grid::new("ss_tooltip_grid")
                         .num_columns(2)
@@ -1267,7 +1289,10 @@ pub fn draw_solar_system_view(
                     }
                 }
                 if let Some((idx, _)) = best_ast {
-                    let (_, ax, ay) = ast_positions[ast_positions.iter().position(|&(i, _, _)| i == idx).unwrap()];
+                    let (_, ax, ay) = ast_positions[ast_positions
+                        .iter()
+                        .position(|&(i, _, _)| i == idx)
+                        .unwrap()];
                     let ring_r = view_size * 0.015;
                     let ring_pts = circle_points(ax, ay, ring_r, 32);
                     plot_ui.line(
@@ -1293,7 +1318,11 @@ pub fn draw_solar_system_view(
                                 let km = ast.a * 149_597_870.7;
                                 ui.label("Orbit:");
                                 if km >= 1_000_000.0 {
-                                    ui.label(format!("{:.3} AU\n({:.1}M km)", ast.a, km / 1_000_000.0));
+                                    ui.label(format!(
+                                        "{:.3} AU\n({:.1}M km)",
+                                        ast.a,
+                                        km / 1_000_000.0
+                                    ));
                                 } else {
                                     ui.label(format!("{:.3} AU\n({:.0} km)", ast.a, km));
                                 }
@@ -1356,29 +1385,40 @@ pub fn draw_planet_sizes(
     use eframe::egui;
 
     ui.horizontal(|ui| {
-        if ui.selectable_label(enabled.len() == CelestialBody::ALL.len(), "All").clicked() {
+        if ui
+            .selectable_label(enabled.len() == CelestialBody::ALL.len(), "All")
+            .clicked()
+        {
             *enabled = CelestialBody::ALL.iter().copied().collect();
         }
         for cat in &["Star", "Planets", "Dwarf Planets", "Asteroids", "Moons"] {
-            let in_cat: Vec<CelestialBody> = CelestialBody::ALL.iter()
+            let in_cat: Vec<CelestialBody> = CelestialBody::ALL
+                .iter()
                 .copied()
                 .filter(|b| b.category() == *cat)
                 .collect();
             let all_on = in_cat.iter().all(|b| enabled.contains(b));
             if ui.selectable_label(all_on, *cat).clicked() {
                 for b in &in_cat {
-                    if all_on { enabled.remove(b); } else { enabled.insert(*b); }
+                    if all_on {
+                        enabled.remove(b);
+                    } else {
+                        enabled.insert(*b);
+                    }
                 }
             }
         }
     });
 
-    let mut sorted: Vec<CelestialBody> = CelestialBody::ALL.iter()
+    let mut sorted: Vec<CelestialBody> = CelestialBody::ALL
+        .iter()
         .copied()
         .filter(|b| enabled.contains(b))
         .collect();
     sorted.sort_by(|a, b| b.radius_km().partial_cmp(&a.radius_km()).unwrap());
-    if sorted.is_empty() { return None; }
+    if sorted.is_empty() {
+        return None;
+    }
 
     let available = ui.available_size();
     let mut clicked_body = None;
@@ -1400,8 +1440,7 @@ pub fn draw_planet_sizes(
         if !auto_zoom.enabled && response.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll.abs() > 0.1 {
-                *zoom_t = (*zoom_t - scroll as f64 * 0.005)
-                    .clamp(0.0, (n - 1) as f64);
+                *zoom_t = (*zoom_t - scroll as f64 * 0.005).clamp(0.0, (n - 1) as f64);
                 ui.ctx().request_repaint();
             }
         }
@@ -1421,11 +1460,15 @@ pub fn draw_planet_sizes(
             let num_gaps = (n - k).saturating_sub(1).max(1) as f64;
             let usable_w = view_w - 2.0 * margin;
             let body_ext = |_b: &CelestialBody| -> f64 { 1.0 };
-            let total_extent: f64 = sorted[k..].iter()
-                .map(|b| 2.0 * b.radius_km() * body_ext(b)).sum();
+            let total_extent: f64 = sorted[k..]
+                .iter()
+                .map(|b| 2.0 * b.radius_km() * body_ext(b))
+                .sum();
             let prelim_scale = h_scale.min(usable_w / total_extent);
-            let min_r_px = sorted[k..].last()
-                .map(|b| b.radius_km() * prelim_scale).unwrap_or(1.0);
+            let min_r_px = sorted[k..]
+                .last()
+                .map(|b| b.radius_km() * prelim_scale)
+                .unwrap_or(1.0);
             let gap = (min_r_px * 0.5).clamp(1.0, 8.0);
             let w_scale = (usable_w - num_gaps * gap) / total_extent;
             let scale = h_scale.min(w_scale);
@@ -1491,8 +1534,10 @@ pub fn draw_planet_sizes(
             let eased = s * s * (3.0 - 2.0 * s);
             let target = eased * total;
 
-            let seg = cum.partition_point(|&d| d <= target)
-                .saturating_sub(1).min(n - 2);
+            let seg = cum
+                .partition_point(|&d| d <= target)
+                .saturating_sub(1)
+                .min(n - 2);
             let frac = (target - cum[seg]) / (cum[seg + 1] - cum[seg]);
             *zoom_t = (seg as f64 + frac).clamp(0.0, (n - 1) as f64);
             ui.ctx().request_repaint();
@@ -1519,9 +1564,7 @@ pub fn draw_planet_sizes(
             let body = sorted[j];
             let vis_extent = r_px;
 
-            if cx + vis_extent < rect.left() - 10.0
-                || cx - vis_extent > rect.right() + 10.0
-            {
+            if cx + vis_extent < rect.left() - 10.0 || cx - vis_extent > rect.right() + 10.0 {
                 continue;
             }
 
@@ -1535,10 +1578,7 @@ pub fn draw_planet_sizes(
                 painter.image(
                     handle.id(),
                     img_rect,
-                    egui::Rect::from_min_max(
-                        egui::pos2(0.0, 0.0),
-                        egui::pos2(1.0, 1.0),
-                    ),
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
                 );
             }
@@ -1587,7 +1627,8 @@ pub fn draw_planet_sizes(
 
                 let mut local_y = 0.0f32;
                 for (text, size, color) in entries {
-                    let galley = painter.layout_no_wrap(text, egui::FontId::proportional(size), color);
+                    let galley =
+                        painter.layout_no_wrap(text, egui::FontId::proportional(size), color);
                     let gw = galley.size().x;
                     let gh = galley.size().y;
                     let text_shape = egui::epaint::TextShape::new(
@@ -1598,10 +1639,8 @@ pub fn draw_planet_sizes(
                     let mut mesh = egui::epaint::Mesh::default();
                     tess.tessellate_text(&text_shape, &mut mesh);
                     for v in &mut mesh.vertices {
-                        v.pos = egui::Pos2::new(
-                            cx + v.pos.x * scale,
-                            label_y_start + v.pos.y * scale,
-                        );
+                        v.pos =
+                            egui::Pos2::new(cx + v.pos.x * scale, label_y_start + v.pos.y * scale);
                     }
                     painter.add(egui::Shape::Mesh(std::sync::Arc::new(mesh)));
                     local_y += gh + 2.0;
@@ -1659,21 +1698,22 @@ pub fn draw_planet_sizes(
             });
         };
 
-        let draw_highlight = |painter: &egui::Painter, body: CelestialBody, cx: f32, cy: f32, r_px: f32| {
-            let ring_r = r_px * 1.15;
-            let n_pts = 64;
-            for i in 0..n_pts {
-                let a0 = std::f32::consts::TAU * i as f32 / n_pts as f32;
-                let a1 = std::f32::consts::TAU * (i + 1) as f32 / n_pts as f32;
-                painter.line_segment(
-                    [
-                        egui::Pos2::new(cx + ring_r * a0.cos(), cy + ring_r * a0.sin()),
-                        egui::Pos2::new(cx + ring_r * a1.cos(), cy + ring_r * a1.sin()),
-                    ],
-                    egui::Stroke::new(2.0, body.display_color()),
-                );
-            }
-        };
+        let draw_highlight =
+            |painter: &egui::Painter, body: CelestialBody, cx: f32, cy: f32, r_px: f32| {
+                let ring_r = r_px * 1.15;
+                let n_pts = 64;
+                for i in 0..n_pts {
+                    let a0 = std::f32::consts::TAU * i as f32 / n_pts as f32;
+                    let a1 = std::f32::consts::TAU * (i + 1) as f32 / n_pts as f32;
+                    painter.line_segment(
+                        [
+                            egui::Pos2::new(cx + ring_r * a0.cos(), cy + ring_r * a0.sin()),
+                            egui::Pos2::new(cx + ring_r * a1.cos(), cy + ring_r * a1.sin()),
+                        ],
+                        egui::Stroke::new(2.0, body.display_color()),
+                    );
+                }
+            };
 
         if response.hovered() || response.clicked() {
             if let Some(pointer) = ui.ctx().pointer_hover_pos() {

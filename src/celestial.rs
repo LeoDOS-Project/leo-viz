@@ -84,7 +84,9 @@ impl TextureResolution {
 
     pub fn cloud_filename(&self) -> Option<&'static str> {
         match self {
-            TextureResolution::R8192 | TextureResolution::R21504 => Some("textures/earth/earth_clouds_8k.jpg"),
+            TextureResolution::R8192 | TextureResolution::R21504 => {
+                Some("textures/earth/earth_clouds_8k.jpg")
+            }
             _ => Some("textures/earth/earth_clouds_2k.jpg"),
         }
     }
@@ -101,56 +103,116 @@ impl Skin {
         }
     }
 
-    pub fn filename(&self, body: CelestialBody, resolution: TextureResolution) -> Option<&'static str> {
+    pub fn filename(
+        &self,
+        body: CelestialBody,
+        resolution: TextureResolution,
+    ) -> Option<&'static str> {
         match (body, self, resolution) {
-            (CelestialBody::Earth, Skin::Default, TextureResolution::R21504) => Some("textures/earth/Earth_Diffuse_21k.jpg"),
-            (CelestialBody::Earth, Skin::Default, TextureResolution::R8192) => Some("textures/earth/earth_8k.jpg"),
-            (CelestialBody::Earth, Skin::Default, TextureResolution::R512) => Some("textures/earth/earth_512.jpg"),
+            (CelestialBody::Earth, Skin::Default, TextureResolution::R21504) => {
+                Some("textures/earth/Earth_Diffuse_21k.jpg")
+            }
+            (CelestialBody::Earth, Skin::Default, TextureResolution::R8192) => {
+                Some("textures/earth/earth_8k.jpg")
+            }
+            (CelestialBody::Earth, Skin::Default, TextureResolution::R512) => {
+                Some("textures/earth/earth_512.jpg")
+            }
             (CelestialBody::Earth, Skin::Default, _) => Some("textures/earth/earth_2k.jpg"),
-            (CelestialBody::Earth, Skin::HellOnEarth, _) => Some("textures/earth/hell_on_earth_2k.png"),
-            (CelestialBody::Moon, Skin::Default, TextureResolution::R8192) => Some("textures/moon/moon_8k.jpg"),
+            (CelestialBody::Earth, Skin::HellOnEarth, _) => {
+                Some("textures/earth/hell_on_earth_2k.png")
+            }
+            (CelestialBody::Moon, Skin::Default, TextureResolution::R8192) => {
+                Some("textures/moon/moon_8k.jpg")
+            }
             (CelestialBody::Moon, Skin::Default, _) => Some("textures/moon/moon_2k.jpg"),
-            (CelestialBody::Mars, Skin::Default, TextureResolution::R8192) => Some("textures/mars/mars_8k.jpg"),
+            (CelestialBody::Mars, Skin::Default, TextureResolution::R8192) => {
+                Some("textures/mars/mars_8k.jpg")
+            }
             (CelestialBody::Mars, Skin::Default, _) => Some("textures/mars/mars_2k.jpg"),
-            (CelestialBody::Mars, Skin::Terraformed, _) => Some("textures/mars/mars_terraformed.png"),
+            (CelestialBody::Mars, Skin::Terraformed, _) => {
+                Some("textures/mars/mars_terraformed.png")
+            }
             (CelestialBody::Mars, Skin::Civilized, _) => Some("textures/mars/mars_civilized.png"),
-            (CelestialBody::Mercury, Skin::Default, TextureResolution::R21504) => Some("textures/mercury/Mercury_Diffuse_16k.jpg"),
-            (CelestialBody::Mercury, Skin::Default, TextureResolution::R8192) => Some("textures/mercury/mercury_8k.jpg"),
+            (CelestialBody::Mercury, Skin::Default, TextureResolution::R21504) => {
+                Some("textures/mercury/Mercury_Diffuse_16k.jpg")
+            }
+            (CelestialBody::Mercury, Skin::Default, TextureResolution::R8192) => {
+                Some("textures/mercury/mercury_8k.jpg")
+            }
             (CelestialBody::Mercury, Skin::Default, _) => Some("textures/mercury/mercury_2k.jpg"),
-            (CelestialBody::Venus, Skin::Default, TextureResolution::R21504) => Some("textures/venus/Venus_Diffuse_16k.jpg"),
-            (CelestialBody::Venus, Skin::Default, TextureResolution::R8192) => Some("textures/venus/venus_8k.jpg"),
+            (CelestialBody::Venus, Skin::Default, TextureResolution::R21504) => {
+                Some("textures/venus/Venus_Diffuse_16k.jpg")
+            }
+            (CelestialBody::Venus, Skin::Default, TextureResolution::R8192) => {
+                Some("textures/venus/venus_8k.jpg")
+            }
             (CelestialBody::Venus, Skin::Default, _) => Some("textures/venus/venus_2k.jpg"),
-            (CelestialBody::Jupiter, Skin::Default, TextureResolution::R8192) => Some("textures/jupiter/jupiter_8k.jpg"),
+            (CelestialBody::Jupiter, Skin::Default, TextureResolution::R8192) => {
+                Some("textures/jupiter/jupiter_8k.jpg")
+            }
             (CelestialBody::Jupiter, Skin::Default, _) => Some("textures/jupiter/jupiter_2k.jpg"),
-            (CelestialBody::Saturn, Skin::Default, TextureResolution::R8192) => Some("textures/saturn/saturn_8k.jpg"),
+            (CelestialBody::Saturn, Skin::Default, TextureResolution::R8192) => {
+                Some("textures/saturn/saturn_8k.jpg")
+            }
             (CelestialBody::Saturn, Skin::Default, _) => Some("textures/saturn/saturn_2k.jpg"),
             (CelestialBody::Uranus, Skin::Default, _) => Some("textures/uranus/uranus_2k.jpg"),
             (CelestialBody::Neptune, Skin::Default, _) => Some("textures/neptune/neptune_2k.jpg"),
-            (CelestialBody::Sun, Skin::Default, TextureResolution::R8192) => Some("textures/sun/sun_8k.jpg"),
+            (CelestialBody::Sun, Skin::Default, TextureResolution::R8192) => {
+                Some("textures/sun/sun_8k.jpg")
+            }
             (CelestialBody::Sun, Skin::Default, _) => Some("textures/sun/sun_2k.jpg"),
-            (CelestialBody::Ceres, Skin::Default, TextureResolution::R8192) => Some("textures/ceres/ceres_4k.jpg"),
+            (CelestialBody::Ceres, Skin::Default, TextureResolution::R8192) => {
+                Some("textures/ceres/ceres_4k.jpg")
+            }
             (CelestialBody::Ceres, Skin::Default, _) => Some("textures/ceres/ceres_2k.jpg"),
-            (CelestialBody::Haumea, Skin::Default, TextureResolution::R8192) => Some("textures/haumea/haumea_4k.jpg"),
+            (CelestialBody::Haumea, Skin::Default, TextureResolution::R8192) => {
+                Some("textures/haumea/haumea_4k.jpg")
+            }
             (CelestialBody::Haumea, Skin::Default, _) => Some("textures/haumea/haumea_2k.jpg"),
-            (CelestialBody::Makemake, Skin::Default, TextureResolution::R8192) => Some("textures/makemake/makemake_4k.jpg"),
-            (CelestialBody::Makemake, Skin::Default, _) => Some("textures/makemake/makemake_2k.jpg"),
-            (CelestialBody::Eris, Skin::Default, TextureResolution::R8192) => Some("textures/eris/eris_4k.jpg"),
+            (CelestialBody::Makemake, Skin::Default, TextureResolution::R8192) => {
+                Some("textures/makemake/makemake_4k.jpg")
+            }
+            (CelestialBody::Makemake, Skin::Default, _) => {
+                Some("textures/makemake/makemake_2k.jpg")
+            }
+            (CelestialBody::Eris, Skin::Default, TextureResolution::R8192) => {
+                Some("textures/eris/eris_4k.jpg")
+            }
             (CelestialBody::Eris, Skin::Default, _) => Some("textures/eris/eris_2k.jpg"),
             (CelestialBody::Pluto, Skin::Default, _) => Some("textures/pluto/pluto_2k.jpg"),
-            (CelestialBody::PlanetNine, Skin::Default, _) => Some("textures/planet_nine/planet_nine_2k.jpg"),
-            (CelestialBody::Ganymede, Skin::Default, _) => Some("textures/ganymede/ganymede_4k.jpg"),
-            (CelestialBody::Callisto, Skin::Default, _) => Some("textures/callisto/callisto_4k.jpg"),
+            (CelestialBody::PlanetNine, Skin::Default, _) => {
+                Some("textures/planet_nine/planet_nine_2k.jpg")
+            }
+            (CelestialBody::Ganymede, Skin::Default, _) => {
+                Some("textures/ganymede/ganymede_4k.jpg")
+            }
+            (CelestialBody::Callisto, Skin::Default, _) => {
+                Some("textures/callisto/callisto_4k.jpg")
+            }
             (CelestialBody::Io, Skin::Default, _) => Some("textures/io/io_2k.jpg"),
-            (CelestialBody::Europa, Skin::Default, TextureResolution::R8192) => Some("textures/europa/europa_4k.png"),
+            (CelestialBody::Europa, Skin::Default, TextureResolution::R8192) => {
+                Some("textures/europa/europa_4k.png")
+            }
             (CelestialBody::Europa, Skin::Default, _) => Some("textures/europa/europa_2k.jpg"),
-            (CelestialBody::Titan, Skin::Default, TextureResolution::R8192) => Some("textures/titan/titan_4k.png"),
+            (CelestialBody::Titan, Skin::Default, TextureResolution::R8192) => {
+                Some("textures/titan/titan_4k.png")
+            }
             (CelestialBody::Titan, Skin::Default, _) => Some("textures/titan/titan_2k.jpg"),
-            (CelestialBody::Triton, Skin::Default, TextureResolution::R8192) => Some("textures/triton/triton_4k.png"),
+            (CelestialBody::Triton, Skin::Default, TextureResolution::R8192) => {
+                Some("textures/triton/triton_4k.png")
+            }
             (CelestialBody::Triton, Skin::Default, _) => Some("textures/triton/triton_2k.jpg"),
-            (CelestialBody::Charon, Skin::Default, TextureResolution::R8192) => Some("textures/charon/charon_4k.png"),
+            (CelestialBody::Charon, Skin::Default, TextureResolution::R8192) => {
+                Some("textures/charon/charon_4k.png")
+            }
             (CelestialBody::Charon, Skin::Default, _) => Some("textures/charon/charon_2k.jpg"),
-            (CelestialBody::Enceladus, Skin::Default, TextureResolution::R8192) => Some("textures/enceladus/enceladus_8k.jpg"),
-            (CelestialBody::Enceladus, Skin::Default, _) => Some("textures/enceladus/enceladus_2k.jpg"),
+            (CelestialBody::Enceladus, Skin::Default, TextureResolution::R8192) => {
+                Some("textures/enceladus/enceladus_8k.jpg")
+            }
+            (CelestialBody::Enceladus, Skin::Default, _) => {
+                Some("textures/enceladus/enceladus_2k.jpg")
+            }
             (CelestialBody::Mimas, Skin::Default, _) => Some("textures/mimas/mimas_2k.jpg"),
             (CelestialBody::Iapetus, Skin::Default, _) => Some("textures/iapetus/iapetus_2k.jpg"),
             (CelestialBody::Phobos, Skin::Default, _) => Some("textures/phobos/phobos_2k.jpg"),
@@ -615,12 +677,8 @@ impl CelestialBody {
 
     pub fn moons(&self) -> &'static [(CelestialBody, f64, f64, f64)] {
         match self {
-            CelestialBody::Earth => &[
-                (CelestialBody::Moon, 384_400.0, 27.322, 0.0897),
-            ],
-            CelestialBody::Mars => &[
-                (CelestialBody::Phobos, 9_376.0, 0.3189, 0.0192),
-            ],
+            CelestialBody::Earth => &[(CelestialBody::Moon, 384_400.0, 27.322, 0.0897)],
+            CelestialBody::Mars => &[(CelestialBody::Phobos, 9_376.0, 0.3189, 0.0192)],
             CelestialBody::Jupiter => &[
                 (CelestialBody::Io, 421_700.0, 1.769, 0.0006),
                 (CelestialBody::Europa, 671_034.0, 3.551, 0.0082),
@@ -633,12 +691,8 @@ impl CelestialBody {
                 (CelestialBody::Titan, 1_221_870.0, 15.945, 0.0055),
                 (CelestialBody::Iapetus, 3_560_820.0, 79.322, 0.1396),
             ],
-            CelestialBody::Neptune => &[
-                (CelestialBody::Triton, 354_759.0, 5.877, 2.7437),
-            ],
-            CelestialBody::Pluto => &[
-                (CelestialBody::Charon, 19_591.0, 6.387, 0.0),
-            ],
+            CelestialBody::Neptune => &[(CelestialBody::Triton, 354_759.0, 5.877, 2.7437)],
+            CelestialBody::Pluto => &[(CelestialBody::Charon, 19_591.0, 6.387, 0.0)],
             _ => &[],
         }
     }

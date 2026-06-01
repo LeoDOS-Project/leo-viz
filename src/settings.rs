@@ -1,16 +1,18 @@
 //! Side-panel settings UI for camera, animation, and display options.
 
 use crate::celestial::{CelestialBody, TextureResolution};
-use crate::math::{matrix_to_lat_lon, lat_lon_to_matrix};
+use crate::math::{lat_lon_to_matrix, matrix_to_lat_lon};
 use crate::time::body_rotation_angle;
 use crate::ViewerState;
+use chrono::{Duration, Local, Utc};
 use eframe::egui;
 use nalgebra::Matrix3;
-use chrono::{Duration, Local, Utc};
 
 impl ViewerState {
     pub(crate) fn show_settings(&mut self, ui: &mut egui::Ui) {
-        let current_body = self.tabs.first()
+        let current_body = self
+            .tabs
+            .first()
             .and_then(|t| t.planets.first())
             .map(|p| p.celestial_body)
             .unwrap_or(CelestialBody::Earth);
@@ -20,21 +22,36 @@ impl ViewerState {
 
         {
             let s = &mut self.tabs[active].settings;
-            let (time_ref, speed_ref, animate_ref) =
-                (&mut s.time, &mut s.speed, &mut s.animate);
+            let (time_ref, speed_ref, animate_ref) = (&mut s.time, &mut s.speed, &mut s.animate);
 
             ui.label(egui::RichText::new("Simulation").strong());
             ui.horizontal(|ui| {
                 ui.label("Speed:");
                 let abs_speed = speed_ref.abs();
-                let drag_speed = if abs_speed > 31_536_000.0 { 100_000.0 } else if abs_speed > 86400.0 { 1000.0 } else if abs_speed > 3600.0 { 100.0 } else { 1.0 };
-                ui.add(egui::DragValue::new(speed_ref).range(-3_153_600_000.0..=3_153_600_000.0).speed(drag_speed))
-                    .on_hover_text("Simulation speed multiplier");
+                let drag_speed = if abs_speed > 31_536_000.0 {
+                    100_000.0
+                } else if abs_speed > 86400.0 {
+                    1000.0
+                } else if abs_speed > 3600.0 {
+                    100.0
+                } else {
+                    1.0
+                };
+                ui.add(
+                    egui::DragValue::new(speed_ref)
+                        .range(-3_153_600_000.0..=3_153_600_000.0)
+                        .speed(drag_speed),
+                )
+                .on_hover_text("Simulation speed multiplier");
                 if ui.button("⏪").on_hover_text("Reverse direction").clicked() {
                     *speed_ref = -*speed_ref;
                 }
                 let pause_label = if *animate_ref { "⏸" } else { "▶" };
-                if ui.button(pause_label).on_hover_text("Pause/resume simulation").clicked() {
+                if ui
+                    .button(pause_label)
+                    .on_hover_text("Pause/resume simulation")
+                    .clicked()
+                {
                     *animate_ref = !*animate_ref;
                 }
                 if abs_speed > 1.0 {
@@ -58,8 +75,8 @@ impl ViewerState {
             let real_timestamp = start + Duration::seconds(self.real_time as i64);
             let current_ts = start + Duration::seconds(*time_ref as i64);
             {
-                use chrono::Timelike;
                 use chrono::Datelike;
+                use chrono::Timelike;
                 let local = current_ts.with_timezone(&Local);
                 let orig_time = *time_ref;
                 let mut t_sec = *time_ref;
@@ -69,89 +86,110 @@ impl ViewerState {
                 let total_months = local.year() as f64 * 12.0 + local.month() as f64 - 1.0;
                 let mut t_month = total_months;
                 let mut t_year = total_months;
-                let fmt_component = |secs: f64, f: fn(&chrono::DateTime<Local>) -> String| -> String {
-                    let ts = (start + Duration::seconds(secs as i64)).with_timezone(&Local);
-                    f(&ts)
-                };
+                let fmt_component =
+                    |secs: f64, f: fn(&chrono::DateTime<Local>) -> String| -> String {
+                        let ts = (start + Duration::seconds(secs as i64)).with_timezone(&Local);
+                        f(&ts)
+                    };
                 ui.horizontal(|ui| {
                     ui.label("Time:");
-                    ui.add(egui::DragValue::new(&mut t_hour)
-                        .speed(360.0)
-                        .custom_formatter(|s, _| fmt_component(s, |t| format!("{:02}", t.hour())))
-                        .custom_parser(move |input| {
-                            let h = input.parse::<u32>().ok()?.min(23);
-                            let delta = (h as i64 - local.hour() as i64) * 3600;
-                            Some(orig_time + delta as f64)
-                        }));
+                    ui.add(
+                        egui::DragValue::new(&mut t_hour)
+                            .speed(360.0)
+                            .custom_formatter(|s, _| {
+                                fmt_component(s, |t| format!("{:02}", t.hour()))
+                            })
+                            .custom_parser(move |input| {
+                                let h = input.parse::<u32>().ok()?.min(23);
+                                let delta = (h as i64 - local.hour() as i64) * 3600;
+                                Some(orig_time + delta as f64)
+                            }),
+                    );
                     ui.label(":");
-                    ui.add(egui::DragValue::new(&mut t_min)
-                        .speed(6.0)
-                        .custom_formatter(|s, _| fmt_component(s, |t| format!("{:02}", t.minute())))
-                        .custom_parser(move |input| {
-                            let m = input.parse::<u32>().ok()?.min(59);
-                            let delta = (m as i64 - local.minute() as i64) * 60;
-                            Some(orig_time + delta as f64)
-                        }));
+                    ui.add(
+                        egui::DragValue::new(&mut t_min)
+                            .speed(6.0)
+                            .custom_formatter(|s, _| {
+                                fmt_component(s, |t| format!("{:02}", t.minute()))
+                            })
+                            .custom_parser(move |input| {
+                                let m = input.parse::<u32>().ok()?.min(59);
+                                let delta = (m as i64 - local.minute() as i64) * 60;
+                                Some(orig_time + delta as f64)
+                            }),
+                    );
                     ui.label(":");
-                    ui.add(egui::DragValue::new(&mut t_sec)
-                        .speed(0.1)
-                        .custom_formatter(|s, _| fmt_component(s, |t| format!("{:02}", t.second())))
-                        .custom_parser(move |input| {
-                            let s = input.parse::<u32>().ok()?.min(59);
-                            let delta = s as i64 - local.second() as i64;
-                            Some(orig_time + delta as f64)
-                        }));
+                    ui.add(
+                        egui::DragValue::new(&mut t_sec)
+                            .speed(0.1)
+                            .custom_formatter(|s, _| {
+                                fmt_component(s, |t| format!("{:02}", t.second()))
+                            })
+                            .custom_parser(move |input| {
+                                let s = input.parse::<u32>().ok()?.min(59);
+                                let delta = s as i64 - local.second() as i64;
+                                Some(orig_time + delta as f64)
+                            }),
+                    );
                 });
                 ui.horizontal(|ui| {
                     ui.label("Date:");
-                    ui.add(egui::DragValue::new(&mut t_day)
-                        .speed(8640.0)
-                        .custom_formatter(|s, _| fmt_component(s, |t| format!("{:02}", t.day())))
-                        .custom_parser(move |input| {
-                            let d = input.parse::<u32>().ok()?.clamp(1, 31);
-                            let delta = (d as i64 - local.day() as i64) * 86400;
-                            Some(orig_time + delta as f64)
-                        }));
+                    ui.add(
+                        egui::DragValue::new(&mut t_day)
+                            .speed(8640.0)
+                            .custom_formatter(|s, _| {
+                                fmt_component(s, |t| format!("{:02}", t.day()))
+                            })
+                            .custom_parser(move |input| {
+                                let d = input.parse::<u32>().ok()?.clamp(1, 31);
+                                let delta = (d as i64 - local.day() as i64) * 86400;
+                                Some(orig_time + delta as f64)
+                            }),
+                    );
                     ui.label("/");
-                    ui.add(egui::DragValue::new(&mut t_month)
-                        .speed(0.1)
-                        .custom_formatter(|v, _| {
-                            let m = (v as i32).rem_euclid(12) + 1;
-                            format!("{:02}", m)
-                        })
-                        .custom_parser(move |input| {
-                            let m: i32 = input.parse().ok()?;
-                            Some(local.year() as f64 * 12.0 + m.clamp(1, 12) as f64 - 1.0)
-                        }));
+                    ui.add(
+                        egui::DragValue::new(&mut t_month)
+                            .speed(0.1)
+                            .custom_formatter(|v, _| {
+                                let m = (v as i32).rem_euclid(12) + 1;
+                                format!("{:02}", m)
+                            })
+                            .custom_parser(move |input| {
+                                let m: i32 = input.parse().ok()?;
+                                Some(local.year() as f64 * 12.0 + m.clamp(1, 12) as f64 - 1.0)
+                            }),
+                    );
                     ui.label("/");
-                    ui.add(egui::DragValue::new(&mut t_year)
-                        .speed(1.2)
-                        .custom_formatter(|v, _| {
-                            let y = (v / 12.0).floor() as i32;
-                            format!("{}", y)
-                        })
-                        .custom_parser(move |input| {
-                            let y: i32 = input.parse().ok()?;
-                            Some(y as f64 * 12.0 + local.month() as f64 - 1.0)
-                        }));
+                    ui.add(
+                        egui::DragValue::new(&mut t_year)
+                            .speed(1.2)
+                            .custom_formatter(|v, _| {
+                                let y = (v / 12.0).floor() as i32;
+                                format!("{}", y)
+                            })
+                            .custom_parser(move |input| {
+                                let y: i32 = input.parse().ok()?;
+                                Some(y as f64 * 12.0 + local.month() as f64 - 1.0)
+                            }),
+                    );
                 });
-                if t_sec != *time_ref { *time_ref = t_sec; }
-                else if t_min != *time_ref {
+                if t_sec != *time_ref {
+                    *time_ref = t_sec;
+                } else if t_min != *time_ref {
                     let d = t_min - *time_ref;
                     *time_ref += (d / 60.0).round() * 60.0;
-                }
-                else if t_hour != *time_ref {
+                } else if t_hour != *time_ref {
                     let d = t_hour - *time_ref;
                     *time_ref += (d / 3600.0).round() * 3600.0;
-                }
-                else if t_day != *time_ref {
+                } else if t_day != *time_ref {
                     let d = t_day - *time_ref;
                     *time_ref += (d / 86400.0).round() * 86400.0;
-                }
-                else {
+                } else {
                     let apply_month_delta = |raw: f64, unit: f64| -> Option<i32> {
                         let d = raw - total_months;
-                        if d.abs() < 0.01 { return None; }
+                        if d.abs() < 0.01 {
+                            return None;
+                        }
                         Some((d / unit).round() as i32)
                     };
                     let month_delta = if t_month != total_months {
@@ -170,10 +208,14 @@ impl ViewerState {
                                 .and_then(|d| d.checked_add_months(chrono::Months::new(1)))
                                 .and_then(|d| d.pred_opt())
                                 .map(|d| d.day())
-                                .unwrap_or(28)
+                                .unwrap_or(28),
                         );
                         if let Some(date) = chrono::NaiveDate::from_ymd_opt(y, m as u32, d) {
-                            if let Some(dt) = date.and_time(local.time()).and_local_timezone(Local).single() {
+                            if let Some(dt) = date
+                                .and_time(local.time())
+                                .and_local_timezone(Local)
+                                .single()
+                            {
                                 let diff = dt.with_timezone(&Utc).signed_duration_since(start);
                                 *time_ref = diff.num_seconds() as f64;
                             }
@@ -182,8 +224,15 @@ impl ViewerState {
                 }
             }
             let real_local = real_timestamp.with_timezone(&Local);
-            ui.label(format!("Real: {}", real_local.format("%H:%M:%S %d/%m/%Y %Z")));
-            if ui.button("Sync time").on_hover_text("Reset to current real time").clicked() {
+            ui.label(format!(
+                "Real: {}",
+                real_local.format("%H:%M:%S %d/%m/%Y %Z")
+            ));
+            if ui
+                .button("Sync time")
+                .on_hover_text("Reset to current real time")
+                .clicked()
+            {
                 *time_ref = self.real_time;
             }
         }
@@ -200,12 +249,20 @@ impl ViewerState {
                 .selected_text(tab.settings.view_mode.label())
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut tab.settings.view_mode, ViewMode::Planet, "Planet");
-                    ui.selectable_value(&mut tab.settings.view_mode, ViewMode::SolarSystem, "Solar System");
-                    ui.selectable_value(&mut tab.settings.view_mode, ViewMode::PlanetSizes, "Planet Sizes");
+                    ui.selectable_value(
+                        &mut tab.settings.view_mode,
+                        ViewMode::SolarSystem,
+                        "Solar System",
+                    );
+                    ui.selectable_value(
+                        &mut tab.settings.view_mode,
+                        ViewMode::PlanetSizes,
+                        "Planet Sizes",
+                    );
                 });
         });
         if tab.settings.view_mode == crate::config::ViewMode::Planet {
-        ui.indent("planet_opts", |ui| {
+            ui.indent("planet_opts", |ui| {
             let (s, planets) = (&mut tab.settings, &mut tab.planets);
             let on = true;
             ui.add_enabled_ui(on, |ui| {
@@ -460,9 +517,18 @@ impl ViewerState {
                     .on_hover_text("Display the orbital torus shell");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_links, "ISL links"))
                     .on_hover_text("Show inter-satellite links based on ISL neighbors setting");
+                ui.add_enabled(on, egui::Checkbox::new(&mut s.show_gs_links, "Ground-station links"))
+                    .on_hover_text("Draw a link from each satellite to every ground station it currently covers");
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_routing_paths, "Show routing paths"))
                     .on_hover_text("Visualize routing algorithms between ground stations");
+                if !s.show_routing_paths {
+                    s.show_proxy_links = false;
+                }
                 ui.indent("routing_opts", |ui| {
+                    ui.add_enabled(on && s.show_routing_paths, egui::Checkbox::new(&mut s.show_proxy_links, "Show proxy links"))
+                        .on_hover_text("For selected satellites in different shells: draw a link if the outer satellite covers the inner one (within its cone)");
+                    ui.add_enabled(on && s.show_routing_paths, egui::Checkbox::new(&mut s.show_path_distance, "Show path distance"))
+                        .on_hover_text("Show total path distance at the center of each routing path");
                     ui.add_enabled(on && s.show_routing_paths, egui::Checkbox::new(&mut s.show_manhattan_path, "Manhattan (red)"))
                         .on_hover_text("Grid-based hop-by-hop routing path");
                     ui.add_enabled(on && s.show_routing_paths, egui::Checkbox::new(&mut s.show_shortest_path, "Shortest distance (green)"))
@@ -625,8 +691,8 @@ impl ViewerState {
         }
 
         if tab.settings.view_mode == crate::config::ViewMode::SolarSystem {
-        let s = &mut tab.settings;
-        ui.indent("solar_system_opts", |ui| {
+            let s = &mut tab.settings;
+            ui.indent("solar_system_opts", |ui| {
             let on = true;
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(on, |ui| {
@@ -871,21 +937,41 @@ impl ViewerState {
         }
 
         if tab.settings.view_mode == crate::config::ViewMode::PlanetSizes {
-        ui.indent("planet_sizes_opts", |ui| {
-            ui.horizontal(|ui| {
-                let label = if self.planet_sizes_auto_zoom { "\u{23f8}" } else { "\u{25b6}" };
-                if ui.button(label).on_hover_text("Toggle auto-zoom animation").clicked() {
-                    self.planet_sizes_auto_zoom = !self.planet_sizes_auto_zoom;
-                    if self.planet_sizes_auto_zoom { self.planet_sizes_auto_time = 0.0; }
-                }
-                ui.label("Auto-zoom");
-                ui.add(egui::DragValue::new(&mut self.planet_sizes_zoom_duration).range(5.0..=120.0).speed(0.5).suffix("s"))
+            ui.indent("planet_sizes_opts", |ui| {
+                ui.horizontal(|ui| {
+                    let label = if self.planet_sizes_auto_zoom {
+                        "\u{23f8}"
+                    } else {
+                        "\u{25b6}"
+                    };
+                    if ui
+                        .button(label)
+                        .on_hover_text("Toggle auto-zoom animation")
+                        .clicked()
+                    {
+                        self.planet_sizes_auto_zoom = !self.planet_sizes_auto_zoom;
+                        if self.planet_sizes_auto_zoom {
+                            self.planet_sizes_auto_time = 0.0;
+                        }
+                    }
+                    ui.label("Auto-zoom");
+                    ui.add(
+                        egui::DragValue::new(&mut self.planet_sizes_zoom_duration)
+                            .range(5.0..=120.0)
+                            .speed(0.5)
+                            .suffix("s"),
+                    )
                     .on_hover_text("Duration of zoom animation cycle");
-                ui.label("Stay:");
-                ui.add(egui::DragValue::new(&mut self.planet_sizes_stay_duration).range(0.0..=30.0).speed(0.1).suffix("s"))
+                    ui.label("Stay:");
+                    ui.add(
+                        egui::DragValue::new(&mut self.planet_sizes_stay_duration)
+                            .range(0.0..=30.0)
+                            .speed(0.1)
+                            .suffix("s"),
+                    )
                     .on_hover_text("Pause duration at each zoom level");
+                });
             });
-        });
         }
 
         ui.separator();
@@ -897,12 +983,32 @@ impl ViewerState {
             egui::ComboBox::from_id_salt("tex_res")
                 .selected_text(self.texture_resolution.label())
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R512, "512");
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R1024, "1K");
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R2048, "2K");
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R8192, "8K");
+                    ui.selectable_value(
+                        &mut self.texture_resolution,
+                        TextureResolution::R512,
+                        "512",
+                    );
+                    ui.selectable_value(
+                        &mut self.texture_resolution,
+                        TextureResolution::R1024,
+                        "1K",
+                    );
+                    ui.selectable_value(
+                        &mut self.texture_resolution,
+                        TextureResolution::R2048,
+                        "2K",
+                    );
+                    ui.selectable_value(
+                        &mut self.texture_resolution,
+                        TextureResolution::R8192,
+                        "8K",
+                    );
                     #[cfg(not(target_arch = "wasm32"))]
-                    ui.selectable_value(&mut self.texture_resolution, TextureResolution::R21504, "21K");
+                    ui.selectable_value(
+                        &mut self.texture_resolution,
+                        TextureResolution::R21504,
+                        "21K",
+                    );
                 });
         });
         ui.checkbox(&mut self.use_gpu_rendering, "GPU rendering")

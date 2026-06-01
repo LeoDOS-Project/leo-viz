@@ -58,7 +58,10 @@ fn walker_demo(v: &mut ViewerState) {
     tab.settings.show_links = false;
     tab.settings.earth_fixed_camera = true;
     tab.settings.rotation = crate::math::lat_lon_to_matrix(75.0_f64.to_radians(), 0.0);
-    for (wt, label) in [(WalkerType::Star, "Walker Star"), (WalkerType::Delta, "Walker Delta")] {
+    for (wt, label) in [
+        (WalkerType::Star, "Walker Star"),
+        (WalkerType::Delta, "Walker Delta"),
+    ] {
         tab.planet_counter += 1;
         let mut planet = PlanetConfig::new(format!("Earth ({})", label));
         planet.celestial_body = CelestialBody::Earth;
@@ -236,7 +239,10 @@ fn ground_track_demo(v: &mut ViewerState) {
         (30.0_f64, "i=30°", 0),
         (53.0_f64, "i=53°", 1),
         (80.0_f64, "i=80°", 2),
-    ].iter().enumerate() {
+    ]
+    .iter()
+    .enumerate()
+    {
         let mut cons = ConstellationConfig::new(*color);
         cons.sats_per_plane = 1;
         cons.num_planes = 1;
@@ -246,14 +252,16 @@ fn ground_track_demo(v: &mut ViewerState) {
         cons.label = Some(label.to_string());
         planet.constellations.push(cons);
         v.camera_id_counter += 1;
-        planet.satellite_cameras.push(crate::config::SatelliteCamera {
-            id: v.camera_id_counter,
-            label: label.to_string(),
-            constellation_idx: idx,
-            plane: 0,
-            sat_index: 0,
-            screen_pos: None,
-        });
+        planet
+            .satellite_cameras
+            .push(crate::config::SatelliteCamera {
+                id: v.camera_id_counter,
+                label: label.to_string(),
+                constellation_idx: idx,
+                plane: 0,
+                sat_index: 0,
+                screen_pos: None,
+            });
     }
     tab.planets.push(planet);
     v.tabs.push(tab);
@@ -533,7 +541,10 @@ fn kessler_demo(v: &mut ViewerState) {
     tab.settings.show_links = false;
     tab.settings.speed = 50.0;
     tab.settings.single_color = true;
-    for (alt_diff, thresh, label) in [(15.0, 20.0, "Crossing altitudes"), (500.0, 20.0, "Separated altitudes")] {
+    for (alt_diff, thresh, label) in [
+        (15.0, 20.0, "Crossing altitudes"),
+        (500.0, 20.0, "Separated altitudes"),
+    ] {
         tab.planet_counter += 1;
         let mut planet = PlanetConfig::new(format!("Earth ({})", label));
         planet.celestial_body = CelestialBody::Earth;
@@ -641,7 +652,9 @@ fn radiation_demo(v: &mut ViewerState) {
     tab.settings.auto_rotate_axis_lon = 0.0;
     {
         tab.planet_counter += 1;
-        let mut planet = PlanetConfig::new("Geomagnetic Field at 500 km (brighter = stronger magnetic field)".to_string());
+        let mut planet = PlanetConfig::new(
+            "Geomagnetic Field at 500 km (brighter = stronger magnetic field)".to_string(),
+        );
         planet.celestial_body = CelestialBody::Earth;
         planet.radiation.show_heatmap_sphere = true;
         planet.radiation.heatmap_mode = crate::config::HeatmapMode::IgrfField;
@@ -650,7 +663,9 @@ fn radiation_demo(v: &mut ViewerState) {
     }
     {
         tab.planet_counter += 1;
-        let mut planet = PlanetConfig::new("Radiation Belts at 500 km (brighter = higher radiation)".to_string());
+        let mut planet = PlanetConfig::new(
+            "Radiation Belts at 500 km (brighter = higher radiation)".to_string(),
+        );
         planet.celestial_body = CelestialBody::Earth;
         planet.radiation.show_heatmap_sphere = true;
         planet.radiation.heatmap_mode = crate::config::HeatmapMode::IgrfRadiation;
@@ -911,10 +926,16 @@ fn projections_demo(v: &mut ViewerState) {
     tab.settings.earth_fixed_camera = true;
     tab.settings.zoom = 1.0;
     let projections = [
-        (crate::projection::ProjectionKind::Orthographic, "Orthographic"),
+        (
+            crate::projection::ProjectionKind::Orthographic,
+            "Orthographic",
+        ),
         (crate::projection::ProjectionKind::Mercator, "Mercator"),
         (crate::projection::ProjectionKind::Mollweide, "Mollweide"),
-        (crate::projection::ProjectionKind::AzimuthalEquidistant, "Azimuthal Equidistant"),
+        (
+            crate::projection::ProjectionKind::AzimuthalEquidistant,
+            "Azimuthal Equidistant",
+        ),
         (crate::projection::ProjectionKind::HEALPix, "HEALPix"),
         (crate::projection::ProjectionKind::Sinusoidal, "Sinusoidal"),
     ];
@@ -1009,7 +1030,9 @@ fn countries_demo(v: &mut ViewerState) {
         let mut planet = PlanetConfig::new(label.to_string());
         planet.celestial_body = CelestialBody::Earth;
         planet.show_tle_window = false;
-        planet.tle_selections.insert(preset, (true, TleLoadState::NotLoaded, None));
+        planet
+            .tle_selections
+            .insert(preset, (true, TleLoadState::NotLoaded, None));
         tab.planets.push(planet);
     }
     v.tabs.push(tab);
@@ -1092,10 +1115,18 @@ fn iss_demo(v: &mut ViewerState) {
     v.tabs.push(tab);
 }
 
-fn spacecomp_demo(v: &mut ViewerState) {
+pub(crate) fn spacecomp_demo(v: &mut ViewerState) {
     v.tab_counter += 1;
-    let mut tab = TabConfig::new_empty("SpaceCoMP".to_string());
-    tab.title = "SpaceCoMP".to_string();
+    v.tabs.push(spacecomp_demo_tab(
+        "SpaceCoMP".to_string(),
+        "SpaceCoMP".to_string(),
+        0.0,
+    ));
+}
+
+fn spacecomp_demo_tab(name: String, title: String, time: f64) -> TabConfig {
+    let mut tab = TabConfig::new_empty(name);
+    tab.title = title;
     tab.description = indoc::indoc! {"
             A distributed-computing scenario: image an area of interest, process the data on-orbit, then deliver the result to a ground station.
 
@@ -1108,6 +1139,7 @@ fn spacecomp_demo(v: &mut ViewerState) {
 
             Roles are reassigned every cycle as the constellation rotates; the satellites themselves don't know in advance which job they'll play.
         "}.to_string();
+    tab.settings.time = time;
     tab.settings.speed = 10.0;
     tab.settings.earth_fixed_camera = true;
     tab.settings.rotation =
@@ -1143,14 +1175,149 @@ fn spacecomp_demo(v: &mut ViewerState) {
         ground_station_idx: Some(0),
         job_mode: AoiJobMode::SpaceComp,
         job_n: 3,
+        reducer_placement: crate::config::SpaceCompReducerPlacement::NearMappers,
         selected: false,
     });
     tab.planets.push(planet);
+    tab
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Presentation {
+    SpaceCoMP,
+}
+
+impl Presentation {
+    pub(crate) const ALL: &'static [Presentation] = &[Presentation::SpaceCoMP];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Presentation::SpaceCoMP => "SpaceCoMP",
+        }
+    }
+
+    fn build(self, v: &mut ViewerState) {
+        match self {
+            Presentation::SpaceCoMP => {
+                spacecomp_slide_tabs(v, crate::slides::SPACECOMP_PRIMER, 1..35);
+                spacecomp_simulation_tabs(v, 35..41);
+                spacecomp_slide_tabs(
+                    v,
+                    crate::slides::SPACECOMP_PRIMER,
+                    41..crate::slides::total_slide_count() + 1,
+                );
+            }
+        }
+    }
+}
+
+fn spacecomp_simulation_tabs(v: &mut ViewerState, slide_numbers: std::ops::Range<usize>) {
+    for slide_number in slide_numbers {
+        spacecomp_presentation_demo_tab(v, slide_number);
+    }
+}
+
+fn spacecomp_presentation_demo_tab(v: &mut ViewerState, slide_number: usize) {
+    match slide_number {
+        35 => inclination_demo(v),
+        36 => walker_demo(v),
+        37 => isl_demo(v),
+        38 => torus_demo(v),
+        39 => routing_demo(v),
+        40 => {
+            v.tab_counter += 1;
+            v.tabs.push(spacecomp_demo_tab(
+                format!("Slide {}", slide_number),
+                String::new(),
+                0.0,
+            ));
+        }
+        _ => return,
+    }
+
+    if let Some(tab) = v.tabs.last_mut() {
+        tab.name = format!("Slide {}", slide_number);
+        tab.title = String::new();
+        tab.description = String::new();
+        tab.presentation_slide_number = Some(slide_number);
+    }
+}
+
+fn spacecomp_slide_tabs(
+    v: &mut ViewerState,
+    deck_id: crate::slides::DeckId,
+    slide_numbers: std::ops::Range<usize>,
+) {
+    for slide_number in slide_numbers {
+        let slide_idx = slide_number.saturating_sub(1);
+        spacecomp_slides_tab(
+            v,
+            crate::slides::SlideDeck::range(deck_id, slide_idx..slide_idx + 1),
+            &format!("Slide {}", slide_number),
+        );
+    }
+}
+
+fn spacecomp_slides_tab(v: &mut ViewerState, deck: crate::slides::SlideDeck, name: &str) {
+    v.tab_counter += 1;
+    let mut tab = TabConfig::new_empty(name.to_string());
+    tab.title = String::new();
+    tab.slides = Some(deck);
     v.tabs.push(tab);
 }
 
 impl App {
     pub(crate) fn setup_demo(&mut self) {
+        self.setup_tabs(|v| {
+            // Orbit fundamentals
+            inclination_demo(v);
+            altitude_demo(v);
+            eccentricity_demo(v);
+            ground_track_demo(v);
+            // Planet shape & propagation
+            oblateness_demo(v);
+            propagator_demo(v);
+            // Constellation design
+            walker_demo(v);
+            phasing_demo(v);
+            kessler_demo(v);
+            debris_demo(v);
+            coverage_demo(v);
+            // Networking
+            isl_demo(v);
+            torus_demo(v);
+            routing_demo(v);
+            spacecomp_demo(v);
+            // Hazards
+            radiation_demo(v);
+            // Real constellations
+            sso_demo(v);
+            starlink_iris_demo(v);
+            starlink_tle_demo(v);
+            all_tle_demo(v);
+            all_tle_map_demo(v);
+            #[cfg(not(target_arch = "wasm32"))]
+            countries_demo(v);
+            projections_demo(v);
+            iss_demo(v);
+            // Context & scale
+            solar_system_demo(v);
+            #[cfg(not(target_arch = "wasm32"))]
+            planet_sizes_demo(v);
+        });
+    }
+
+    pub(crate) fn setup_presentation(
+        &mut self,
+        presentation: Presentation,
+        ctx: &eframe::egui::Context,
+    ) {
+        self.setup_tabs(|v| presentation.build(v));
+        self.viewer.slide_textures.clear();
+        ctx.request_repaint();
+    }
+
+    fn setup_tabs<F: FnOnce(&mut ViewerState)>(&mut self, build: F) {
         let v = &mut self.viewer;
 
         let mut tle_cache: std::collections::HashMap<TlePreset, Vec<crate::tle::TleSatellite>> =
@@ -1170,41 +1337,7 @@ impl App {
         v.tabs.clear();
         v.tab_counter = 0;
 
-        // Orbit fundamentals
-        inclination_demo(v);
-        altitude_demo(v);
-        eccentricity_demo(v);
-        ground_track_demo(v);
-        // Planet shape & propagation
-        oblateness_demo(v);
-        propagator_demo(v);
-        // Constellation design
-        walker_demo(v);
-        phasing_demo(v);
-        kessler_demo(v);
-        debris_demo(v);
-        coverage_demo(v);
-        // Networking
-        isl_demo(v);
-        torus_demo(v);
-        routing_demo(v);
-        spacecomp_demo(v);
-        // Hazards
-        radiation_demo(v);
-        // Real constellations
-        sso_demo(v);
-        starlink_iris_demo(v);
-        starlink_tle_demo(v);
-        all_tle_demo(v);
-        all_tle_map_demo(v);
-        #[cfg(not(target_arch = "wasm32"))]
-        countries_demo(v);
-        projections_demo(v);
-        iss_demo(v);
-        // Context & scale
-        solar_system_demo(v);
-        #[cfg(not(target_arch = "wasm32"))]
-        planet_sizes_demo(v);
+        build(v);
 
         for tab in &mut v.tabs {
             if tab.settings.auto_rotate {

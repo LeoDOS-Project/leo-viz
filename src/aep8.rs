@@ -69,10 +69,8 @@ fn trara2(map: &[i32], start: usize, il: i32, ib: i32, fistep: f32) -> f32 {
         let sl2 = flog2 / fkb2;
         let sl1: f32 = -900000.0;
         return interp_loop(
-            map, start, fistep, fnb, dfl,
-            &mut flog1, &mut flog2, &mut fkb1, &mut fkb2,
-            flogm, fkbm, sl1, sl2,
-            i1, i2, l1, l2, 4, 4,
+            map, start, fistep, fnb, dfl, &mut flog1, &mut flog2, &mut fkb1, &mut fkb2, flogm,
+            fkbm, sl1, sl2, i1, i2, l1, l2, 4, 4,
         );
     }
 
@@ -93,10 +91,8 @@ fn trara2(map: &[i32], start: usize, il: i32, ib: i32, fistep: f32) -> f32 {
                     flog1 -= fistep;
                     let sl1 = flog1 / fkb1;
                     return interp_loop(
-                        map, start, fistep, fnb, dfl,
-                        &mut flog1, &mut flog2, &mut fkb1, &mut fkb2,
-                        flogm, fkbm, sl1, sl2,
-                        i1, i2, l1, l2, j1, j2,
+                        map, start, fistep, fnb, dfl, &mut flog1, &mut flog2, &mut fkb1, &mut fkb2,
+                        flogm, fkbm, sl1, sl2, i1, i2, l1, l2, j1, j2,
                     );
                 }
                 let sl2 = flog2 / fkb2;
@@ -106,8 +102,7 @@ fn trara2(map: &[i32], start: usize, il: i32, ib: i32, fistep: f32) -> f32 {
                     let fincr1 = map[start + i1 + j1 - 1] as f32;
                     fkb1 += fincr1;
                     flog1 -= fistep;
-                    fkbj1 = ((flog1 / fistep) * fincr1 + fkb1)
-                        / ((fincr1 / fistep) * sl2 + 1.0);
+                    fkbj1 = ((flog1 / fistep) * fincr1 + fkb1) / ((fincr1 / fistep) * sl2 + 1.0);
                     if fkbj1 <= fkb1 {
                         break;
                     }
@@ -121,10 +116,8 @@ fn trara2(map: &[i32], start: usize, il: i32, ib: i32, fistep: f32) -> f32 {
                     let sl1 = flog1 / fkb1;
                     let sl2_new = flog2 / fkb2;
                     return interp_loop(
-                        map, start, fistep, fnb, dfl,
-                        &mut flog1, &mut flog2, &mut fkb1, &mut fkb2,
-                        flogm, fkbm, sl1, sl2_new,
-                        i1, i2, l1, l2, j1, j2,
+                        map, start, fistep, fnb, dfl, &mut flog1, &mut flog2, &mut fkb1, &mut fkb2,
+                        flogm, fkbm, sl1, sl2_new, i1, i2, l1, l2, j1, j2,
                     );
                 } else {
                     return 0.0;
@@ -132,9 +125,8 @@ fn trara2(map: &[i32], start: usize, il: i32, ib: i32, fistep: f32) -> f32 {
             }
 
             return init_interp(
-                map, start, fistep, fnb, dfl,
-                &mut flog1, &mut flog2, &mut fkb1, &mut fkb2,
-                i1, i2, l1, l2,
+                map, start, fistep, fnb, dfl, &mut flog1, &mut flog2, &mut fkb1, &mut fkb2, i1, i2,
+                l1, l2,
             );
         }
         fkb2 += fincr2;
@@ -155,9 +147,8 @@ fn trara2(map: &[i32], start: usize, il: i32, ib: i32, fistep: f32) -> f32 {
             let fincr2 = map[start + i2 + j2 - 1] as f32;
             if fkb2 + fincr2 > fnb {
                 return init_interp(
-                    map, start, fistep, fnb, dfl,
-                    &mut flog1, &mut flog2, &mut fkb1, &mut fkb2,
-                    i1, i2, l1, l2,
+                    map, start, fistep, fnb, dfl, &mut flog1, &mut flog2, &mut fkb1, &mut fkb2, i1,
+                    i2, l1, l2,
                 );
             }
             fkb2 += fincr2;
@@ -172,10 +163,19 @@ fn trara2(map: &[i32], start: usize, il: i32, ib: i32, fistep: f32) -> f32 {
 
 #[allow(clippy::too_many_arguments)]
 fn init_interp(
-    map: &[i32], start: usize, fistep: f32, fnb: f32, dfl: f32,
-    flog1: &mut f32, flog2: &mut f32,
-    fkb1: &mut f32, fkb2: &mut f32,
-    i1: usize, i2: usize, l1: i32, l2: i32,
+    map: &[i32],
+    start: usize,
+    fistep: f32,
+    fnb: f32,
+    dfl: f32,
+    flog1: &mut f32,
+    flog2: &mut f32,
+    fkb1: &mut f32,
+    fkb2: &mut f32,
+    i1: usize,
+    i2: usize,
+    l1: i32,
+    l2: i32,
 ) -> f32 {
     *fkb1 = 0.0;
     *fkb2 = 0.0;
@@ -190,10 +190,8 @@ fn init_interp(
     if l1 < 4 {
         let sl1: f32 = -900000.0;
         return interp_loop(
-            map, start, fistep, fnb, dfl,
-            flog1, flog2, fkb1, fkb2,
-            flogm, fkbm, sl1, sl2,
-            i1, i2, l1, l2, 4, 4,
+            map, start, fistep, fnb, dfl, flog1, flog2, fkb1, fkb2, flogm, fkbm, sl1, sl2, i1, i2,
+            l1, l2, 4, 4,
         );
     }
     let fincr1 = map[start + i1 + 3] as f32;
@@ -201,58 +199,77 @@ fn init_interp(
     *flog1 -= fistep;
     let sl1 = *flog1 / *fkb1;
     interp_loop(
-        map, start, fistep, fnb, dfl,
-        flog1, flog2, fkb1, fkb2,
-        flogm, fkbm, sl1, sl2,
-        i1, i2, l1, l2, 4, 4,
+        map, start, fistep, fnb, dfl, flog1, flog2, fkb1, fkb2, flogm, fkbm, sl1, sl2, i1, i2, l1,
+        l2, 4, 4,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn interp_loop(
-    map: &[i32], start: usize,
-    fistep: f32, fnb: f32, dfl: f32,
-    flog1: &mut f32, flog2: &mut f32,
-    fkb1: &mut f32, fkb2: &mut f32,
-    mut flogm: f32, mut fkbm: f32,
-    mut sl1: f32, mut sl2: f32,
-    i1: usize, i2: usize, l1: i32, l2: i32,
-    mut j1: usize, mut j2: usize,
+    map: &[i32],
+    start: usize,
+    fistep: f32,
+    fnb: f32,
+    dfl: f32,
+    flog1: &mut f32,
+    flog2: &mut f32,
+    fkb1: &mut f32,
+    fkb2: &mut f32,
+    mut flogm: f32,
+    mut fkbm: f32,
+    mut sl1: f32,
+    mut sl2: f32,
+    i1: usize,
+    i2: usize,
+    l1: i32,
+    l2: i32,
+    mut j1: usize,
+    mut j2: usize,
 ) -> f32 {
     loop {
         if sl1 < sl2 {
-            if j2 > l2 as usize { return 0.0; }
+            if j2 > l2 as usize {
+                return 0.0;
+            }
             let fincr2 = map[start + i2 + j2 - 1] as f32;
-            let fkbj2 = ((*flog2 / fistep) * fincr2 + *fkb2)
-                / ((fincr2 / fistep) * sl1 + 1.0);
+            let fkbj2 = ((*flog2 / fistep) * fincr2 + *fkb2) / ((fincr2 / fistep) * sl1 + 1.0);
             let fkb = *fkb1 + (fkbj2 - *fkb1) * dfl;
             let flog = fkb * sl1;
             if fkb >= fnb {
-                if fkb < fkbm + 1e-10 { return 0.0; }
+                if fkb < fkbm + 1e-10 {
+                    return 0.0;
+                }
                 return (flogm + (flog - flogm) * ((fnb - fkbm) / (fkb - fkbm))).max(0.0);
             }
             fkbm = fkb;
             flogm = flog;
-            if j1 as i32 >= l1 { return 0.0; }
+            if j1 as i32 >= l1 {
+                return 0.0;
+            }
             j1 += 1;
             let fincr1 = map[start + i1 + j1 - 1] as f32;
             *flog1 -= fistep;
             *fkb1 += fincr1;
             sl1 = *flog1 / *fkb1;
         } else {
-            if j1 > l1 as usize { return 0.0; }
+            if j1 > l1 as usize {
+                return 0.0;
+            }
             let fincr1 = map[start + i1 + j1 - 1] as f32;
-            let fkbj1 = ((*flog1 / fistep) * fincr1 + *fkb1)
-                / ((fincr1 / fistep) * sl2 + 1.0);
+            let fkbj1 = ((*flog1 / fistep) * fincr1 + *fkb1) / ((fincr1 / fistep) * sl2 + 1.0);
             let fkb = fkbj1 + (*fkb2 - fkbj1) * dfl;
             let flog = fkb * sl2;
             if fkb >= fnb {
-                if fkb < fkbm + 1e-10 { return 0.0; }
+                if fkb < fkbm + 1e-10 {
+                    return 0.0;
+                }
                 return (flogm + (flog - flogm) * ((fnb - fkbm) / (fkb - fkbm))).max(0.0);
             }
             fkbm = fkb;
             flogm = flog;
-            if j2 as i32 >= l2 { return 0.0; }
+            if j2 as i32 >= l2 {
+                return 0.0;
+            }
             j2 += 1;
             let fincr2 = map[start + i2 + j2 - 1] as f32;
             *flog2 -= fistep;

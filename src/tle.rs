@@ -12,15 +12,63 @@ pub const SECONDS_PER_DAY: f64 = 86400.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TlePreset {
-    Starlink, OneWeb, Kuiper, Geo, Intelsat, Ses, Iridium, IridiumNext,
-    Globalstar, Orbcomm, Molniya, Swarm, Amateur, XComm, OtherComm, Satnogs,
-    Gps, Galileo, Glonass, Beidou, Gnss, Sbas, Nnss, Musson,
-    Weather, Noaa, Goes, EarthResources, Sarsat, DisasterMon, Tdrss, Argos, Planet, Spire,
-    Stations, Last30Days, Brightest100, ActiveSats, Analyst, Science,
-    Geodetic, Engineering, Education, Military, RadarCal, Cubesats, Misc,
-    Fengyun1cDebris, Cosmos2251Debris, Iridium33Debris, Cosmos1408Debris,
+    Starlink,
+    OneWeb,
+    Kuiper,
+    Geo,
+    Intelsat,
+    Ses,
+    Iridium,
+    IridiumNext,
+    Globalstar,
+    Orbcomm,
+    Molniya,
+    Swarm,
+    Amateur,
+    XComm,
+    OtherComm,
+    Satnogs,
+    Gps,
+    Galileo,
+    Glonass,
+    Beidou,
+    Gnss,
+    Sbas,
+    Nnss,
+    Musson,
+    Weather,
+    Noaa,
+    Goes,
+    EarthResources,
+    Sarsat,
+    DisasterMon,
+    Tdrss,
+    Argos,
+    Planet,
+    Spire,
+    Stations,
+    Last30Days,
+    Brightest100,
+    ActiveSats,
+    Analyst,
+    Science,
+    Geodetic,
+    Engineering,
+    Education,
+    Military,
+    RadarCal,
+    Cubesats,
+    Misc,
+    Fengyun1cDebris,
+    Cosmos2251Debris,
+    Iridium33Debris,
+    Cosmos1408Debris,
     Sentinel,
-    CountrySweden, CountryEurope, CountryUsa, CountryChina, CountryIndia,
+    CountrySweden,
+    CountryEurope,
+    CountryUsa,
+    CountryChina,
+    CountryIndia,
 }
 
 impl TlePreset {
@@ -151,45 +199,122 @@ impl TlePreset {
 
     pub fn category(&self) -> &'static str {
         match self {
-            Self::Starlink | Self::OneWeb | Self::Kuiper | Self::Geo |
-            Self::Intelsat | Self::Ses | Self::Iridium | Self::IridiumNext |
-            Self::Globalstar | Self::Orbcomm | Self::Molniya | Self::Swarm |
-            Self::Amateur | Self::XComm | Self::OtherComm | Self::Satnogs => "Comms",
-            Self::Gps | Self::Galileo | Self::Glonass | Self::Beidou |
-            Self::Gnss | Self::Sbas | Self::Nnss | Self::Musson => "Navigation",
-            Self::Weather | Self::Noaa | Self::Goes | Self::EarthResources |
-            Self::Sarsat | Self::DisasterMon | Self::Tdrss | Self::Argos |
-            Self::Planet | Self::Spire | Self::Sentinel => "Observation",
-            Self::Fengyun1cDebris | Self::Cosmos2251Debris |
-            Self::Iridium33Debris | Self::Cosmos1408Debris => "Debris",
-            Self::CountrySweden | Self::CountryEurope | Self::CountryUsa
-            | Self::CountryChina | Self::CountryIndia => "Country",
+            Self::Starlink
+            | Self::OneWeb
+            | Self::Kuiper
+            | Self::Geo
+            | Self::Intelsat
+            | Self::Ses
+            | Self::Iridium
+            | Self::IridiumNext
+            | Self::Globalstar
+            | Self::Orbcomm
+            | Self::Molniya
+            | Self::Swarm
+            | Self::Amateur
+            | Self::XComm
+            | Self::OtherComm
+            | Self::Satnogs => "Comms",
+            Self::Gps
+            | Self::Galileo
+            | Self::Glonass
+            | Self::Beidou
+            | Self::Gnss
+            | Self::Sbas
+            | Self::Nnss
+            | Self::Musson => "Navigation",
+            Self::Weather
+            | Self::Noaa
+            | Self::Goes
+            | Self::EarthResources
+            | Self::Sarsat
+            | Self::DisasterMon
+            | Self::Tdrss
+            | Self::Argos
+            | Self::Planet
+            | Self::Spire
+            | Self::Sentinel => "Observation",
+            Self::Fengyun1cDebris
+            | Self::Cosmos2251Debris
+            | Self::Iridium33Debris
+            | Self::Cosmos1408Debris => "Debris",
+            Self::CountrySweden
+            | Self::CountryEurope
+            | Self::CountryUsa
+            | Self::CountryChina
+            | Self::CountryIndia => "Country",
             _ => "Other",
         }
     }
 
     pub const ALL: [TlePreset; 57] = [
-        Self::Starlink, Self::OneWeb, Self::Kuiper, Self::Geo,
-        Self::Intelsat, Self::Ses, Self::Iridium, Self::IridiumNext,
-        Self::Globalstar, Self::Orbcomm, Self::Molniya, Self::Swarm,
-        Self::Amateur, Self::XComm, Self::OtherComm, Self::Satnogs,
-        Self::Gps, Self::Galileo, Self::Glonass, Self::Beidou,
-        Self::Gnss, Self::Sbas, Self::Nnss, Self::Musson,
-        Self::Weather, Self::Noaa, Self::Goes, Self::EarthResources,
-        Self::Sarsat, Self::DisasterMon, Self::Tdrss, Self::Argos,
-        Self::Planet, Self::Spire, Self::Sentinel,
-        Self::Stations, Self::Last30Days, Self::Brightest100,
-        Self::ActiveSats, Self::Analyst, Self::Science,
-        Self::Geodetic, Self::Engineering, Self::Education,
-        Self::Military, Self::RadarCal, Self::Cubesats, Self::Misc,
-        Self::Fengyun1cDebris, Self::Cosmos2251Debris,
-        Self::Iridium33Debris, Self::Cosmos1408Debris,
-        Self::CountrySweden, Self::CountryEurope, Self::CountryUsa,
-        Self::CountryChina, Self::CountryIndia,
+        Self::Starlink,
+        Self::OneWeb,
+        Self::Kuiper,
+        Self::Geo,
+        Self::Intelsat,
+        Self::Ses,
+        Self::Iridium,
+        Self::IridiumNext,
+        Self::Globalstar,
+        Self::Orbcomm,
+        Self::Molniya,
+        Self::Swarm,
+        Self::Amateur,
+        Self::XComm,
+        Self::OtherComm,
+        Self::Satnogs,
+        Self::Gps,
+        Self::Galileo,
+        Self::Glonass,
+        Self::Beidou,
+        Self::Gnss,
+        Self::Sbas,
+        Self::Nnss,
+        Self::Musson,
+        Self::Weather,
+        Self::Noaa,
+        Self::Goes,
+        Self::EarthResources,
+        Self::Sarsat,
+        Self::DisasterMon,
+        Self::Tdrss,
+        Self::Argos,
+        Self::Planet,
+        Self::Spire,
+        Self::Sentinel,
+        Self::Stations,
+        Self::Last30Days,
+        Self::Brightest100,
+        Self::ActiveSats,
+        Self::Analyst,
+        Self::Science,
+        Self::Geodetic,
+        Self::Engineering,
+        Self::Education,
+        Self::Military,
+        Self::RadarCal,
+        Self::Cubesats,
+        Self::Misc,
+        Self::Fengyun1cDebris,
+        Self::Cosmos2251Debris,
+        Self::Iridium33Debris,
+        Self::Cosmos1408Debris,
+        Self::CountrySweden,
+        Self::CountryEurope,
+        Self::CountryUsa,
+        Self::CountryChina,
+        Self::CountryIndia,
     ];
 
     pub fn is_debris(&self) -> bool {
-        matches!(self, Self::Fengyun1cDebris | Self::Cosmos2251Debris | Self::Iridium33Debris | Self::Cosmos1408Debris)
+        matches!(
+            self,
+            Self::Fengyun1cDebris
+                | Self::Cosmos2251Debris
+                | Self::Iridium33Debris
+                | Self::Cosmos1408Debris
+        )
     }
 
     /// Celestrak SATCAT OWNER codes that belong to this country/region preset.
@@ -199,9 +324,8 @@ impl TlePreset {
             // ESA + EUMETSAT + EUTELSAT + major EU member states. Not strict
             // EU membership: includes ESA participants like UK and Norway.
             Self::CountryEurope => Some(&[
-                "ESA", "EUME", "EUTE", "FR", "GER", "IT", "SPN", "NETH",
-                "SW", "FIN", "DEN", "BEL", "POR", "AUT", "POL", "CZE",
-                "HUN", "GRC", "EST", "BUL", "ROU", "SVK", "SVN", "LUX",
+                "ESA", "EUME", "EUTE", "FR", "GER", "IT", "SPN", "NETH", "SW", "FIN", "DEN", "BEL",
+                "POR", "AUT", "POL", "CZE", "HUN", "GRC", "EST", "BUL", "ROU", "SVK", "SVN", "LUX",
                 "IRL", "NOR", "UK",
             ]),
             Self::CountryUsa => Some(&["US"]),
@@ -212,7 +336,10 @@ impl TlePreset {
     }
 
     pub fn color_index(&self) -> usize {
-        Self::ALL.iter().position(|p| std::mem::discriminant(p) == std::mem::discriminant(self)).unwrap_or(0)
+        Self::ALL
+            .iter()
+            .position(|p| std::mem::discriminant(p) == std::mem::discriminant(self))
+            .unwrap_or(0)
     }
 }
 
@@ -305,7 +432,9 @@ fn tle_cache_dir() -> std::path::PathBuf {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn tle_cache_path(url: &str) -> std::path::PathBuf {
-    let hash = url.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+    let hash = url
+        .bytes()
+        .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
     let cache_dir = tle_cache_dir();
     let _ = std::fs::create_dir_all(&cache_dir);
     cache_dir.join(format!("{:016x}.tle", hash))
@@ -341,7 +470,8 @@ pub fn fetch_tle_data(url: &str) -> Result<Vec<TleSatellite>, String> {
         }
     };
 
-    let body = response.into_string()
+    let body = response
+        .into_string()
         .map_err(|e| format!("Read error: {}", e))?;
 
     let _ = std::fs::write(&cache_path, &body);
@@ -364,7 +494,9 @@ pub fn parse_satcat_csv(body: &str) -> std::collections::HashMap<u64, String> {
     let owner_col = cols.iter().position(|&c| c == "OWNER").unwrap_or(5);
     for line in lines {
         let fields: Vec<&str> = line.split(',').collect();
-        if fields.len() <= id_col.max(owner_col) { continue; }
+        if fields.len() <= id_col.max(owner_col) {
+            continue;
+        }
         let id = match fields[id_col].trim().parse::<u64>() {
             Ok(id) => id,
             Err(_) => continue,
@@ -404,7 +536,8 @@ pub fn fetch_satcat() -> Result<std::collections::HashMap<u64, String>, String> 
             return Err(format!("SATCAT HTTP error: {}", e));
         }
     };
-    let body = response.into_string()
+    let body = response
+        .into_string()
         .map_err(|e| format!("SATCAT read error: {}", e))?;
     let _ = std::fs::write(&cache_path, &body);
     Ok(parse_satcat_csv(&body))
@@ -415,9 +548,13 @@ pub fn fetch_tle_by_country(owners: &[&str]) -> Result<Vec<TleSatellite>, String
     let satcat = fetch_satcat()?;
     let active = fetch_tle_data(ACTIVE_TLE_URL)?;
     let target: std::collections::HashSet<&str> = owners.iter().copied().collect();
-    let filtered: Vec<TleSatellite> = active.into_iter()
-        .filter(|s| satcat.get(&s.norad_id)
-            .map_or(false, |code| target.contains(code.as_str())))
+    let filtered: Vec<TleSatellite> = active
+        .into_iter()
+        .filter(|s| {
+            satcat
+                .get(&s.norad_id)
+                .map_or(false, |code| target.contains(code.as_str()))
+        })
         .collect();
     if filtered.is_empty() {
         Err("No matching satellites for country".to_string())
@@ -439,26 +576,25 @@ pub(crate) async fn fetch_tle_text(url: &str) -> Result<String, String> {
     let opts = RequestInit::new();
     opts.set_method("GET");
 
-    let request = Request::new_with_str_and_init(url, &opts)
-        .map_err(|e| format!("{:?}", e))?;
+    let request = Request::new_with_str_and_init(url, &opts).map_err(|e| format!("{:?}", e))?;
 
     let window = web_sys::window().ok_or("No window")?;
     let resp_value = wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&request))
         .await
         .map_err(|e| format!("Fetch failed: {:?}", e))?;
 
-    let resp: Response = resp_value.dyn_into()
+    let resp: Response = resp_value
+        .dyn_into()
         .map_err(|_| "Response is not a Response")?;
 
     if !resp.ok() {
         return Err(format!("HTTP {}", resp.status()));
     }
 
-    let array_buffer = wasm_bindgen_futures::JsFuture::from(
-        resp.array_buffer().map_err(|e| format!("{:?}", e))?
-    )
-    .await
-    .map_err(|e| format!("{:?}", e))?;
+    let array_buffer =
+        wasm_bindgen_futures::JsFuture::from(resp.array_buffer().map_err(|e| format!("{:?}", e))?)
+            .await
+            .map_err(|e| format!("{:?}", e))?;
 
     let bytes = js_sys::Uint8Array::new(&array_buffer).to_vec();
     String::from_utf8(bytes).map_err(|e| format!("{}", e))
@@ -466,12 +602,14 @@ pub(crate) async fn fetch_tle_text(url: &str) -> Result<String, String> {
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) async fn yield_now() {
-    wasm_bindgen_futures::JsFuture::from(
-        js_sys::Promise::new(&mut |resolve, _| {
-            web_sys::window().unwrap()
-                .set_timeout_with_callback(&resolve).unwrap();
-        })
-    ).await.unwrap();
+    wasm_bindgen_futures::JsFuture::from(js_sys::Promise::new(&mut |resolve, _| {
+        web_sys::window()
+            .unwrap()
+            .set_timeout_with_callback(&resolve)
+            .unwrap();
+    }))
+    .await
+    .unwrap();
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -524,14 +662,20 @@ pub(crate) async fn fetch_satcat_async() -> Result<std::collections::HashMap<u64
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) async fn fetch_tle_by_country_async(owners: &[&'static str]) -> Result<Vec<TleSatellite>, String> {
+pub(crate) async fn fetch_tle_by_country_async(
+    owners: &[&'static str],
+) -> Result<Vec<TleSatellite>, String> {
     let satcat = fetch_satcat_async().await?;
     let body = fetch_tle_text(ACTIVE_TLE_URL).await?;
     let active = parse_tle_data_async(&body).await?;
     let target: std::collections::HashSet<&str> = owners.iter().copied().collect();
-    let filtered: Vec<TleSatellite> = active.into_iter()
-        .filter(|s| satcat.get(&s.norad_id)
-            .map_or(false, |code| target.contains(code.as_str())))
+    let filtered: Vec<TleSatellite> = active
+        .into_iter()
+        .filter(|s| {
+            satcat
+                .get(&s.norad_id)
+                .map_or(false, |code| target.contains(code.as_str()))
+        })
         .collect();
     if filtered.is_empty() {
         Err("No matching satellites for country".to_string())

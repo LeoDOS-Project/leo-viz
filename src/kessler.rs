@@ -68,16 +68,16 @@ pub(crate) fn state_to_elements(
     let nz = -hx;
     let n_mag = (nx * nx + nz * nz).sqrt();
 
-    let raan = if n_mag > 1e-10 {
-        (-hx).atan2(hz)
-    } else {
-        0.0
-    };
+    let raan = if n_mag > 1e-10 { (-hx).atan2(hz) } else { 0.0 };
 
     let arg_periapsis = if n_mag > 1e-10 && ecc > 1e-10 {
         let cos_omega = ((nx * ex + nz * ez) / (n_mag * ecc)).clamp(-1.0, 1.0);
         let omega = cos_omega.acos();
-        if ey < 0.0 { 2.0 * PI - omega } else { omega }
+        if ey < 0.0 {
+            2.0 * PI - omega
+        } else {
+            omega
+        }
     } else if ecc > 1e-10 {
         ex.atan2(ez)
     } else {
@@ -87,17 +87,26 @@ pub(crate) fn state_to_elements(
     let true_anomaly = if ecc > 1e-10 {
         let cos_nu = ((ex * pos[0] + ey * pos[1] + ez * pos[2]) / (ecc * r_mag)).clamp(-1.0, 1.0);
         let nu = cos_nu.acos();
-        if rdotv < 0.0 { 2.0 * PI - nu } else { nu }
+        if rdotv < 0.0 {
+            2.0 * PI - nu
+        } else {
+            nu
+        }
     } else if n_mag > 1e-10 {
         let cos_u = ((nx * pos[0] + nz * pos[2]) / (n_mag * r_mag)).clamp(-1.0, 1.0);
         let u = cos_u.acos();
-        if pos[1] < 0.0 { 2.0 * PI - u } else { u }
+        if pos[1] < 0.0 {
+            2.0 * PI - u
+        } else {
+            u
+        }
     } else {
         pos[2].atan2(pos[0])
     };
 
-    let ea = 2.0 * ((1.0 - ecc).sqrt() * (true_anomaly / 2.0).sin())
-        .atan2((1.0 + ecc).sqrt() * (true_anomaly / 2.0).cos());
+    let ea = 2.0
+        * ((1.0 - ecc).sqrt() * (true_anomaly / 2.0).sin())
+            .atan2((1.0 + ecc).sqrt() * (true_anomaly / 2.0).cos());
     let mean_anomaly = ea - ecc * ea.sin();
     let mean_motion = (mu / semi_major.powi(3)).sqrt();
 
@@ -125,8 +134,7 @@ pub(crate) fn propagate_fragment(frag: &DebrisFragment, time: f64) -> [f64; 3] {
         for _ in 0..10 {
             ea -= (ea - ecc * ea.sin() - mean_anomaly) / (1.0 - ecc * ea.cos());
         }
-        2.0 * ((1.0 + ecc).sqrt() * (ea / 2.0).sin())
-            .atan2((1.0 - ecc).sqrt() * (ea / 2.0).cos())
+        2.0 * ((1.0 + ecc).sqrt() * (ea / 2.0).sin()).atan2((1.0 - ecc).sqrt() * (ea / 2.0).cos())
     };
 
     let r = frag.semi_major * (1.0 - ecc * ecc) / (1.0 + ecc * true_anomaly.cos());
