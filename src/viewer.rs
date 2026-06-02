@@ -2603,6 +2603,8 @@ impl ViewerState {
                     }
                     if cons.isl_neighbors > 0 {
                         ui.indent("isl_settings", |ui| {
+                            ui.checkbox(&mut cons.show_isl_hover_info, "Show info on hover")
+                                .on_hover_text("Show link budget details when hovering an ISL");
                             ui.horizontal(|ui| {
                                 ui.label("Neighbors:");
                                 ui.selectable_value(&mut cons.isl_neighbors, 4, "4")
@@ -2844,6 +2846,7 @@ impl ViewerState {
                             planet_j2,
                             planet_equatorial_radius: planet_eq_radius,
                             link_budget: crate::config::LinkBudget::default(),
+                            show_isl_hover_info: false,
                             ballistic_coeff: 100.0,
                         };
                         let label = format!("{} {}", preset.label(), shell.label);
@@ -2877,6 +2880,7 @@ impl ViewerState {
                         planet_j2,
                         planet_equatorial_radius: planet_eq_radius,
                         link_budget: crate::config::LinkBudget::default(),
+                        show_isl_hover_info: false,
                         ballistic_coeff: 100.0,
                     };
                     if tle_isl_k > 0 {
@@ -2987,6 +2991,7 @@ impl ViewerState {
                         planet_j2,
                         planet_equatorial_radius: planet_eq_radius,
                         link_budget: crate::config::LinkBudget::default(),
+                        show_isl_hover_info: false,
                         ballistic_coeff: 100.0,
                     };
                     constellations_data.push((

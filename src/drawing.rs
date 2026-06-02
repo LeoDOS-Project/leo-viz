@@ -1172,6 +1172,7 @@ pub fn draw_3d_view(
         f64,
         crate::config::LinkBudget,
         crate::config::PinnedIsl,
+        bool,
     )> = Vec::new();
     let mut pinned_isl_overlays: Vec<([f64; 2], [f64; 2])> = Vec::new();
 
@@ -2840,6 +2841,7 @@ pub fn draw_3d_view(
             let cursor_over_plot = plot_ui.pointer_coordinate().is_some();
             for (wc, positions, _, _, orig_idx, _) in constellations {
                 let lb = wc.link_budget;
+                let show_hover_info = wc.show_isl_hover_info;
                 for sat in positions {
                     for &neighbor_idx in &sat.neighbors {
                         let neighbor = &positions[neighbor_idx];
@@ -2877,7 +2879,14 @@ pub fn draw_3d_view(
                                         .width(scaled_link_width),
                                 );
                                 if cursor_over_plot {
-                                    hover_isl_segments.push((p1, p2, dist_km, lb, id));
+                                    hover_isl_segments.push((
+                                        p1,
+                                        p2,
+                                        dist_km,
+                                        lb,
+                                        id,
+                                        show_hover_info,
+                                    ));
                                 }
                                 if is_pinned {
                                     pinned_isl_overlays.push((p1, p2));
@@ -2895,7 +2904,14 @@ pub fn draw_3d_view(
                                     .width(scaled_link_width),
                             );
                             if cursor_over_plot {
-                                hover_isl_segments.push(([rx1, ry1], [rx2, ry2], dist_km, lb, id));
+                                hover_isl_segments.push((
+                                    [rx1, ry1],
+                                    [rx2, ry2],
+                                    dist_km,
+                                    lb,
+                                    id,
+                                    show_hover_info,
+                                ));
                             }
                             if is_pinned {
                                 pinned_isl_overlays.push(([rx1, ry1], [rx2, ry2]));
@@ -4985,7 +5001,10 @@ pub fn draw_3d_view(
             let threshold_px = 6.0_f32;
             let mut closest: Option<(f32, f64, crate::config::LinkBudget, egui::Pos2, egui::Pos2)> =
                 None;
-            for (p1, p2, dist_km, lb, _id) in &hover_isl_segments {
+            for (p1, p2, dist_km, lb, _id, show_hover_info) in &hover_isl_segments {
+                if !show_hover_info {
+                    continue;
+                }
                 let s1 = response
                     .transform
                     .position_from_point(&egui_plot::PlotPoint::new(p1[0], p1[1]));
@@ -5358,7 +5377,7 @@ pub fn draw_3d_view(
                 if !sat_hit && !hover_isl_segments.is_empty() {
                     let threshold_px = 6.0_f32;
                     let mut closest: Option<(f32, crate::config::PinnedIsl)> = None;
-                    for (p1, p2, _dist_km, _lb, id) in &hover_isl_segments {
+                    for (p1, p2, _dist_km, _lb, id, _) in &hover_isl_segments {
                         let s1 = response
                             .transform
                             .position_from_point(&egui_plot::PlotPoint::new(p1[0], p1[1]));

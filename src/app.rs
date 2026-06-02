@@ -2913,7 +2913,6 @@ impl eframe::App for App {
         dock_style.tab_bar.height = 0.0;
         dock_style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
         dock_style.tab_bar.show_scroll_bar_on_overflow = false;
-        let tab_bar_height = 0.0;
         let dock = DockArea::new(&mut self.dock_state).style(dock_style);
         dock.show(ctx, &mut self.viewer);
         mark_frame!("dock");
@@ -3013,16 +3012,22 @@ impl eframe::App for App {
             .tabs
             .iter()
             .any(|tab| tab.slides.is_some() || tab.presentation_slide_number.is_some());
-        let pointer_recently_moved =
-            self.viewer.real_time - self.viewer.last_pointer_move_time < 1.5;
-        let show_settings_button =
-            !presentation_loaded || pointer_recently_moved || ctx.is_pointer_over_egui();
-        if !self.viewer.show_side_panel && ui_visible && show_settings_button {
+        if !self.viewer.show_side_panel && ui_visible {
             egui::Area::new(egui::Id::new("settings_btn"))
-                .fixed_pos(egui::pos2(4.0, (tab_bar_height - 16.0) / 2.0))
+                .fixed_pos(egui::pos2(4.0, 4.0))
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
-                    if ui.small_button("+").clicked() {
+                    if presentation_loaded {
+                        let response =
+                            ui.allocate_response(egui::vec2(28.0, 28.0), egui::Sense::click());
+                        if response.hovered() {
+                            let button_response =
+                                ui.put(response.rect, egui::Button::new("+").small());
+                            if button_response.clicked() {
+                                self.viewer.show_side_panel = true;
+                            }
+                        }
+                    } else if ui.small_button("+").clicked() {
                         self.viewer.show_side_panel = true;
                     }
                 });
