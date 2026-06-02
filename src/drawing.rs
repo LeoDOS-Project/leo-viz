@@ -19,13 +19,45 @@ use crate::texture::EarthTexture;
 use crate::walker::{SatelliteState, WalkerConstellation, WalkerType};
 use eframe::egui;
 use egui::mutex::Mutex;
-use egui_plot::{Line, Plot, PlotImage, PlotPoint, PlotPoints, Points, Polygon, Text};
+use egui_plot::{Line, Plot, PlotImage, PlotPoint, PlotPoints, PlotUi, Points, Polygon, Text};
 use nalgebra::{Matrix3, Vector3};
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
 use std::sync::Arc;
 
 use crate::EARTH_VISUAL_SCALE;
+
+fn contrast_halo_color(color: egui::Color32) -> egui::Color32 {
+    let luminance = 0.299 * color.r() as f32 + 0.587 * color.g() as f32 + 0.114 * color.b() as f32;
+    let alpha_scale = (color.a() as f32 / 255.0).max(0.55);
+    if luminance >= 120.0 {
+        egui::Color32::from_rgba_unmultiplied(0, 0, 0, (150.0 * alpha_scale).round() as u8)
+    } else {
+        egui::Color32::from_rgba_unmultiplied(255, 255, 255, (110.0 * alpha_scale).round() as u8)
+    }
+}
+
+fn draw_contrast_line(
+    plot_ui: &mut PlotUi<'_>,
+    points: Vec<[f64; 2]>,
+    color: egui::Color32,
+    width: f32,
+) {
+    if points.len() < 2 {
+        return;
+    }
+    let halo_width = (width + 2.5).max(width * 2.0);
+    plot_ui.line(
+        Line::new("", PlotPoints::new(points.clone()))
+            .color(contrast_halo_color(color))
+            .width(halo_width),
+    );
+    plot_ui.line(
+        Line::new("", PlotPoints::new(points))
+            .color(color)
+            .width(width),
+    );
+}
 
 fn normalize_field_nt(f: f64, r_earth_radii: f64) -> f64 {
     let ref_field = 30000.0 / r_earth_radii.powi(3);
@@ -2873,10 +2905,11 @@ pub fn draw_3d_view(
                             if let Some((p1, p2)) = clip_link_at_earth(
                                 rx1, ry1, rz1, visible1, rx2, ry2, rz2, visible2, earth_r_sq,
                             ) {
-                                plot_ui.line(
-                                    Line::new("", PlotPoints::new(vec![p1, p2]))
-                                        .color(base_link_color)
-                                        .width(scaled_link_width),
+                                draw_contrast_line(
+                                    plot_ui,
+                                    vec![p1, p2],
+                                    base_link_color,
+                                    scaled_link_width,
                                 );
                                 if cursor_over_plot {
                                     hover_isl_segments.push((
@@ -2898,10 +2931,11 @@ pub fn draw_3d_view(
                             } else {
                                 link_dim
                             };
-                            plot_ui.line(
-                                Line::new("", PlotPoints::new(vec![[rx1, ry1], [rx2, ry2]]))
-                                    .color(color)
-                                    .width(scaled_link_width),
+                            draw_contrast_line(
+                                plot_ui,
+                                vec![[rx1, ry1], [rx2, ry2]],
+                                color,
+                                scaled_link_width,
                             );
                             if cursor_over_plot {
                                 hover_isl_segments.push((
@@ -5915,10 +5949,11 @@ pub fn draw_map_view(
                                 proj.project(neigh.lat, neigh.lon),
                             ) {
                                 if (x1 - x2).abs() < 180.0 {
-                                    plot_ui.line(
-                                        Line::new("", PlotPoints::new(vec![[x1, y1], [x2, y2]]))
-                                            .color(link_color)
-                                            .width(link_width),
+                                    draw_contrast_line(
+                                        plot_ui,
+                                        vec![[x1, y1], [x2, y2]],
+                                        link_color,
+                                        link_width,
                                     );
                                 }
                             }
@@ -6346,10 +6381,11 @@ pub fn draw_torus(
                         } else {
                             link_dim
                         };
-                        plot_ui.line(
-                            Line::new("", PlotPoints::new(vec![[x1, y1], [x2, y2]]))
-                                .color(color)
-                                .width(scaled_link_width),
+                        draw_contrast_line(
+                            plot_ui,
+                            vec![[x1, y1], [x2, y2]],
+                            color,
+                            scaled_link_width,
                         );
                     }
                 }

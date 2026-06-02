@@ -3020,6 +3020,9 @@ impl eframe::App for App {
                     if presentation_loaded {
                         let response =
                             ui.allocate_response(egui::vec2(28.0, 28.0), egui::Sense::click());
+                        if response.clicked() {
+                            self.viewer.show_side_panel = true;
+                        }
                         if response.hovered() {
                             let button_response =
                                 ui.put(response.rect, egui::Button::new("+").small());
