@@ -1318,6 +1318,7 @@ impl App {
                 crate::slides::warm_browser_cache(crate::slides::SPACECOMP_PRIMER)
             }
         }
+        self.viewer.show_side_panel = false;
         self.viewer.slide_textures.clear();
         ctx.request_repaint();
     }
