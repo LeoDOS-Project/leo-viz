@@ -18,7 +18,8 @@ presentation convention:
   ...
 
 The script also rewrites src/slides.rs so the deck metadata matches exactly
-the generated slide count.
+the generated slide count. If ImageMagick is available, large embedded PNG
+images are re-encoded as JPEG to keep native/web preloading responsive.
 USAGE
 }
 
@@ -73,6 +74,87 @@ for page in $(seq 1 "$page_count"); do
   pdftocairo -svg -f "$page" -l "$page" "$pdf" "$tmp_file"
   mv "$tmp_file" "$out_file"
 done
+
+if command -v magick >/dev/null 2>&1; then
+  python3 - "$out_dir" <<'PY'
+from pathlib import Path
+import base64
+import re
+import subprocess
+import sys
+import tempfile
+
+root = Path(sys.argv[1])
+pattern = re.compile(r"data:image/png;base64,([A-Za-z0-9+/=\n\r]+)")
+threshold = 750_000
+quality = "85"
+changed = 0
+
+for path in sorted(root.glob("*.svg")):
+    text = path.read_text()
+    replacements = []
+    for match in pattern.finditer(text):
+        b64 = "".join(match.group(1).split())
+        raw = base64.b64decode(b64)
+        if len(raw) < threshold:
+            continue
+
+        with tempfile.TemporaryDirectory() as td:
+            png = Path(td) / "in.png"
+            jpg = Path(td) / "out.jpg"
+            png.write_bytes(raw)
+            subprocess.run(
+                [
+                    "magick",
+                    str(png),
+                    "-auto-orient",
+                    "-background",
+                    "white",
+                    "-alpha",
+                    "remove",
+                    "-alpha",
+                    "off",
+                    "-strip",
+                    "-quality",
+                    quality,
+                    f"jpg:{jpg}",
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            jpg_raw = jpg.read_bytes()
+
+        if len(jpg_raw) >= len(raw) * 0.95:
+            continue
+
+        replacements.append(
+            (
+                match.start(),
+                match.end(),
+                "data:image/jpeg;base64,"
+                + base64.b64encode(jpg_raw).decode("ascii"),
+            )
+        )
+
+    if not replacements:
+        continue
+
+    out = []
+    last = 0
+    for start, end, repl in replacements:
+        out.append(text[last:start])
+        out.append(repl)
+        last = end
+    out.append(text[last:])
+    path.write_text("".join(out))
+    changed += 1
+
+print(f"Optimized embedded raster images in {changed} SVG slides")
+PY
+else
+  echo "Skipped SVG raster optimization: magick not found"
+fi
 
 python3 - "$slides_rs" "$page_count" <<'PY'
 from pathlib import Path
