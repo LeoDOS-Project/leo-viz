@@ -1030,8 +1030,10 @@ impl ViewerState {
         let uri = deck.uri(current);
 
         let avail = ui.available_rect_before_wrap();
-        let preload_start = tab_idx.saturating_sub(2);
-        let preload_end = (tab_idx + 3).min(self.tabs.len());
+        const PRELOAD_BEHIND_TABS: usize = 4;
+        const PRELOAD_AHEAD_TABS: usize = 20;
+        let preload_start = tab_idx.saturating_sub(PRELOAD_BEHIND_TABS);
+        let preload_end = (tab_idx + PRELOAD_AHEAD_TABS + 1).min(self.tabs.len());
         for preload_idx in preload_start..preload_end {
             if let Some(deck) = self.tabs[preload_idx].slides.as_ref() {
                 if deck.len() > 0 {

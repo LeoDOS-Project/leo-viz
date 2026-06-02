@@ -17,8 +17,8 @@ presentation convention:
   02.svg
   ...
 
-The script also rewrites src/slides.rs so the embedded deck includes exactly
-the generated slide files.
+The script also rewrites src/slides.rs so the deck metadata matches exactly
+the generated slide count.
 USAGE
 }
 
@@ -83,24 +83,10 @@ path = Path(sys.argv[1])
 count = int(sys.argv[2])
 text = path.read_text()
 
-replacement = "\n".join(
-    f'    include_bytes!("../assets/presentations/spacecomp-primer/{i:02}.svg"),'
-    for i in range(1, count + 1)
-)
-
-pattern = re.compile(
-    r"const SPACECOMP_PRIMER_SLIDES: &\[\&\[u8\]\] = &\[\n"
-    r".*?"
-    r"\n\];",
-    re.S,
-)
-
-new_text, n = pattern.subn(
-    f"const SPACECOMP_PRIMER_SLIDES: &[&[u8]] = &[\n{replacement}\n];",
-    text,
-)
+pattern = re.compile(r"pub const SPACECOMP_PRIMER_SLIDE_COUNT: usize = \d+;")
+new_text, n = pattern.subn(f"pub const SPACECOMP_PRIMER_SLIDE_COUNT: usize = {count};", text)
 if n != 1:
-    raise SystemExit("error: could not find SPACECOMP_PRIMER_SLIDES in src/slides.rs")
+    raise SystemExit("error: could not find SPACECOMP_PRIMER_SLIDE_COUNT in src/slides.rs")
 
 path.write_text(new_text)
 PY

@@ -1313,6 +1313,11 @@ impl App {
         ctx: &eframe::egui::Context,
     ) {
         self.setup_tabs(|v| presentation.build(v));
+        match presentation {
+            Presentation::SpaceCoMP => {
+                crate::slides::warm_browser_cache(crate::slides::SPACECOMP_PRIMER)
+            }
+        }
         self.viewer.slide_textures.clear();
         ctx.request_repaint();
     }
