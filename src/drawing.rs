@@ -3730,6 +3730,7 @@ pub fn draw_3d_view(
                                 };
 
                                 let mut circles: Vec<(f64, f64, f64, egui::Color32)> = Vec::new();
+                                let role_circle_r = circle_r * 1.2;
                                 for &(cp, cs) in &job.collectors {
                                     if let Some(s) = positions
                                         .iter()
@@ -3737,7 +3738,7 @@ pub fn draw_3d_view(
                                     {
                                         let (rx, ry, _) =
                                             rotate_point_matrix(s.x, s.y, s.z, &satellite_rotation);
-                                        circles.push((rx, ry, circle_r, color_collector));
+                                        circles.push((rx, ry, role_circle_r, color_collector));
                                     }
                                 }
                                 for &(mp, ms) in &job.mappers {
@@ -3747,7 +3748,7 @@ pub fn draw_3d_view(
                                     {
                                         let (rx, ry, _) =
                                             rotate_point_matrix(s.x, s.y, s.z, &satellite_rotation);
-                                        circles.push((rx, ry, circle_r, color_mapper));
+                                        circles.push((rx, ry, role_circle_r, color_mapper));
                                     }
                                 }
                                 {
@@ -3758,7 +3759,7 @@ pub fn draw_3d_view(
                                     {
                                         let (rx, ry, _) =
                                             rotate_point_matrix(s.x, s.y, s.z, &satellite_rotation);
-                                        circles.push((rx, ry, circle_r * 1.5, color_reducer));
+                                        circles.push((rx, ry, role_circle_r, color_reducer));
                                     }
                                 }
                                 {
@@ -3769,7 +3770,7 @@ pub fn draw_3d_view(
                                     {
                                         let (rx, ry, _) =
                                             rotate_point_matrix(s.x, s.y, s.z, &satellite_rotation);
-                                        circles.push((rx, ry, circle_r * 1.2, color_gs));
+                                        circles.push((rx, ry, role_circle_r, color_gs));
                                     }
                                 }
 

@@ -1212,7 +1212,9 @@ fn spacecomp_demo_tab(name: String, title: String, time: f64) -> TabConfig {
         crate::math::lat_lon_to_matrix(8.5_f64.to_radians(), 15.0_f64.to_radians());
     tab.settings.zoom = 10000.0 / 2200.0;
     tab.settings.sat_radius = 2.0;
-    tab.settings.show_asc_desc_colors = true;
+    tab.settings.show_sat_border = true;
+    tab.settings.show_asc_desc_colors = false;
+    tab.settings.color_links = egui::Color32::BLACK;
     tab.planet_counter += 1;
     let mut planet = PlanetConfig::new("Earth".to_string());
     planet.celestial_body = CelestialBody::Earth;
