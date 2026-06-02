@@ -860,6 +860,72 @@ fn starlink_tle_demo(v: &mut ViewerState) {
     v.tabs.push(tab);
 }
 
+fn oneweb_tle_demo(v: &mut ViewerState) {
+    v.tab_counter += 1;
+    let mut tab = TabConfig::new_empty("OneWeb: Simulated vs TLE".to_string());
+    tab.title = "OneWeb: Simulated vs TLE".to_string();
+    tab.description = indoc::indoc! {"
+            An idealised Walker Star simulation of OneWeb compared to the current constellation propagated from TLE data.
+        "}.to_string();
+    tab.settings.show_links = false;
+    tab.settings.sat_radius = 3.0;
+    tab.settings.link_width = 1.0;
+    tab.settings.zoom = 10000.0 / 12000.0;
+    tab.settings.rotation = crate::math::lat_lon_to_matrix(0.0, 0.0);
+    tab.settings.auto_rotate = true;
+    tab.settings.auto_rotate_speed = 3.0;
+    tab.settings.auto_rotate_axis_lat = 0.0;
+    tab.settings.auto_rotate_axis_lon = 0.0;
+
+    tab.planet_counter += 1;
+    let mut planet_sim = PlanetConfig::new("OneWeb simulated".to_string());
+    planet_sim.celestial_body = CelestialBody::Earth;
+    let mut cons = ConstellationConfig::new(0);
+    cons.preset = Preset::OneWeb;
+    cons.sats_per_plane = 54;
+    cons.num_planes = 12;
+    cons.altitude_km = 1200.0;
+    cons.inclination = 87.9;
+    cons.walker_type = WalkerType::Star;
+    cons.phasing = 1.0;
+    planet_sim.constellations.push(cons);
+    tab.planets.push(planet_sim);
+
+    tab.planet_counter += 1;
+    let mut planet_real = PlanetConfig::new("OneWeb TLE".to_string());
+    planet_real.celestial_body = CelestialBody::Earth;
+    planet_real.show_tle_window = true;
+    planet_real.auto_cluster_tle = true;
+    planet_real
+        .tle_selections
+        .insert(TlePreset::OneWeb, (true, TleLoadState::NotLoaded, None));
+    tab.planets.push(planet_real);
+
+    v.tabs.push(tab);
+}
+
+fn starlink_tle_comparison_demo(v: &mut ViewerState) {
+    starlink_tle_demo(v);
+    if let Some(tab) = v.tabs.last_mut() {
+        tab.name = "Starlink: Simulated vs TLE".to_string();
+        tab.title = "Starlink: Simulated vs TLE".to_string();
+        if let Some(planet) = tab.planets.get_mut(0) {
+            planet.name = "Starlink simulated".to_string();
+        }
+        if let Some(planet) = tab.planets.get_mut(1) {
+            planet.name = "Starlink TLE".to_string();
+        }
+        tab.settings.sat_radius = 3.0;
+        tab.settings.link_width = 1.0;
+        tab.settings.zoom = 10000.0 / 12000.0;
+        tab.settings.rotation = crate::math::lat_lon_to_matrix(0.0, 0.0);
+        tab.settings.auto_rotate = true;
+        tab.settings.auto_rotate_speed = 3.0;
+        tab.settings.auto_rotate_axis_lat = 0.0;
+        tab.settings.auto_rotate_axis_lon = 0.0;
+    }
+}
+
 fn all_tle_demo(v: &mut ViewerState) {
     v.tab_counter += 1;
     let mut tab = TabConfig::new_empty("Live data of all constellations".to_string());
@@ -1200,11 +1266,11 @@ impl Presentation {
         match self {
             Presentation::SpaceCoMP => {
                 spacecomp_slide_tabs(v, crate::slides::SPACECOMP_PRIMER, 1..35);
-                spacecomp_simulation_tabs(v, 35..41);
+                spacecomp_simulation_tabs(v, 35..43);
                 spacecomp_slide_tabs(
                     v,
                     crate::slides::SPACECOMP_PRIMER,
-                    41..crate::slides::total_slide_count() + 1,
+                    43..crate::slides::total_slide_count() + 1,
                 );
             }
         }
@@ -1221,10 +1287,12 @@ fn spacecomp_presentation_demo_tab(v: &mut ViewerState, slide_number: usize) {
     match slide_number {
         35 => inclination_demo(v),
         36 => walker_demo(v),
-        37 => isl_demo(v),
-        38 => torus_demo(v),
-        39 => routing_demo(v),
-        40 => {
+        37 => oneweb_tle_demo(v),
+        38 => starlink_tle_comparison_demo(v),
+        39 => isl_demo(v),
+        40 => torus_demo(v),
+        41 => routing_demo(v),
+        42 => {
             v.tab_counter += 1;
             v.tabs.push(spacecomp_demo_tab(
                 format!("Slide {}", slide_number),
@@ -1320,6 +1388,7 @@ impl App {
         }
         self.viewer.show_side_panel = false;
         self.viewer.slide_textures.clear();
+        self.viewer.slide_texture_size = None;
         ctx.request_repaint();
     }
 

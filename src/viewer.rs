@@ -346,6 +346,7 @@ pub(crate) struct ViewerState {
     pub(crate) solar_system_handles: HashMap<CelestialBody, egui::TextureHandle>,
     pub(crate) planet_sizes_handles: HashMap<CelestialBody, egui::TextureHandle>,
     pub(crate) slide_textures: HashMap<String, egui::load::SizedTexture>,
+    pub(crate) slide_texture_size: Option<egui::Vec2>,
     pub(crate) ss_last_render_instant: Option<web_time::Instant>,
     pub(crate) planet_sizes_t: f64,
     pub(crate) planet_sizes_auto_zoom: bool,
@@ -479,6 +480,53 @@ impl TabViewer for ViewerState {
 }
 
 impl ViewerState {
+    pub(crate) fn preload_presentation_slides(&mut self, ctx: &egui::Context) {
+        const PRELOAD_BEHIND_TABS: usize = 4;
+        const PRELOAD_AHEAD_TABS: usize = 20;
+        const PRELOADS_PER_FRAME: usize = 2;
+
+        let size = ctx.content_rect().size();
+        if self
+            .slide_texture_size
+            .is_some_and(|old| (old.x - size.x).abs() > 32.0 || (old.y - size.y).abs() > 32.0)
+        {
+            self.slide_textures.clear();
+        }
+        self.slide_texture_size = Some(size);
+
+        let size = egui::vec2(size.x.max(1.0), size.y.max(1.0));
+        let preload_start = self.active_tab_idx.saturating_sub(PRELOAD_BEHIND_TABS);
+        let preload_end = (self.active_tab_idx + PRELOAD_AHEAD_TABS + 1).min(self.tabs.len());
+
+        let mut attempts_this_frame = 0;
+        for preload_idx in preload_start..preload_end {
+            let Some(deck) = self.tabs[preload_idx].slides.as_ref() else {
+                continue;
+            };
+            if deck.len() == 0 {
+                continue;
+            }
+
+            let uri = deck.uri(deck.current.min(deck.len() - 1));
+            if self.slide_textures.contains_key(&uri) {
+                continue;
+            }
+
+            if let Some(texture) = crate::slides::load_uri_texture(ctx, &uri, size) {
+                self.slide_textures.insert(uri, texture);
+            }
+
+            attempts_this_frame += 1;
+            if attempts_this_frame >= PRELOADS_PER_FRAME {
+                break;
+            }
+        }
+
+        if attempts_this_frame > 0 {
+            ctx.request_repaint();
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn tile_overlay_detail_bounds(&self, body: CelestialBody) -> Option<[f32; 4]> {
         if !self.tile_overlay.enabled || body != CelestialBody::Earth {
@@ -1030,24 +1078,23 @@ impl ViewerState {
         let uri = deck.uri(current);
 
         let avail = ui.available_rect_before_wrap();
-        const PRELOAD_BEHIND_TABS: usize = 4;
-        const PRELOAD_AHEAD_TABS: usize = 20;
-        let preload_start = tab_idx.saturating_sub(PRELOAD_BEHIND_TABS);
-        let preload_end = (tab_idx + PRELOAD_AHEAD_TABS + 1).min(self.tabs.len());
-        for preload_idx in preload_start..preload_end {
-            if let Some(deck) = self.tabs[preload_idx].slides.as_ref() {
-                if deck.len() > 0 {
-                    let preload_uri = deck.uri(deck.current.min(deck.len() - 1));
-                    crate::slides::preload_uri(ui.ctx(), &preload_uri, avail.size());
-                }
+        if !self.slide_textures.contains_key(&uri) {
+            if let Some(texture) = crate::slides::load_uri_texture(ui.ctx(), &uri, avail.size()) {
+                self.slide_textures.insert(uri.clone(), texture);
             }
         }
+
         ui.painter()
             .rect_filled(avail, 0.0, ui.visuals().panel_fill);
         ui.scope_builder(egui::UiBuilder::new().max_rect(avail), |ui| {
             ui.centered_and_justified(|ui| {
-                ui.add(
+                let image = if let Some(texture) = self.slide_textures.get(&uri) {
+                    egui::Image::from_texture(*texture)
+                } else {
                     egui::Image::new(uri.as_str())
+                };
+                ui.add(
+                    image
                         .maintain_aspect_ratio(true)
                         .fit_to_exact_size(avail.size()),
                 );
