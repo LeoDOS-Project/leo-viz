@@ -243,7 +243,7 @@ impl App {
 
         let render_state = cc.wgpu_render_state.clone();
         let default_texture_resolution = if cfg!(target_arch = "wasm32") {
-            TextureResolution::R2048
+            TextureResolution::R4096
         } else if render_state.is_some() {
             TextureResolution::R8192
         } else {
@@ -264,7 +264,7 @@ impl App {
                 (
                     CelestialBody::Earth,
                     Skin::Default,
-                    TextureResolution::R2048,
+                    TextureResolution::R4096,
                 )
             } else {
                 (
@@ -1820,20 +1820,24 @@ impl eframe::App for App {
         #[cfg(target_arch = "wasm32")]
         TEXTURE_RESULT.with(|cell| {
             let results: Vec<_> = cell.borrow_mut().drain(..).collect();
-            for (body, result) in results {
+            for (key, result) in results {
                 match result {
-                    Ok(texture) => {
+                    Ok(mut texture) => {
                         if let Some(ref rs) = v.render_state {
                             let mut wr = rs.renderer.write();
                             if let Some(gpu) = wr.callback_resources.get_mut::<GpuResources>() {
-                                gpu.invalidate_texture(body);
-                                gpu.invalidate_map_texture(body);
+                                gpu.invalidate_texture(key);
+                                gpu.invalidate_map_texture(key);
                             }
                         }
+                        let factor = key.2.downscale_factor(key.0, key.1);
+                        if factor > 1 {
+                            texture = texture.downscale(factor);
+                        }
                         let texture = Arc::new(texture);
-                        v.planet_textures.insert(body, texture.clone());
+                        v.planet_textures.insert(key, texture.clone());
                         v.texture_load_state = TextureLoadState::Loaded(texture);
-                        v.planet_image_handles.remove(&body);
+                        v.planet_image_handles.remove(&key);
                     }
                     Err(e) => {
                         v.texture_load_state = TextureLoadState::Failed(e);
@@ -1846,7 +1850,11 @@ impl eframe::App for App {
         {
             CLOUD_TEXTURE_RESULT.with(|cell| {
                 if let Some((res, result)) = cell.borrow_mut().take() {
-                    if let Ok(texture) = result {
+                    if let Ok(mut texture) = result {
+                        let factor = res.downscale_factor(CelestialBody::Earth, Skin::Default);
+                        if factor > 1 {
+                            texture = texture.downscale(factor);
+                        }
                         v.cloud_textures.insert(res, Arc::new(texture));
                     }
                     v.cloud_texture_loading = false;

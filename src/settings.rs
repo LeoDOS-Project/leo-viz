@@ -1000,6 +1000,12 @@ impl ViewerState {
                     );
                     ui.selectable_value(
                         &mut self.texture_resolution,
+                        TextureResolution::R4096,
+                        "4K",
+                    );
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ui.selectable_value(
+                        &mut self.texture_resolution,
                         TextureResolution::R8192,
                         "8K",
                     );

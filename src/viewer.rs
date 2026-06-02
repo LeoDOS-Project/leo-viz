@@ -4784,10 +4784,16 @@ impl ViewerState {
                         }
                     })
                     .collect();
-                Arc::new(EarthTexture {
+                let texture = EarthTexture {
                     width: src.width,
                     height: src.height,
                     pixels,
+                };
+                let factor = res.downscale_factor(body, skin);
+                Arc::new(if factor > 1 {
+                    texture.downscale(factor)
+                } else {
+                    texture
                 })
             } else {
                 Arc::new(EarthTexture {
@@ -4874,7 +4880,11 @@ impl ViewerState {
         #[cfg(not(target_arch = "wasm32"))]
         {
             if let Ok(bytes) = std::fs::read(asset_path(filename)) {
-                if let Ok(texture) = EarthTexture::from_bytes(&bytes) {
+                if let Ok(mut texture) = EarthTexture::from_bytes(&bytes) {
+                    let factor = res.downscale_factor(CelestialBody::Earth, Skin::Default);
+                    if factor > 1 {
+                        texture = texture.downscale(factor);
+                    }
                     self.cloud_textures.insert(res, Arc::new(texture));
                 }
             }
