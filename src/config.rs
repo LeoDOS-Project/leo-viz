@@ -110,6 +110,7 @@ pub struct ConstellationConfig {
     pub color_offset: usize,
     pub hidden: bool,
     pub show_advanced_ui: bool,
+    pub show_isl_hover_info: bool,
     pub link_budget: LinkBudget,
     pub physics: crate::physics::PhysicsConfig,
     pub physics_state: Vec<crate::physics::SatellitePhysics>,
@@ -142,6 +143,7 @@ impl ConstellationConfig {
             color_offset,
             hidden: false,
             show_advanced_ui: false,
+            show_isl_hover_info: false,
             link_budget: LinkBudget::default(),
             physics: crate::physics::PhysicsConfig::default(),
             physics_state: Vec::new(),
@@ -220,6 +222,7 @@ impl ConstellationConfig {
             planet_j2,
             planet_equatorial_radius,
             link_budget: self.link_budget,
+            show_isl_hover_info: self.show_isl_hover_info,
             ballistic_coeff: self.ballistic_coeff,
         }
     }
@@ -641,7 +644,7 @@ impl Default for TabSettings {
             show_asc_desc_colors: false,
             color_ascending: egui::Color32::from_rgb(230, 150, 70),
             color_descending: egui::Color32::from_rgb(70, 130, 210),
-            color_links: egui::Color32::from_rgb(80, 80, 80),
+            color_links: egui::Color32::from_rgb(200, 200, 200),
             show_sat_labels: true,
             single_color: false,
             show_torus: false,

@@ -32,6 +32,7 @@ pub struct WalkerConstellation {
     pub planet_j2: f64,
     pub planet_equatorial_radius: f64,
     pub link_budget: LinkBudget,
+    pub show_isl_hover_info: bool,
     pub ballistic_coeff: f64,
 }
 
