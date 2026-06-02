@@ -644,7 +644,7 @@ impl Default for TabSettings {
             show_asc_desc_colors: false,
             color_ascending: egui::Color32::from_rgb(230, 150, 70),
             color_descending: egui::Color32::from_rgb(70, 130, 210),
-            color_links: egui::Color32::from_rgb(200, 200, 200),
+            color_links: egui::Color32::from_rgb(95, 115, 130),
             show_sat_labels: true,
             single_color: false,
             show_torus: false,
