@@ -117,7 +117,11 @@ fn deck_base_uri(id: DeckId) -> String {
     format!("file://{}", path.display())
 }
 
-pub fn preload_uri(ctx: &egui::Context, uri: &str, size: egui::Vec2) {
+pub fn load_uri_texture(
+    ctx: &egui::Context,
+    uri: &str,
+    size: egui::Vec2,
+) -> Option<egui::load::SizedTexture> {
     let pixel_size = size * ctx.pixels_per_point();
     let size_hint = egui::load::SizeHint::Size {
         width: pixel_size.x.max(1.0).round() as u32,
@@ -125,8 +129,12 @@ pub fn preload_uri(ctx: &egui::Context, uri: &str, size: egui::Vec2) {
         maintain_aspect_ratio: true,
     };
     match ctx.try_load_texture(uri, egui::TextureOptions::LINEAR, size_hint) {
-        Ok(egui::load::TexturePoll::Pending { .. }) => ctx.request_repaint(),
-        _ => {}
+        Ok(egui::load::TexturePoll::Ready { texture }) => Some(texture),
+        Ok(egui::load::TexturePoll::Pending { .. }) => {
+            ctx.request_repaint();
+            None
+        }
+        Err(_) => None,
     }
 }
 

@@ -509,6 +509,7 @@ impl App {
                 solar_system_handles: HashMap::new(),
                 planet_sizes_handles: HashMap::new(),
                 slide_textures: HashMap::new(),
+                slide_texture_size: None,
                 ss_last_render_instant: None,
                 planet_sizes_t: 0.0,
                 planet_sizes_auto_zoom: false,
@@ -783,6 +784,9 @@ impl eframe::App for App {
             .tabs
             .iter()
             .any(|tab| tab.slides.is_some() || tab.presentation_slide_number.is_some());
+        if presentation_loaded {
+            v.preload_presentation_slides(ctx);
+        }
 
         let tex_res = v.texture_resolution;
         let active_tab_has_planets = v
