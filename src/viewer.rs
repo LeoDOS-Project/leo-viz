@@ -4729,15 +4729,13 @@ impl ViewerState {
         }
 
         if skin == Skin::Abstract && body == CelestialBody::Earth {
-            let src_key = (
-                CelestialBody::Earth,
-                Skin::Default,
-                TextureResolution::R8192,
-            );
+            let src_res = match res {
+                TextureResolution::R4096 => TextureResolution::R4096,
+                _ => TextureResolution::R8192,
+            };
+            let src_key = (CelestialBody::Earth, Skin::Default, src_res);
             if !self.planet_textures.contains_key(&src_key) {
-                if let Some(path) =
-                    Skin::Default.filename(CelestialBody::Earth, TextureResolution::R8192)
-                {
+                if let Some(path) = Skin::Default.filename(CelestialBody::Earth, src_res) {
                     if let Ok(bytes) = std::fs::read(asset_path(path)) {
                         if let Ok(tex) = EarthTexture::from_bytes(&bytes) {
                             self.planet_textures.insert(src_key, Arc::new(tex));
