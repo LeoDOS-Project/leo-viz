@@ -55,6 +55,13 @@ pub enum Preset {
     Telesat,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum OpticalTerminalPreset {
+    Custom,
+    Bmot,
+    EsaTdp1,
+}
+
 /// Optical inter-satellite link budget parameters.
 ///
 /// Mirrors Table II of the SpaceCoMP paper: defaults reproduce the simulation
@@ -68,6 +75,8 @@ pub struct LinkBudget {
     pub antenna_gain_dbi: f64,
     pub noise_temp_k: f64,
     pub wavelength_nm: f64,
+    pub terminal_idle_power_w: f64,
+    pub terminal_active_power_w: f64,
 }
 
 impl Default for LinkBudget {
@@ -78,6 +87,8 @@ impl Default for LinkBudget {
             antenna_gain_dbi: 62.5,
             noise_temp_k: 300.0,
             wavelength_nm: 1550.0,
+            terminal_idle_power_w: 0.0,
+            terminal_active_power_w: 0.0,
         }
     }
 }
@@ -121,6 +132,7 @@ pub struct ConstellationConfig {
     pub hidden: bool,
     pub show_advanced_ui: bool,
     pub show_isl_hover_info: bool,
+    pub optical_terminal_preset: OpticalTerminalPreset,
     pub link_budget: LinkBudget,
     pub physics: crate::physics::PhysicsConfig,
     pub physics_state: Vec<crate::physics::SatellitePhysics>,
@@ -154,6 +166,7 @@ impl ConstellationConfig {
             hidden: false,
             show_advanced_ui: false,
             show_isl_hover_info: false,
+            optical_terminal_preset: OpticalTerminalPreset::Custom,
             link_budget: LinkBudget::default(),
             physics: crate::physics::PhysicsConfig::default(),
             physics_state: Vec::new(),
@@ -250,6 +263,63 @@ impl ConstellationConfig {
             Preset::Iris2 => "Iris²",
             Preset::Telesat => "Telesat",
         }
+    }
+
+    pub fn optical_terminal_preset_name(&self) -> &str {
+        match self.optical_terminal_preset {
+            OpticalTerminalPreset::Custom => "Custom",
+            OpticalTerminalPreset::Bmot => "BMOT",
+            OpticalTerminalPreset::EsaTdp1 => "ESA TDP-1",
+        }
+    }
+
+    pub fn optical_terminal_preset_note(&self) -> Option<&'static str> {
+        match self.optical_terminal_preset {
+            OpticalTerminalPreset::Custom => None,
+            OpticalTerminalPreset::Bmot => Some(
+                "Blue Marble Communications Optical Terminal: marketed for long-range \
+                 high-rate optical links, with 10G OOK and 100G DP-QPSK modem options \
+                 and 10+ year MEO/GEO mission targeting. Numeric aperture/power specs \
+                 are not published here, so this preset remains a simulator baseline. \
+                 Electrical terminal draw is also assumed here: 5 W standby plus 25 W \
+                 when ISLs are enabled.",
+            ),
+            OpticalTerminalPreset::EsaTdp1 => Some(
+                "ESA TDP-1 / Alphasat EDRS precursor: public material supports a \
+                 2.8125 GHz BPSK-class operating point. Wavelength, optical power, \
+                 gain and receiver-noise values are not fully published here, so \
+                 this preset uses explicit simulator assumptions: 1064 nm, 2 W, \
+                 105 dBi, 300 K. Electrical draw uses a TESAT-LCT-family proxy: \
+                 5 W standby plus 20 W when ISLs are enabled.",
+            ),
+        }
+    }
+
+    pub fn apply_optical_terminal_preset(&mut self, preset: OpticalTerminalPreset) {
+        self.optical_terminal_preset = preset;
+        self.link_budget = match preset {
+            OpticalTerminalPreset::Custom => self.link_budget,
+            // BMOT baseline: keep the simulator's current 1550 nm / 10 GHz model
+            // and use a modest optical transmit power with tighter effective gain.
+            OpticalTerminalPreset::Bmot => LinkBudget {
+                bandwidth_ghz: 10.0,
+                tx_power_w: 2.0,
+                antenna_gain_dbi: 95.0,
+                noise_temp_k: 300.0,
+                wavelength_nm: 1550.0,
+                terminal_idle_power_w: 5.0,
+                terminal_active_power_w: 25.0,
+            },
+            OpticalTerminalPreset::EsaTdp1 => LinkBudget {
+                bandwidth_ghz: 2.8125,
+                tx_power_w: 2.0,
+                antenna_gain_dbi: 105.0,
+                noise_temp_k: 300.0,
+                wavelength_nm: 1064.0,
+                terminal_idle_power_w: 5.0,
+                terminal_active_power_w: 20.0,
+            },
+        };
     }
 }
 

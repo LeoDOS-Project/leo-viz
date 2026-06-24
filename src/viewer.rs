@@ -6,8 +6,8 @@
 
 use crate::celestial::{CelestialBody, Skin, TextureResolution};
 use crate::config::{
-    AreaOfInterest, ConstellationConfig, DeviceLayer, GroundStation, NumericalState, Preset,
-    Propagator, TabConfig, View3DFlags,
+    AreaOfInterest, ConstellationConfig, DeviceLayer, GroundStation, NumericalState,
+    OpticalTerminalPreset, Preset, Propagator, TabConfig, View3DFlags,
 };
 use crate::drawing::{
     draw_3d_view, draw_map_view, draw_torus, plane_color, Draw3dInput, Draw3dState,
@@ -2722,46 +2722,145 @@ impl ViewerState {
                             ui.checkbox(&mut cons.show_isl_hover_info, "Show info on hover")
                                 .on_hover_text("Show link budget details when hovering an ISL");
                             ui.horizontal(|ui| {
+                                ui.label("Terminal:");
+                                egui::ComboBox::from_id_salt(format!(
+                                    "terminal_preset_{}_{}_{}",
+                                    tab_idx, planet_idx, cidx
+                                ))
+                                .selected_text(cons.optical_terminal_preset_name())
+                                .show_ui(ui, |ui| {
+                                    if ui
+                                        .selectable_label(
+                                            cons.optical_terminal_preset
+                                                == OpticalTerminalPreset::Custom,
+                                            "Custom",
+                                        )
+                                        .clicked()
+                                    {
+                                        cons.optical_terminal_preset =
+                                            OpticalTerminalPreset::Custom;
+                                    }
+                                    if ui
+                                        .selectable_label(
+                                            cons.optical_terminal_preset
+                                                == OpticalTerminalPreset::Bmot,
+                                            "BMOT",
+                                        )
+                                        .clicked()
+                                    {
+                                        cons.apply_optical_terminal_preset(
+                                            OpticalTerminalPreset::Bmot,
+                                        );
+                                    }
+                                    if ui
+                                        .selectable_label(
+                                            cons.optical_terminal_preset
+                                                == OpticalTerminalPreset::EsaTdp1,
+                                            "ESA TDP-1",
+                                        )
+                                        .clicked()
+                                    {
+                                        cons.apply_optical_terminal_preset(
+                                            OpticalTerminalPreset::EsaTdp1,
+                                        );
+                                    }
+                                });
+                            });
+                            ui.horizontal(|ui| {
                                 ui.label("Neighbors:");
                                 ui.selectable_value(&mut cons.isl_neighbors, 4, "4")
                                     .on_hover_text("4 neighbors (cardinal: up/down/left/right)");
                                 ui.selectable_value(&mut cons.isl_neighbors, 8, "8")
                                     .on_hover_text("8 neighbors (cardinal + diagonal)");
                             });
-                            let lb = &mut cons.link_budget;
-                            ui.horizontal(|ui| {
-                                ui.label("B:");
-                                ui.add(egui::DragValue::new(&mut lb.bandwidth_ghz).range(0.1..=200.0).speed(0.1).suffix(" GHz"))
-                                    .on_hover_text("Channel bandwidth — width of the frequency band the modulator occupies");
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("P:");
-                                ui.add(egui::DragValue::new(&mut lb.tx_power_w).range(0.1..=100.0).speed(0.1).suffix(" W"))
-                                    .on_hover_text("Transmit power at the laser aperture");
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("G:");
-                                ui.add(egui::DragValue::new(&mut lb.antenna_gain_dbi).range(30.0..=130.0).speed(0.5).suffix(" dBi"))
-                                    .on_hover_text("Tx/Rx antenna gain (assumed equal). Higher = narrower beam / larger aperture");
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("Nt:");
-                                ui.add(egui::DragValue::new(&mut lb.noise_temp_k).range(50.0..=2000.0).speed(5.0).suffix(" K"))
-                                    .on_hover_text("Receiver noise temperature — sets thermal noise floor N = k·Nt·B");
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("λ:");
-                                egui::ComboBox::from_id_salt(format!("lambda_{}_{}_{}", tab_idx, planet_idx, cidx))
-                                    .selected_text(format!("{} nm", lb.wavelength_nm as i32))
-                                    .show_ui(ui, |ui| {
-                                        for &nm in &[850.0_f64, 1064.0, 1310.0, 1550.0] {
-                                            ui.selectable_value(&mut lb.wavelength_nm, nm, format!("{} nm", nm as i32));
-                                        }
-                                    });
-                            });
-                            let c1 = lb.capacity_bps(1000.0) / 1e9;
-                            let c3 = lb.capacity_bps(3000.0) / 1e9;
-                            let c5 = lb.capacity_bps(5000.0) / 1e9;
+                            let mut terminal_edited = false;
+                            {
+                                let lb = &mut cons.link_budget;
+                                ui.horizontal(|ui| {
+                                    ui.label("B:");
+                                    terminal_edited |= ui.add(egui::DragValue::new(&mut lb.bandwidth_ghz).range(0.1..=200.0).speed(0.1).suffix(" GHz"))
+                                        .on_hover_text("Channel bandwidth — width of the frequency band the modulator occupies")
+                                        .changed();
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("P:");
+                                    terminal_edited |= ui.add(egui::DragValue::new(&mut lb.tx_power_w).range(0.1..=100.0).speed(0.1).suffix(" W"))
+                                        .on_hover_text("Transmit power at the laser aperture")
+                                        .changed();
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("G:");
+                                    terminal_edited |= ui.add(egui::DragValue::new(&mut lb.antenna_gain_dbi).range(30.0..=130.0).speed(0.5).suffix(" dBi"))
+                                        .on_hover_text("Tx/Rx antenna gain (assumed equal). Higher = narrower beam / larger aperture")
+                                        .changed();
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Nt:");
+                                    terminal_edited |= ui.add(egui::DragValue::new(&mut lb.noise_temp_k).range(50.0..=2000.0).speed(5.0).suffix(" K"))
+                                        .on_hover_text("Receiver noise temperature — sets thermal noise floor N = k·Nt·B")
+                                        .changed();
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("λ:");
+                                    egui::ComboBox::from_id_salt(format!("lambda_{}_{}_{}", tab_idx, planet_idx, cidx))
+                                        .selected_text(format!("{} nm", lb.wavelength_nm as i32))
+                                        .show_ui(ui, |ui| {
+                                            for &nm in &[850.0_f64, 1064.0, 1310.0, 1550.0] {
+                                                terminal_edited |= ui
+                                                    .selectable_value(
+                                                        &mut lb.wavelength_nm,
+                                                        nm,
+                                                        format!("{} nm", nm as i32),
+                                                    )
+                                                    .changed();
+                                            }
+                                        });
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Pidle:");
+                                    terminal_edited |= ui
+                                        .add(
+                                            egui::DragValue::new(&mut lb.terminal_idle_power_w)
+                                                .range(0.0..=500.0)
+                                                .speed(0.5)
+                                                .suffix(" W"),
+                                        )
+                                        .on_hover_text(
+                                            "Electrical standby draw of the optical terminal payload",
+                                        )
+                                        .changed();
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Pact:");
+                                    terminal_edited |= ui
+                                        .add(
+                                            egui::DragValue::new(&mut lb.terminal_active_power_w)
+                                                .range(0.0..=1000.0)
+                                                .speed(0.5)
+                                                .suffix(" W"),
+                                        )
+                                        .on_hover_text(
+                                            "Additional electrical draw when ISLs are enabled; \
+                                             this is currently a constellation-level approximation, \
+                                             not per-link or per-transmitter power",
+                                        )
+                                        .changed();
+                                });
+                            }
+                            if terminal_edited {
+                                cons.optical_terminal_preset = OpticalTerminalPreset::Custom;
+                            }
+                            ui.small(
+                                "Pact is modeled as an added terminal load whenever ISLs are \
+                                 enabled on the constellation. It is not yet scaled by the number \
+                                 of active links.",
+                            );
+                            if let Some(note) = cons.optical_terminal_preset_note() {
+                                ui.small(note);
+                            }
+                            let c1 = cons.link_budget.capacity_bps(1000.0) / 1e9;
+                            let c3 = cons.link_budget.capacity_bps(3000.0) / 1e9;
+                            let c5 = cons.link_budget.capacity_bps(5000.0) / 1e9;
                             ui.label(format!("Shannon C @ 1000 / 3000 / 5000 km: {:.1} / {:.1} / {:.1} Gbps", c1, c3, c5));
                         });
                     }
@@ -3180,6 +3279,12 @@ impl ViewerState {
                         planet_radius,
                         alt,
                         seed,
+                        constellation.link_budget.terminal_idle_power_w
+                            + if constellation.isl_neighbors > 0 {
+                                constellation.link_budget.terminal_active_power_w
+                            } else {
+                                0.0
+                            },
                     );
                 }
             }

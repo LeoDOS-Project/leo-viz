@@ -1,2 +1,5 @@
 target/
 dist/.stage/
+dist/
+
+.DS_Store

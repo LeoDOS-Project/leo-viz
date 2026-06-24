@@ -115,13 +115,15 @@ pub(crate) fn update_power(
     config: &PhysicsConfig,
     dt: f64,
     eclipsed: bool,
+    extra_load_w: f64,
 ) {
     let can_charge = config.power_device_type == PowerDeviceType::Rtg || !eclipsed;
     if can_charge {
         state.battery_ws =
             (state.battery_ws + config.charging_rate_w * dt).min(config.max_battery_ws);
     }
-    state.battery_ws = (state.battery_ws - config.idle_power_w * dt).max(0.0);
+    let total_load_w = config.idle_power_w + extra_load_w;
+    state.battery_ws = (state.battery_ws - total_load_w * dt).max(0.0);
 }
 
 pub(crate) fn update_thermal(
@@ -131,6 +133,7 @@ pub(crate) fn update_thermal(
     eclipsed: bool,
     altitude_km: f64,
     planet_radius: f64,
+    extra_load_w: f64,
 ) {
     let eclipse_f = if eclipsed { 0.0 } else { 1.0 };
 
@@ -154,7 +157,7 @@ pub(crate) fn update_thermal(
         * DEFAULT_BODY_SURFACE_TEMP.powi(4)
         * view_factor;
 
-    let q_activity = config.heat_ratio * config.idle_power_w;
+    let q_activity = config.heat_ratio * (config.idle_power_w + extra_load_w);
 
     let thermal_mass = config.mass_kg * config.thermal_capacity;
     let max_step = 10.0;
@@ -210,16 +213,25 @@ pub(crate) fn update_satellite(
     planet_radius: f64,
     altitude_km: f64,
     seed: u64,
+    extra_load_w: f64,
 ) {
     if state.is_dead {
         return;
     }
     let eclipsed = is_eclipsed(sat_pos, sun_dir, planet_radius);
     if config.power_enabled {
-        update_power(state, config, dt, eclipsed);
+        update_power(state, config, dt, eclipsed, extra_load_w);
     }
     if config.thermal_enabled {
-        update_thermal(state, config, dt, eclipsed, altitude_km, planet_radius);
+        update_thermal(
+            state,
+            config,
+            dt,
+            eclipsed,
+            altitude_km,
+            planet_radius,
+            extra_load_w,
+        );
     }
     if config.radiation_enabled {
         update_radiation(state, config, dt, seed);
