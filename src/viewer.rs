@@ -494,7 +494,7 @@ impl ViewerState {
 
     pub(crate) fn presentation_uses_dark_mode_for_tab(&self, tab_idx: usize) -> Option<bool> {
         let slide_number = self.presentation_slide_number_for_tab(tab_idx)?;
-        Some(slide_number >= 73)
+        Some(slide_number >= 78)
     }
 
     fn presentation_slide_uri_for_tab(&self, tab_idx: usize) -> Option<String> {
