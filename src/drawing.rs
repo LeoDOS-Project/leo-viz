@@ -763,13 +763,14 @@ pub fn draw_routing_path(
     plot_ui: &mut egui_plot::PlotUi,
     path: &[(usize, usize)],
     positions: &[SatelliteState],
+    link_budget: crate::config::LinkBudget,
     rotation: &Matrix3<f64>,
     color: egui::Color32,
     width: f32,
     hide_behind_earth: bool,
     earth_r_sq: f64,
-    show_distance: bool,
-    path_distance_labels: &mut Vec<([f64; 2], String)>,
+    show_info: bool,
+    path_info_labels: &mut Vec<([f64; 2], String)>,
 ) {
     if path.len() < 2 {
         return;
@@ -823,9 +824,9 @@ pub fn draw_routing_path(
         }
     }
 
-    if show_distance {
-        if let Some(label) = path_distance_label(path, positions, rotation) {
-            path_distance_labels.push(label);
+    if show_info {
+        if let Some(label) = path_info_label(path, positions, link_budget, rotation) {
+            path_info_labels.push(label);
         }
     }
 }
@@ -1005,25 +1006,34 @@ fn draw_spacecomp_flow_path(
     }
 }
 
-fn path_distance_label(
+fn path_info_label(
     path: &[(usize, usize)],
     positions: &[SatelliteState],
+    link_budget: crate::config::LinkBudget,
     rotation: &Matrix3<f64>,
 ) -> Option<([f64; 2], String)> {
-    let Some((distance_km, [x, y])) = path_distance_and_midpoint(path, positions, rotation) else {
+    let Some((distance_km, bottleneck_bps, [x, y])) =
+        path_info_and_midpoint(path, positions, link_budget, rotation)
+    else {
         return None;
     };
-    let label = format!("{:.0} km", distance_km);
+    let label = format!(
+        "{:.0} km\nShannon C: {}",
+        distance_km,
+        format_capacity(bottleneck_bps)
+    );
     Some(([x, y], label))
 }
 
-fn path_distance_and_midpoint(
+fn path_info_and_midpoint(
     path: &[(usize, usize)],
     positions: &[SatelliteState],
+    link_budget: crate::config::LinkBudget,
     rotation: &Matrix3<f64>,
-) -> Option<(f64, [f64; 2])> {
+) -> Option<(f64, f64, [f64; 2])> {
     let mut segments: Vec<(f64, [f64; 2], [f64; 2])> = Vec::new();
     let mut total = 0.0;
+    let mut bottleneck_bps = f64::INFINITY;
     for w in path.windows(2) {
         let a = positions
             .iter()
@@ -1038,23 +1048,40 @@ fn path_distance_and_midpoint(
         if len <= 1e-9 {
             continue;
         }
+        bottleneck_bps = bottleneck_bps.min(link_budget.capacity_bps(len));
         let (ax, ay, _) = rotate_point_matrix(a.x, a.y, a.z, rotation);
         let (bx, by, _) = rotate_point_matrix(b.x, b.y, b.z, rotation);
         segments.push((len, [ax, ay], [bx, by]));
         total += len;
     }
-    if total <= 1e-9 {
+    if total <= 1e-9 || !bottleneck_bps.is_finite() {
         return None;
     }
     let mut remaining = total * 0.5;
     for (len, a, b) in segments {
         if remaining <= len {
             let t = remaining / len;
-            return Some((total, [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]));
+            return Some((
+                total,
+                bottleneck_bps,
+                [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t],
+            ));
         }
         remaining -= len;
     }
     None
+}
+
+fn format_capacity(bps: f64) -> String {
+    if bps >= 1e9 {
+        format!("{:.1} Gbps", bps / 1e9)
+    } else if bps >= 1e6 {
+        format!("{:.0} Mbps", bps / 1e6)
+    } else if bps >= 1e3 {
+        format!("{:.0} kbps", bps / 1e3)
+    } else {
+        format!("{:.0} bps", bps)
+    }
 }
 
 pub struct Draw3dInput<'a> {
@@ -1176,7 +1203,7 @@ pub fn draw_3d_view(
         dark_mode,
         show_routing_paths,
         show_proxy_links,
-        show_path_distance,
+        show_path_info,
         show_manhattan_path,
         show_shortest_path,
         show_radiation_path,
@@ -1438,7 +1465,7 @@ pub fn draw_3d_view(
     let mut surface_labels: Vec<([f64; 2], String, egui::Color32, bool, usize)> = Vec::new();
     let mut device_cluster_labels: Vec<([f64; 2], usize, egui::Color32)> = Vec::new();
     let mut spacecomp_role_labels: Vec<([f64; 2], &'static str, egui::Color32)> = Vec::new();
-    let mut path_distance_labels: Vec<([f64; 2], String)> = Vec::new();
+    let mut path_info_labels: Vec<([f64; 2], String)> = Vec::new();
     let mut hover_isl_segments: Vec<(
         [f64; 2],
         [f64; 2],
@@ -3381,13 +3408,14 @@ pub fn draw_3d_view(
                                 plot_ui,
                                 &path,
                                 positions,
+                                constellation.link_budget,
                                 &satellite_rotation,
                                 manhattan_color,
                                 scaled_routing_width,
                                 hide_behind_earth,
                                 earth_r_sq,
-                                show_path_distance,
-                                &mut path_distance_labels,
+                                show_path_info,
+                                &mut path_info_labels,
                             );
                         }
 
@@ -3406,13 +3434,14 @@ pub fn draw_3d_view(
                                 plot_ui,
                                 &path,
                                 positions,
+                                constellation.link_budget,
                                 &satellite_rotation,
                                 shortest_color,
                                 scaled_routing_width,
                                 hide_behind_earth,
                                 earth_r_sq,
-                                show_path_distance,
-                                &mut path_distance_labels,
+                                show_path_info,
+                                &mut path_info_labels,
                             );
                         }
 
@@ -3434,13 +3463,14 @@ pub fn draw_3d_view(
                                 plot_ui,
                                 &path,
                                 positions,
+                                constellation.link_budget,
                                 &satellite_rotation,
                                 radiation_color,
                                 scaled_routing_width,
                                 hide_behind_earth,
                                 earth_r_sq,
-                                show_path_distance,
-                                &mut path_distance_labels,
+                                show_path_info,
+                                &mut path_info_labels,
                             );
                         }
                     }
@@ -3641,13 +3671,14 @@ pub fn draw_3d_view(
                                         plot_ui,
                                         &path,
                                         gs_positions,
+                                        gs_cons.link_budget,
                                         &satellite_rotation,
                                         path_color,
                                         routing_width,
                                         hide_behind_earth,
                                         earth_r_sq,
-                                        show_path_distance,
-                                        &mut path_distance_labels,
+                                        show_path_info,
+                                        &mut path_info_labels,
                                     );
                                 } else {
                                     let (rx1, ry1, rz1) = rotate_point_matrix(
@@ -3997,14 +4028,15 @@ pub fn draw_3d_view(
                                     }
                                 }
 
-                                if show_path_distance {
+                                if show_path_info {
                                     for (path, _, _) in &all_paths {
-                                        if let Some(label) = path_distance_label(
+                                        if let Some(label) = path_info_label(
                                             path,
                                             positions,
+                                            cons.link_budget,
                                             &satellite_rotation,
                                         ) {
-                                            path_distance_labels.push(label);
+                                            path_info_labels.push(label);
                                         }
                                     }
                                 }
@@ -4929,7 +4961,7 @@ pub fn draw_3d_view(
     }
 
     let label_font_size = (14.0 * zoom as f32).clamp(10.0, 28.0);
-    for (pos, text) in &path_distance_labels {
+    for (pos, text) in &path_info_labels {
         let plot_pt = egui_plot::PlotPoint::new(pos[0], pos[1]);
         let screen_pos = response.transform.position_from_point(&plot_pt);
         let galley = ui.painter().layout_no_wrap(

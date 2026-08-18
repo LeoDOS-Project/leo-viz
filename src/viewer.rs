@@ -4120,7 +4120,7 @@ impl ViewerState {
         let dark_mode = self.dark_mode;
         let show_routing_paths = settings.show_routing_paths;
         let show_proxy_links = settings.show_routing_paths && settings.show_proxy_links;
-        let show_path_distance = settings.show_path_distance;
+        let show_path_info = settings.show_path_info;
         let show_manhattan_path = settings.show_manhattan_path;
         let show_shortest_path = settings.show_shortest_path;
         let show_radiation_path = settings.show_radiation_path;
@@ -4263,7 +4263,7 @@ impl ViewerState {
                             dark_mode,
                             show_routing_paths,
                             show_proxy_links,
-                            show_path_distance,
+                            show_path_info,
                             show_manhattan_path,
                             show_shortest_path,
                             show_radiation_path,
