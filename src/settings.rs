@@ -523,12 +523,15 @@ impl ViewerState {
                     .on_hover_text("Visualize routing algorithms between ground stations");
                 if !s.show_routing_paths {
                     s.show_proxy_links = false;
+                    s.show_link_info = false;
                 }
                 ui.indent("routing_opts", |ui| {
                     ui.add_enabled(on && s.show_routing_paths, egui::Checkbox::new(&mut s.show_proxy_links, "Show proxy links"))
                         .on_hover_text("For selected satellites in different shells: draw a link if the outer satellite covers the inner one (within its cone)");
                     ui.add_enabled(on && s.show_routing_paths, egui::Checkbox::new(&mut s.show_path_info, "Show path info"))
                         .on_hover_text("Show total distance and bottleneck Shannon capacity at the center of each routing path");
+                    ui.add_enabled(on && s.show_routing_paths, egui::Checkbox::new(&mut s.show_link_info, "Show link info"))
+                        .on_hover_text("Show distance and Shannon capacity for each routing hop");
                     ui.add_enabled(on && s.show_routing_paths, egui::Checkbox::new(&mut s.show_manhattan_path, "Manhattan (red)"))
                         .on_hover_text("Grid-based hop-by-hop routing path");
                     ui.add_enabled(on && s.show_routing_paths, egui::Checkbox::new(&mut s.show_shortest_path, "Shortest distance (green)"))

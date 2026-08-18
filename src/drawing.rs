@@ -770,6 +770,7 @@ pub fn draw_routing_path(
     hide_behind_earth: bool,
     earth_r_sq: f64,
     show_info: bool,
+    show_link_info: bool,
     path_info_labels: &mut Vec<([f64; 2], String)>,
 ) {
     if path.len() < 2 {
@@ -788,6 +789,8 @@ pub fn draw_routing_path(
             .find(|s| s.plane == plane2 && s.sat_index == sat2);
 
         if let (Some(p1), Some(p2)) = (pos1, pos2) {
+            let link_distance_km =
+                ((p2.x - p1.x).powi(2) + (p2.y - p1.y).powi(2) + (p2.z - p1.z).powi(2)).sqrt();
             let (rx1, ry1, rz1) = rotate_point_matrix(p1.x, p1.y, p1.z, rotation);
             let (rx2, ry2, rz2) = rotate_point_matrix(p2.x, p2.y, p2.z, rotation);
 
@@ -803,6 +806,15 @@ pub fn draw_routing_path(
                             .color(color)
                             .width(width),
                     );
+                    if show_link_info {
+                        push_link_info_label(
+                            path_info_labels,
+                            link_distance_km,
+                            link_budget,
+                            p1,
+                            p2,
+                        );
+                    }
                 }
             } else {
                 let line_color = if visible1 && visible2 {
@@ -820,6 +832,15 @@ pub fn draw_routing_path(
                         .color(line_color)
                         .width(width),
                 );
+                if show_link_info {
+                    push_link_info_label(
+                        path_info_labels,
+                        link_distance_km,
+                        link_budget,
+                        [rx1, ry1],
+                        [rx2, ry2],
+                    );
+                }
             }
         }
     }
@@ -1025,6 +1046,30 @@ fn path_info_label(
     Some(([x, y], label))
 }
 
+fn push_link_info_label(
+    labels: &mut Vec<([f64; 2], String)>,
+    distance_km: f64,
+    link_budget: crate::config::LinkBudget,
+    start: [f64; 2],
+    end: [f64; 2],
+) {
+    if distance_km <= 1e-9 {
+        return;
+    }
+    let capacity_bps = link_budget.capacity_bps(distance_km);
+    if !capacity_bps.is_finite() {
+        return;
+    }
+    labels.push((
+        [(start[0] + end[0]) * 0.5, (start[1] + end[1]) * 0.5],
+        format!(
+            "{:.0} km\nShannon C: {}",
+            distance_km,
+            format_capacity(capacity_bps)
+        ),
+    ));
+}
+
 fn path_info_and_midpoint(
     path: &[(usize, usize)],
     positions: &[SatelliteState],
@@ -1204,6 +1249,7 @@ pub fn draw_3d_view(
         show_routing_paths,
         show_proxy_links,
         show_path_info,
+        show_link_info,
         show_manhattan_path,
         show_shortest_path,
         show_radiation_path,
@@ -3415,6 +3461,7 @@ pub fn draw_3d_view(
                                 hide_behind_earth,
                                 earth_r_sq,
                                 show_path_info,
+                                show_link_info,
                                 &mut path_info_labels,
                             );
                         }
@@ -3441,6 +3488,7 @@ pub fn draw_3d_view(
                                 hide_behind_earth,
                                 earth_r_sq,
                                 show_path_info,
+                                show_link_info,
                                 &mut path_info_labels,
                             );
                         }
@@ -3470,6 +3518,7 @@ pub fn draw_3d_view(
                                 hide_behind_earth,
                                 earth_r_sq,
                                 show_path_info,
+                                show_link_info,
                                 &mut path_info_labels,
                             );
                         }
@@ -3678,6 +3727,7 @@ pub fn draw_3d_view(
                                         hide_behind_earth,
                                         earth_r_sq,
                                         show_path_info,
+                                        show_link_info,
                                         &mut path_info_labels,
                                     );
                                 } else {
@@ -3947,6 +3997,10 @@ pub fn draw_3d_view(
                                             .iter()
                                             .find(|s| s.plane == w[1].0 && s.sat_index == w[1].1);
                                         if let (Some(p1), Some(p2)) = (pos1, pos2) {
+                                            let link_distance_km = ((p2.x - p1.x).powi(2)
+                                                + (p2.y - p1.y).powi(2)
+                                                + (p2.z - p1.z).powi(2))
+                                            .sqrt();
                                             let (rx1, ry1, rz1) = rotate_point_matrix(
                                                 p1.x,
                                                 p1.y,
@@ -3970,17 +4024,25 @@ pub fn draw_3d_view(
                                                     rx1, ry1, rz1, visible1, rx2, ry2, rz2,
                                                     visible2, earth_r_sq,
                                                 ) {
+                                                    let start = [cp1[0] + nx, cp1[1] + ny];
+                                                    let end = [cp2[0] + nx, cp2[1] + ny];
                                                     plot_ui.line(
                                                         Line::new(
                                                             "",
-                                                            PlotPoints::new(vec![
-                                                                [cp1[0] + nx, cp1[1] + ny],
-                                                                [cp2[0] + nx, cp2[1] + ny],
-                                                            ]),
+                                                            PlotPoints::new(vec![start, end]),
                                                         )
                                                         .color(*color)
                                                         .width(routing_width),
                                                     );
+                                                    if show_link_info {
+                                                        push_link_info_label(
+                                                            &mut path_info_labels,
+                                                            link_distance_km,
+                                                            cons.link_budget,
+                                                            start,
+                                                            end,
+                                                        );
+                                                    }
                                                 }
                                             } else {
                                                 let line_color = if visible1 && visible2 {
@@ -3993,17 +4055,25 @@ pub fn draw_3d_view(
                                                         150,
                                                     )
                                                 };
+                                                let start = [rx1 + nx, ry1 + ny];
+                                                let end = [rx2 + nx, ry2 + ny];
                                                 plot_ui.line(
                                                     Line::new(
                                                         "",
-                                                        PlotPoints::new(vec![
-                                                            [rx1 + nx, ry1 + ny],
-                                                            [rx2 + nx, ry2 + ny],
-                                                        ]),
+                                                        PlotPoints::new(vec![start, end]),
                                                     )
                                                     .color(line_color)
                                                     .width(routing_width),
                                                 );
+                                                if show_link_info {
+                                                    push_link_info_label(
+                                                        &mut path_info_labels,
+                                                        link_distance_km,
+                                                        cons.link_budget,
+                                                        start,
+                                                        end,
+                                                    );
+                                                }
                                             }
                                         }
                                     }
