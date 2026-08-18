@@ -9,6 +9,8 @@ use crate::walker::WalkerType;
 use crate::{App, ViewerState};
 use egui_dock::DockState;
 
+const ISL_LINK_CAPACITY_TITLE: &str = "ISL Link Capacity with Bandwidth 10 GHz, Transmit Power 2 W, Antenna Gain 82.5 dBi, Wavelength 1550 nm";
+
 pub fn inclination_demo(v: &mut ViewerState) {
     v.tab_counter += 1;
     let mut tab = TabConfig::new_empty("Inclination: 90° vs 60°".to_string());
@@ -520,6 +522,37 @@ fn routing_demo(v: &mut ViewerState) {
         });
     tab.planets.push(planet);
     v.tabs.push(tab);
+}
+
+fn routing_capacity_demo(v: &mut ViewerState) {
+    routing_demo(v);
+
+    let Some(tab) = v.tabs.last_mut() else {
+        return;
+    };
+
+    tab.name = "ISL Link Capacity".to_string();
+    tab.title = "ISL Link Capacity".to_string();
+    tab.description = indoc::indoc! {"
+            The same routing path, with per-hop link capacity shown from a modern optical ISL link budget.
+        "}
+    .to_string();
+    tab.settings.show_link_info = true;
+
+    if let Some(planet) = tab.planets.first_mut() {
+        planet.name = ISL_LINK_CAPACITY_TITLE.to_string();
+        if let Some(cons) = planet.constellations.first_mut() {
+            cons.link_budget = crate::config::LinkBudget {
+                bandwidth_ghz: 10.0,
+                tx_power_w: 2.0,
+                antenna_gain_dbi: 82.5,
+                noise_temp_k: 300.0,
+                wavelength_nm: 1550.0,
+                terminal_idle_power_w: 0.0,
+                terminal_active_power_w: 0.0,
+            };
+        }
+    }
 }
 
 fn kessler_demo(v: &mut ViewerState) {
@@ -1290,6 +1323,29 @@ impl Presentation {
 fn spacecomp_simulation_tabs(v: &mut ViewerState, slide_numbers: std::ops::Range<usize>) {
     for slide_number in slide_numbers {
         spacecomp_presentation_demo_tab(v, slide_number);
+        if slide_number == 41 {
+            spacecomp_presentation_capacity_demo_tab(v, slide_number);
+        }
+    }
+}
+
+fn spacecomp_presentation_capacity_demo_tab(v: &mut ViewerState, slide_number: usize) {
+    routing_capacity_demo(v);
+
+    if let Some(tab) = v.tabs.last_mut() {
+        tab.name = format!("Slide {}", slide_number);
+        tab.title = String::new();
+        tab.description = String::new();
+        tab.presentation_slide_number = Some(slide_number);
+        set_planet_names(tab, &[ISL_LINK_CAPACITY_TITLE]);
+        if let Some(planet) = tab.planets.first_mut() {
+            if let Some(camera) = planet.satellite_cameras.get_mut(0) {
+                camera.label = "Source".to_string();
+            }
+            if let Some(camera) = planet.satellite_cameras.get_mut(1) {
+                camera.label = "Destination".to_string();
+            }
+        }
     }
 }
 
