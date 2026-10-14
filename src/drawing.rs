@@ -5762,11 +5762,7 @@ pub fn draw_3d_view(
                                     *camera_id_counter += 1;
                                     pending_cameras.push(SatelliteCamera {
                                         id: *camera_id_counter,
-                                        label: format!(
-                                            "Sat {}-{}",
-                                            sat.plane + 1,
-                                            sat.sat_index + 1
-                                        ),
+                                        label: format!("P{}:S{}", sat.plane, sat.sat_index),
                                         constellation_idx: *orig_idx,
                                         plane: sat.plane,
                                         sat_index: sat.sat_index,
@@ -7160,7 +7156,7 @@ pub fn draw_torus(
                                 *camera_id_counter += 1;
                                 pending_cameras.push(SatelliteCamera {
                                     id: *camera_id_counter,
-                                    label: format!("Sat {}-{}", sat.plane + 1, sat.sat_index + 1),
+                                    label: format!("P{}:S{}", sat.plane, sat.sat_index),
                                     constellation_idx: *orig_idx,
                                     plane: sat.plane,
                                     sat_index: sat.sat_index,
