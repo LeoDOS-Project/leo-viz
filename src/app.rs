@@ -757,7 +757,6 @@ impl eframe::App for App {
         }
 
         self.simulation_ui.show(ctx, &self.viewer);
-        #[cfg(not(target_arch = "wasm32"))]
         self.viewer.aoi_generator.poll(ctx);
         self.viewer.revisit.show(ctx, &self.viewer.tabs[self.viewer.active_tab_idx], self.viewer.start_timestamp);
         let v = &mut self.viewer;

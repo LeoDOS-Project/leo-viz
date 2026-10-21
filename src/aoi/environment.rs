@@ -1,5 +1,5 @@
 //! Independent settings and overlays for geographic sampling sources.
-use super::preview::Preview;
+use super::{data, generate, preview::Preview};
 use eframe::egui;
 use std::sync::Arc;
 
@@ -22,7 +22,7 @@ pub(super) struct Source {
     compactness: f64,
     latitude: f64,
     tile_edge: f64,
-    data_dir: String,
+    dataset: data::Input,
 }
 
 impl Source {
@@ -46,25 +46,44 @@ impl Source {
             compactness: 0.7,
             latitude: 70.0,
             tile_edge: 0.1,
-            data_dir: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tools/leo-aoi/data/environment")
-                .to_string_lossy()
-                .into_owned(),
+            dataset: data::Input {
+                path: format!("assets/aois/{kind}.aoi-data.json.gz"),
+                bytes: None,
+            },
         }
     }
 
-    fn request(&self) -> serde_json::Value {
-        serde_json::json!({"schema_version":1, "environment": {
-            "kind":self.kind, "count":self.count, "seed":self.seed,
-            "mean_area_km2":self.mean_area, "size_ratio":self.size_ratio,
-            "mean_length_km":self.mean_length, "length_ratio":self.length_ratio,
-            "buffer_km":self.buffer, "inland_km":self.inland, "offshore_km":self.offshore,
-            "min_discharge":self.flow, "compactness":self.compactness,
-            "max_latitude":self.latitude, "tile_edge_km":self.tile_edge,
-            "data_dir":self.data_dir}})
+    pub fn accept_drop(&mut self, file: &egui::DroppedFile) {
+        self.dataset.accept_drop(file);
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, busy: bool) -> Option<serde_json::Value> {
+    fn request(&self) -> (generate::Settings, data::Input) {
+        (
+            generate::Settings::Environment(generate::Environment {
+                kind: self.kind,
+                count: self.count,
+                seed: self.seed,
+                mean_area: self.mean_area,
+                size_ratio: self.size_ratio,
+                mean_length: self.mean_length,
+                length_ratio: self.length_ratio,
+                buffer: self.buffer,
+                inland: self.inland,
+                offshore: self.offshore,
+                flow: self.flow,
+                compactness: self.compactness,
+                latitude: self.latitude,
+                tile_edge: self.tile_edge,
+            }),
+            self.dataset.clone(),
+        )
+    }
+
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        busy: bool,
+    ) -> Option<(generate::Settings, data::Input)> {
         let mut request = None;
         ui.push_id(self.kind, |ui| {
             ui.heading(self.name);
@@ -109,18 +128,11 @@ impl Source {
                 });
                 ui.small("Sizes are log-uniform; averages are expected values. Overlapping jobs are retained.");
                 ui.collapsing("Dataset cache and geometry", |ui| {
-                    ui.label("Local geographic datasets");
-                    ui.text_edit_singleline(&mut self.data_dir);
+                    self.dataset.ui(ui);
                     ui.horizontal(|ui| { ui.label("Projected tile edge");
                         ui.add(egui::DragValue::new(&mut self.tile_edge).range(0.05..=10.0).speed(0.05).suffix(" km")); });
-                    ui.small("Downloads are cached outside Git. Generation reuses the local cache; finer tiles cost more time and memory.");
                 });
-                let ready = std::path::Path::new(&self.data_dir).join(format!("{}.npz", self.kind)).is_file();
-                ui.small(if ready { "Geographic dataset is ready locally." } else { "First generation downloads and prepares this global dataset." });
-                #[cfg(not(target_arch = "wasm32"))]
                 if ui.button(format!("Generate {}", self.name.to_lowercase())).clicked() { request = Some(self.request()); }
-                #[cfg(target_arch = "wasm32")]
-                ui.label("Generation requires the native app.");
             });
             if let Some(preview) = &self.preview {
                 ui.separator();
@@ -144,7 +156,6 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    #[ignore = "requires prepared environmental datasets and the Python environment"]
     fn environmental_generate_buttons_keep_independent_layers() {
         let ctx = egui::Context::default();
         let mut panel = super::super::AoiGenerator::default();
@@ -174,6 +185,7 @@ mod tests {
             panel.page = index + 1;
             panel.sources[index].count = 3;
             panel.sources[index].seed = 42 + index as u32;
+            panel.sources[index].dataset = data::fixture(panel.sources[index].kind);
             let _ = frame(&mut panel, vec![]);
             let _ = frame(&mut panel, vec![]);
             let out = frame(&mut panel, vec![]);

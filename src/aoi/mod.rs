@@ -1,12 +1,14 @@
-//! Interactive client of tools/leo-aoi. Generated AOIs stay separate from
+//! Native and browser AOI generation. Generated AOIs stay separate from
 //! the circular routing-demo targets and do not acquire application semantics.
 
+mod data;
 mod environment;
+mod generate;
+mod geometry;
 mod gpu;
 mod presets;
 pub(crate) mod preview;
 mod spatial;
-#[cfg(not(target_arch = "wasm32"))]
 mod worker;
 
 use eframe::egui;
@@ -29,24 +31,17 @@ pub(crate) struct AoiGenerator {
     hotspot_count: usize,
     hotspot_spread: f64,
     hotspot_fraction: f64,
-    python: String,
-    demand_path: String,
+    dataset: data::Input,
     error: Option<String>,
     preview_name: &'static str,
     pending_name: &'static str,
-    #[cfg(not(target_arch = "wasm32"))]
     pending: Option<std::sync::mpsc::Receiver<worker::Event>>,
 }
 
 impl Default for AoiGenerator {
     fn default() -> Self {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/leo-aoi");
-        let venv = root.join(if cfg!(windows) {
-            ".venv/Scripts/python.exe"
-        } else {
-            ".venv/bin/python"
-        });
         let defaults = presets::default_settings();
+        debug_assert_eq!(defaults.generation.shape, "rectangle");
         Self {
             jobs: crate::jobs::Panel::default(),
             visible: true,
@@ -68,29 +63,27 @@ impl Default for AoiGenerator {
             hotspot_count: defaults.generation.hotspot_count,
             hotspot_spread: defaults.generation.hotspot_spread_km,
             hotspot_fraction: defaults.generation.hotspot_fraction,
-            python: std::env::var("LEO_AOI_PYTHON").unwrap_or_else(|_| {
-                if venv.is_file() {
-                    venv.to_string_lossy().into_owned()
-                } else {
-                    "python3".into()
-                }
-            }),
-            demand_path: root
-                .join("data/gdp-demand.npz")
-                .to_string_lossy()
-                .into_owned(),
+            dataset: data::Input::default(),
             error: None,
             preview_name: "Generated AOIs",
             pending_name: "Generated AOIs",
-            #[cfg(not(target_arch = "wasm32"))]
             pending: None,
         }
     }
 }
 
 impl AoiGenerator {
-    pub fn jobs_ui(&mut self, ui: &mut egui::Ui, capture: &mut leo_sim::acquisition::CaptureProfile) {
-        let layers = self.preview.iter().chain(self.sources.iter().filter_map(|s| s.preview.as_ref())).cloned().collect();
+    pub fn jobs_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        capture: &mut leo_sim::acquisition::CaptureProfile,
+    ) {
+        let layers = self
+            .preview
+            .iter()
+            .chain(self.sources.iter().filter_map(|s| s.preview.as_ref()))
+            .cloned()
+            .collect();
         self.jobs.ui(ui, layers, capture);
     }
 
@@ -123,12 +116,17 @@ impl AoiGenerator {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui) {
-        #[cfg(not(target_arch = "wasm32"))]
         self.poll(ui.ctx());
-        #[cfg(not(target_arch = "wasm32"))]
         let busy = self.pending.is_some();
-        #[cfg(target_arch = "wasm32")]
-        let busy = false;
+        if !busy {
+            if let Some(file) = ui.ctx().input(|i| i.raw.dropped_files.first().cloned()) {
+                if self.page == 0 {
+                    self.dataset.accept_drop(&file);
+                } else {
+                    self.sources[self.page - 1].accept_drop(&file);
+                }
+            }
+        }
         ui.horizontal_wrapped(|ui| {
             for (index, label) in ["GDP rectangles", "Forests", "Rivers", "Coasts"]
                 .iter()
@@ -142,18 +140,11 @@ impl AoiGenerator {
             self.gdp_ui(ui);
         } else {
             let index = self.page - 1;
-            if let Some(request) = self.sources[index].ui(ui, busy) {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    self.error = None;
-                    self.progress = "Preparing geographic source…".into();
-                    self.pending_source = Some(index);
-                    self.pending = Some(worker::start(
-                        self.python.clone(),
-                        request,
-                        ui.ctx().clone(),
-                    ));
-                }
+            if let Some((settings, dataset)) = self.sources[index].ui(ui, busy) {
+                self.error = None;
+                self.progress = "Preparing geographic source…".into();
+                self.pending_source = Some(index);
+                self.pending = Some(worker::start(settings, dataset, ui.ctx().clone()));
             }
             if let Some(error) = &self.error {
                 ui.colored_label(egui::Color32::LIGHT_RED, error);
@@ -185,12 +176,8 @@ impl AoiGenerator {
     fn gdp_ui(&mut self, ui: &mut egui::Ui) {
         let context = ui.ctx().clone();
         let ctx = &context;
-        #[cfg(not(target_arch = "wasm32"))]
         self.poll(ctx);
-        #[cfg(not(target_arch = "wasm32"))]
         let busy = self.pending.is_some();
-        #[cfg(target_arch = "wasm32")]
-        let busy = false;
 
         ui.push_id("aoi-generator", |ui| {
                 ui.add_enabled_ui(!busy, |ui| {
@@ -199,7 +186,6 @@ impl AoiGenerator {
                         ui.strong(presets::DEFAULT_JOBS);
                         if ui.button("Load preset").clicked() { self.load_default_jobs(ctx); }
                     });
-                    ui.small("50,000 saved GDP-weighted rectangles. Loads without Python.");
                 });
                 ui.separator();
                 ui.label("Generate rectangular AOIs on Earth. Overlaps are allowed.");
@@ -219,9 +205,9 @@ impl AoiGenerator {
                             ui.end_row();
                             ui.label("Locations");
                             egui::ComboBox::from_id_salt("aoi-location-source")
-                                .selected_text(if self.uniform { "Uniform globe" } else { "Demand dataset" })
+                                .selected_text(if self.uniform { "Uniform globe" } else { "GDP / demand dataset" })
                                 .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut self.uniform, false, "Demand dataset");
+                                    ui.selectable_value(&mut self.uniform, false, "GDP / demand dataset");
                                     ui.selectable_value(&mut self.uniform, true, "Uniform globe");
                                 });
                             ui.end_row();
@@ -244,14 +230,9 @@ impl AoiGenerator {
                             });
                         });
                     });
-                    ui.collapsing("Data and runtime", |ui| {
-                        ui.label("Demand field (.npz)");
-                        ui.add_enabled(!self.uniform, egui::TextEdit::singleline(&mut self.demand_path)
-                            .desired_width(f32::INFINITY));
-                        ui.small("Defaults to the ingested GDP grid. Any leo-aoi demand field works.");
-                        ui.label("Python executable");
-                        ui.add(egui::TextEdit::singleline(&mut self.python).desired_width(f32::INFINITY));
-                        ui.small("Setup instructions: tools/leo-aoi/README.md");
+                    ui.collapsing("Dataset", |ui| {
+                        ui.add_enabled_ui(!self.uniform, |ui| self.dataset.ui(ui));
+                        if self.dataset.path.is_empty() { ui.label("Bundled GDP 2024"); }
                     });
                     // Keep the batch generator's 100 m projected tile grid.
                     let valid_size = minimum >= 0.01;
@@ -259,12 +240,9 @@ impl AoiGenerator {
                         ui.colored_label(egui::Color32::YELLOW,
                             "Increase average area or reduce the size range: smallest AOI is below one tile (0.01 km²).");
                     }
-                    #[cfg(not(target_arch = "wasm32"))]
                     if ui.add_enabled(valid_size, egui::Button::new("Generate")).clicked() {
                         self.start(ctx);
                     }
-                    #[cfg(target_arch = "wasm32")]
-                    ui.label("Generation requires the native desktop app and the Python AOI tool.");
                 });
                 if let Some(error) = &self.error { ui.colored_label(egui::Color32::LIGHT_RED, error); }
                 if let Some(preview) = &self.preview {
@@ -290,48 +268,32 @@ impl AoiGenerator {
         self.hotspot_count = defaults.generation.hotspot_count;
         self.hotspot_spread = defaults.generation.hotspot_spread_km;
         self.hotspot_fraction = defaults.generation.hotspot_fraction;
-        self.demand_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tools/leo-aoi/data/gdp-demand.npz")
-            .to_string_lossy()
-            .into_owned();
+        self.dataset = data::Input::default();
         self.error = None;
         self.pending_source = None;
         self.progress = "Loading Default Jobs…".into();
         self.pending_name = presets::DEFAULT_JOBS;
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.pending = Some(worker::load_default_jobs(_ctx.clone()));
-        }
-        #[cfg(target_arch = "wasm32")]
-        match presets::load_default_jobs() {
-            Ok(preview) => {
-                self.preview = Some(Arc::new(preview));
-                self.preview_name = presets::DEFAULT_JOBS;
-                self.visible = true;
-            }
-            Err(error) => self.error = Some(error),
-        }
+        self.pending = Some(worker::load_default_jobs(_ctx.clone()));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn start(&mut self, ctx: &egui::Context) {
-        let request = serde_json::json!({
-            "schema_version": 1,
-            "demand_path": if self.uniform { None } else { Some(&self.demand_path) },
-            "mean_area_km2": self.mean_area, "size_ratio": self.size_ratio,
-            "generation": {"count": self.count, "seed": self.seed, "tile_edge_km": 0.1,
-                "shape": presets::default_settings().generation.shape,
-                "hotspot_count": self.hotspot_count, "hotspot_spread_km": self.hotspot_spread,
-                "hotspot_fraction": self.hotspot_fraction}
+        let settings = generate::Settings::Gdp(generate::Gdp {
+            count: self.count,
+            seed: self.seed,
+            mean_area: self.mean_area,
+            size_ratio: self.size_ratio,
+            uniform: self.uniform,
+            hotspot_count: self.hotspot_count,
+            hotspot_spread: self.hotspot_spread,
+            hotspot_fraction: self.hotspot_fraction,
         });
         self.error = None;
         self.pending_source = None;
         self.progress = "Generating GDP rectangles…".into();
         self.pending_name = "Generated AOIs";
-        self.pending = Some(worker::start(self.python.clone(), request, ctx.clone()));
+        self.pending = Some(worker::start(settings, self.dataset.clone(), ctx.clone()));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn poll(&mut self, ctx: &egui::Context) {
         use std::sync::mpsc::TryRecvError;
         loop {
@@ -415,7 +377,6 @@ mod tests {
         assert!(text_position(shapes, "Default Jobs").is_some());
         assert!(text_position(shapes, "Load preset").is_some());
         assert!(text_position(shapes, "Average area").is_some());
-        #[cfg(not(target_arch = "wasm32"))]
         assert!(text_position(shapes, "Generate").is_some());
         let (lo, hi) = panel.bounds();
         assert!(((hi - lo) / (hi / lo).ln() - panel.mean_area).abs() < 1e-9);
@@ -433,8 +394,7 @@ mod tests {
         assert_eq!(panel.hotspot_count, 600);
         assert_eq!(panel.hotspot_spread, 100.0);
         assert_eq!(panel.hotspot_fraction, 0.4);
-        panel.python = "/nonexistent/python".into();
-        panel.demand_path = "/nonexistent/demand.npz".into();
+        panel.dataset.path = "/nonexistent/demand.aoi-data.json.gz".into();
         panel.count = 1;
         panel.visible = false;
         let frame = |panel: &mut AoiGenerator, events| {
@@ -493,7 +453,6 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    #[ignore = "requires the leo-aoi Python environment"]
     fn clicking_generate_finishes_in_background_and_closing_keeps_overlay() {
         let ctx = egui::Context::default();
         let mut panel = AoiGenerator::default();

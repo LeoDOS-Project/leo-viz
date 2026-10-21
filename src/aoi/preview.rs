@@ -3,7 +3,7 @@ use crate::globe_overlay::{front_segment, line_quad, project_surface};
 use eframe::egui::{self, Color32, Mesh, Rect, Shape};
 use egui_plot::{PlotBounds, PlotGeometry, PlotItem, PlotItemBase, PlotPoint, PlotTransform};
 use nalgebra::{Matrix3, Vector3};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     ops::RangeInclusive,
     sync::{Arc, Mutex, OnceLock},
@@ -20,24 +20,24 @@ struct Config {
     seed: u32,
     count: usize,
 }
-#[derive(Deserialize)]
-struct Record {
+#[derive(Deserialize, Serialize)]
+pub(super) struct Record {
     #[serde(default)]
-    id: String,
-    anchor_lon: f64,
-    anchor_lat: f64,
-    area_km2: f64,
-    geometry: Geometry,
+    pub id: String,
+    pub anchor_lon: f64,
+    pub anchor_lat: f64,
+    pub area_km2: f64,
+    pub geometry: Geometry,
     #[serde(default)]
-    source_kind: String,
+    pub source_kind: String,
     #[serde(default)]
-    path_truncated: bool,
+    pub path_truncated: bool,
     #[serde(default)]
-    path_length_km: Option<f64>,
+    pub path_length_km: Option<f64>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(tag = "type", content = "coordinates")]
-enum Geometry {
+pub(super) enum Geometry {
     Polygon(Vec<Vec<[f64; 2]>>),
     MultiPolygon(Vec<Vec<Vec<[f64; 2]>>>),
 }
@@ -177,20 +177,35 @@ impl Preview {
         {
             return Err("Invalid AOI response version or count".into());
         }
-        let mut preview = Self {
-            aois: Vec::with_capacity(doc.aois.len()),
-            count: doc.aois.len(),
+        let mut preview = Self::empty(doc.config.count, doc.config.seed);
+        let mut identifiers = std::collections::HashSet::new();
+        for aoi in doc.aois {
+            preview.push_record(aoi)?;
+            if !identifiers.insert(preview.aois.last().unwrap().key()) {
+                return Err("Duplicate AOI identifier".into());
+            }
+        }
+        Ok(preview.finish())
+    }
+
+    pub(super) fn empty(count: usize, seed: u32) -> Self {
+        Self {
+            aois: Vec::with_capacity(count),
+            count,
             mean_area: 0.0,
             min_area: f64::INFINITY,
             max_area: 0.0,
-            seed: doc.config.seed,
+            seed,
             truncated_paths: 0,
             mean_path_length: None,
-            boundaries: Vec::with_capacity(doc.aois.len()),
+            boundaries: Vec::with_capacity(count),
             spatial: super::spatial::Index::default(),
             mesh_cache: Mutex::new(Vec::new()),
             gpu_geometry: OnceLock::new(),
-        };
+        }
+    }
+
+    pub(super) fn push_record(&mut self, aoi: Record) -> Result<(), String> {
         const COLORS: [[u8; 3]; 6] = [
             [61, 222, 230],
             [255, 190, 86],
@@ -199,79 +214,80 @@ impl Preview {
             [244, 142, 189],
             [235, 226, 136],
         ];
-        let mut identifiers = std::collections::HashSet::new();
-        for (index, aoi) in doc.aois.into_iter().enumerate() {
-            if !aoi.area_km2.is_finite()
-                || aoi.area_km2 <= 0.0
-                || !aoi.anchor_lon.is_finite()
-                || !aoi.anchor_lat.is_finite()
-                || aoi.anchor_lon.abs() > 180.0
-                || aoi.anchor_lat.abs() > 90.0
-            {
-                return Err("Invalid AOI area or anchor".into());
-            }
-            let anchor = unit([aoi.anchor_lon, aoi.anchor_lat]);
-            let polygons = match aoi.geometry {
-                Geometry::Polygon(p) => vec![p],
-                Geometry::MultiPolygon(p) => p,
-            };
-            let rings = polygons
-                .iter()
-                .flatten()
-                .cloned()
-                .map(ring)
-                .collect::<Result<Vec<_>, _>>()?;
-            if rings.is_empty() {
-                return Err("AOI has no boundary".into());
-            }
-            let radius = rings
-                .iter()
-                .flatten()
-                .map(|p| (p - anchor).norm())
-                .fold(0.0, f64::max);
-            let metadata = crate::jobs::model::AoiRef {
-                source: if aoi.source_kind.is_empty() {
-                    "gdp".into()
-                } else {
-                    aoi.source_kind.clone()
-                },
-                id: if aoi.id.is_empty() {
-                    format!("aoi-{index:08}")
-                } else {
-                    aoi.id
-                },
-                area_km2: aoi.area_km2,
-                longitude: aoi.anchor_lon,
-                latitude: aoi.anchor_lat,
-                geometry_hash: crate::jobs::model::hash(&serde_json::to_vec(&polygons).unwrap()),
-            };
-            if !identifiers.insert(metadata.key()) {
-                return Err("Duplicate AOI identifier".into());
-            }
-            preview.aois.push(metadata);
-            preview.boundaries.push(Boundary {
-                anchor,
-                radius,
-                rings: rings.into_iter().map(Detail::new).collect(),
-                polygons,
-                color: match aoi.source_kind.as_str() {
-                    "forest" => [130, 231, 158],
-                    "river" => [61, 222, 230],
-                    "coast" => [255, 190, 86],
-                    _ => COLORS[index % COLORS.len()],
-                },
-            });
-            preview.truncated_paths += usize::from(aoi.path_truncated);
-            if let Some(length) = aoi.path_length_km {
-                if !length.is_finite() || length <= 0.0 {
-                    return Err("Invalid AOI path length".into());
-                }
-                *preview.mean_path_length.get_or_insert(0.0) += length / preview.count as f64;
-            }
-            preview.mean_area += aoi.area_km2 / preview.count as f64;
-            preview.min_area = preview.min_area.min(aoi.area_km2);
-            preview.max_area = preview.max_area.max(aoi.area_km2);
+        let index = self.aois.len();
+        let preview = &mut *self;
+        if !aoi.area_km2.is_finite()
+            || aoi.area_km2 <= 0.0
+            || !aoi.anchor_lon.is_finite()
+            || !aoi.anchor_lat.is_finite()
+            || aoi.anchor_lon.abs() > 180.0
+            || aoi.anchor_lat.abs() > 90.0
+        {
+            return Err("Invalid AOI area or anchor".into());
         }
+        let anchor = unit([aoi.anchor_lon, aoi.anchor_lat]);
+        let polygons = match aoi.geometry {
+            Geometry::Polygon(p) => vec![p],
+            Geometry::MultiPolygon(p) => p,
+        };
+        let rings = polygons
+            .iter()
+            .flatten()
+            .cloned()
+            .map(ring)
+            .collect::<Result<Vec<_>, _>>()?;
+        if rings.is_empty() {
+            return Err("AOI has no boundary".into());
+        }
+        let radius = rings
+            .iter()
+            .flatten()
+            .map(|p| (p - anchor).norm())
+            .fold(0.0, f64::max);
+        let metadata = crate::jobs::model::AoiRef {
+            source: if aoi.source_kind.is_empty() {
+                "gdp".into()
+            } else {
+                aoi.source_kind.clone()
+            },
+            id: if aoi.id.is_empty() {
+                format!("aoi-{index:08}")
+            } else {
+                aoi.id
+            },
+            area_km2: aoi.area_km2,
+            longitude: aoi.anchor_lon,
+            latitude: aoi.anchor_lat,
+            geometry_hash: crate::jobs::model::hash(&serde_json::to_vec(&polygons).unwrap()),
+        };
+        preview.aois.push(metadata);
+        preview.boundaries.push(Boundary {
+            anchor,
+            radius,
+            rings: rings.into_iter().map(Detail::new).collect(),
+            polygons,
+            color: match aoi.source_kind.as_str() {
+                "forest" => [130, 231, 158],
+                "river" => [61, 222, 230],
+                "coast" => [255, 190, 86],
+                _ => COLORS[index % COLORS.len()],
+            },
+        });
+        preview.truncated_paths += usize::from(aoi.path_truncated);
+        if let Some(length) = aoi.path_length_km {
+            if !length.is_finite() || length <= 0.0 {
+                return Err("Invalid AOI path length".into());
+            }
+            *preview.mean_path_length.get_or_insert(0.0) += length / preview.count as f64;
+        }
+        preview.mean_area += aoi.area_km2 / preview.count as f64;
+        preview.min_area = preview.min_area.min(aoi.area_km2);
+        preview.max_area = preview.max_area.max(aoi.area_km2);
+        Ok(())
+    }
+
+    pub(super) fn finish(mut self) -> Self {
+        let preview = &mut self;
         preview.spatial = super::spatial::Index::build(
             &preview
                 .boundaries
@@ -282,7 +298,7 @@ impl Preview {
                 })
                 .collect::<Vec<_>>(),
         );
-        Ok(preview)
+        self
     }
 
     pub(super) fn gpu_geometry(&self) -> Arc<super::gpu::Geometry> {
@@ -299,7 +315,9 @@ impl Preview {
                 });
                 for detail in &boundary.rings {
                     for (level, (error, points)) in detail.levels.iter().enumerate() {
-                        let min_scale = detail.levels.get(level + 1)
+                        let min_scale = detail
+                            .levels
+                            .get(level + 1)
                             .map_or(0.0, |(next_error, _)| (0.7 / next_error) as f32);
                         let max_scale = if *error > 0.0 {
                             (0.7 / error) as f32
@@ -679,7 +697,8 @@ impl PlotItem for Overlay {
                 self.opacity,
                 transform,
             );
-            shapes.push(egui_wgpu::Callback::new_paint_callback(*transform.frame(), callback).into());
+            shapes
+                .push(egui_wgpu::Callback::new_paint_callback(*transform.frame(), callback).into());
         } else {
             shapes.push(Shape::Mesh(self.cached_mesh(transform)));
         }
@@ -716,12 +735,21 @@ mod tests {
     fn gpu_geometry_is_cached_and_keeps_the_cpu_fallback_and_picking() {
         let preview = Arc::new(Preview::from_json(br#"{"schema_version":1,"config":{"seed":42,"count":1},"aois":[{"area_km2":100,"anchor_lon":-90,"anchor_lat":0,"geometry":{"type":"Polygon","coordinates":[[[-91,-1],[-89,-1],[-89,1],[-91,1],[-91,-1]]]}}]}"#).unwrap());
         let geometry = preview.gpu_geometry();
-        let transform = PlotTransform::new(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)),
-            PlotBounds::new_symmetrical(7000.0), [false, false]);
+        let transform = PlotTransform::new(
+            Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)),
+            PlotBounds::new_symmetrical(7000.0),
+            [false, false],
+        );
         let context = egui::Context::default();
         let mut output = context.run_ui(Default::default(), |ui| {
             for angle in [0.0, 0.2, 0.5] {
-                let overlay = Overlay::new(preview.clone(), crate::math::rotation_from_drag(angle, 0.0), 6371.0, 0.0, 0.8);
+                let overlay = Overlay::new(
+                    preview.clone(),
+                    crate::math::rotation_from_drag(angle, 0.0),
+                    6371.0,
+                    0.0,
+                    0.8,
+                );
                 let mut shapes = Vec::new();
                 overlay.with_gpu(true).shapes(ui, &transform, &mut shapes);
                 assert_eq!(shapes.len(), 1);
@@ -843,16 +871,27 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    #[ignore = "requires the leo-aoi Python environment and ingested GDP example"]
     fn real_gdp_generation_and_batched_render() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/leo-aoi");
-        let request = serde_json::json!({"schema_version":1, "demand_path":root.join("data/gdp-demand.npz"),
-            "mean_area_km2":1000, "size_ratio":100,
-            "generation":{"count":10000,"seed":42,"hotspot_count":256,"hotspot_spread_km":10,"hotspot_fraction":0.8}});
         let start = std::time::Instant::now();
-        let preview =
-            super::super::worker::run(root.join(".venv/bin/python").to_str().unwrap(), &request)
-                .unwrap();
+        let mut job = super::super::generate::Job::new(
+            super::super::generate::Settings::Gdp(super::super::generate::Gdp {
+                count: 10000,
+                seed: 42,
+                mean_area: 1000.0,
+                size_ratio: 100.0,
+                uniform: false,
+                hotspot_count: 256,
+                hotspot_spread: 10.0,
+                hotspot_fraction: 0.8,
+            }),
+            Some(super::super::data::Dataset::bundled_gdp().unwrap()),
+        )
+        .unwrap();
+        let preview = loop {
+            if let Some(preview) = job.step().unwrap() {
+                break preview;
+            }
+        };
         assert_eq!(preview.count, 10000);
         assert!((preview.mean_area - 1000.0).abs() < 50.0);
         let generation_time = start.elapsed();

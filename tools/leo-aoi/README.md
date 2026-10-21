@@ -49,7 +49,7 @@ Create `data/` first if no dataset has been downloaded. Outputs are never overwr
 
 ## Visualizer panel
 
-In the native visualizer, open **Earth Observation → AOI Generator** in the right sidebar. Set
+On desktop or in the browser, open **Earth Observation → AOI Generator** in the right sidebar. Set
 the **GDP rectangles** page's number of AOIs, average area (km²), size ratio (maximum/minimum), and location
 source, then click **Generate**. Forests, Rivers and Coasts have independent pages
 and overlays, described below. Generation runs in the background and replaces
@@ -62,21 +62,63 @@ At `r = 1` every requested area equals the mean. The panel reports the actual
 sample mean after rounding to the shared 100 m projected tile grid. Seed and
 clustering controls are under **Clustering and reproducibility**.
 
-Complete the Python setup and GDP ingestion above before using the default
-**Demand dataset** option. **Data and runtime** accepts any ingested demand `.npz`
-and a Python executable. The app prefers this package's `.venv`, or the executable
-in `LEO_AOI_PYTHON`, then `python3`. **Uniform globe** needs no raster download.
-The GDP page generates single rectangular AOIs, allowing overlaps, and invokes the same
-Python sampling, geometry and polygon-export functions as
-batch runs; it does not install packages. Environmental pages can download missing
-geographic sources on first generation.
+No Python setup is required for the visualizer. Its generator is written in Rust
+and uses the bundled 2024 GDP demand grid by default. **Uniform globe** needs no
+dataset. **Dataset** accepts a prepared `.aoi-data.json.gz` path or URL; an empty
+GDP dataset field selects the bundled grid. Browser paths must be URLs relative
+to the deployed site, not local filesystem paths. Dropping a prepared file onto
+the selected source page also works in either build.
+
+The Rust generator uses independent ChaCha8 random streams for locations,
+shapes, and hotspot parents. Repeating settings and dataset produces the same
+AOIs on desktop and WebAssembly, but not the Python generator's NumPy PCG64
+sequence. The bundled **Default Jobs** preset is unchanged. Geometry uses the
+`geo` crate and the existing spherical equal-area tile grid; local corridor
+projections use the same 6,371 km sphere rather than Python's WGS84 ellipsoid.
 
 Mosaic outlines are attached to Earth in every 3D globe view and clipped at the
 horizon. Subpixel AOIs use dots until zoomed in; outlines use a cached spherical
 approximation with at most 0.5° between vertices. Generated AOIs are separate from
 the circular routing-demo targets and are not assigned jobs or acquisition actions.
-The overlay is kept for this app session; native generation is not available in
-the browser build. Interactive generation is limited to 50,000 AOIs per source.
+The overlay is kept for this app session. Desktop generation uses a background
+thread; browser generation yields between small batches. Interactive generation
+is limited to 50,000 AOIs per source.
+
+## Portable datasets
+
+Python is only needed by a data maintainer preparing new raw datasets. Existing
+`.npz` caches are exported once; the app never reads NumPy files or runs Python.
+For a custom GDP/demand field, run from `tools/leo-aoi` after ingestion:
+
+```sh
+.venv/bin/python -m leo_aoi.export data/gdp-demand.npz ../../assets/aois/gdp.aoi-data.json.gz
+```
+
+For an environmental source, prepare and export just the source you need:
+
+```sh
+.venv/bin/python -m leo_aoi.environment_data forest
+.venv/bin/python -m leo_aoi.export data/environment/forest.npz ../../assets/aois/forest.aoi-data.json.gz
+```
+
+Replace `forest` with `river` or `coast` for the other pages. These large optional
+exports are ignored by Git. Use the exported file's path or URL in **Dataset cache
+and geometry**, or drop it onto the matching source page. To serve them with the
+browser build, publish the exported files at those URLs; they need not be embedded
+in the executable. Cross-origin URLs require the server to allow browser access.
+The visualizer does not automatically prepare missing raw datasets anymore.
+
+The versioned portable format is gzip-compressed JSON. Demand stores sorted
+positive `(cell index, weight)` pairs on the equal-area grid and an optional
+base64 eligibility mask. Forest stores a base64-packed tree-cover bitmap on the
+original geographic grid. Both bitmaps use least-significant-bit-first ordering.
+River/coast exports retain coordinates, offsets, downstream indices, lengths,
+feature IDs and discharge as base64 little-endian arrays (respectively float32
+pairs, uint64, int32, float64, int64 and float32). This avoids expanding global
+line coordinates into decimal JSON. Plain JSON arrays are also accepted.
+Source metadata is included unchanged. Grid sizes,
+network indices, masks and finite values are validated before generation; decoded
+datasets are limited to 512 MiB. Exports have a fixed gzip timestamp.
 
 ## Environmental sources
 
@@ -125,8 +167,8 @@ actual path lengths can be smaller than requested. Both lengths and a truncation
 flag are recorded, and the panel reports the actual mean and truncated count.
 A river buffer is a monitoring corridor, not a physical flood-inundation model.
 
-After installing the Python package, first generation can prepare a missing source.
-For explicit preparation from `tools/leo-aoi`:
+The offline Python batch generator can prepare missing sources. For explicit
+preparation from `tools/leo-aoi`, followed by export for the visualizer:
 
 ```sh
 .venv/bin/python -m pip install -e .

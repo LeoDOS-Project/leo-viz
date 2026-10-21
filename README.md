@@ -36,15 +36,21 @@ and retains tile ranges alongside its
 GeoJSON boundaries in [`assets/aois/default-jobs.json.gz`](assets/aois/default-jobs.json.gz).
 The adjacent manifest records provenance, library versions, statistics and hashes.
 
-For new samples, tune the parameters and click **Generate**. See the tool
-documentation for Python setup, dataset ingestion and preset reproduction.
+For new samples, tune the parameters and click **Generate**. Generation runs in
+Rust on desktop and in the browser, with no Python installation or subprocess.
+The 2024 GDP demand field is bundled; **Uniform globe** requires no dataset.
+Custom prepared datasets can be loaded from a local file on desktop, a URL, or
+by dropping a `.aoi-data.json.gz` file onto the selected AOI source page.
+Python is now only an optional offline tool for ingesting raw geographic data
+and reproducing the original preset. See the [dataset export instructions](tools/leo-aoi/README.md#portable-datasets).
 Job parameters are assigned in the **Jobs** pane described below; acquisition scheduling remains a later stage.
 
 The AOI panel also has independent **Forests**, **Rivers** and **Coasts** pages,
 using ESA WorldCover, HydroRIVERS and OpenStreetMap coastlines. They generate
 bounded patches or connected buffered paths, with source-specific controls and
-independent overlays. Global source caches live outside Git and are prepared on
-first use if absent. WorldCover uses a coarse 0.025° tree-cover proxy; sensor GSD
+independent overlays. Prepare these larger datasets offline once, export them,
+and load the exported files into the app; generation never downloads raw sources
+or launches Python. WorldCover uses a coarse 0.025° tree-cover proxy; sensor GSD
 is independent. See the [source assumptions and setup](tools/leo-aoi/README.md#environmental-sources).
 
 Generated AOIs use persistent GPU buffers by default. Camera transforms, horizon
