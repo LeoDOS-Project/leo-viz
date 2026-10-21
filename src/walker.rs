@@ -102,285 +102,130 @@ impl WalkerConstellation {
         (self.raan_step() * self.num_planes as f64) < max_spread - 1e-9
     }
 
+    /// Shared analytical elements for the visualizer, contact prediction and headless runs.
+    pub(crate) fn orbital_elements(&self, plane: usize, sat: usize) -> leo_sim::orbit::Elements {
+        let plane_center = if self.partial_coverage() {
+            self.raan_step() * (self.num_planes - 1) as f64 / 2.0
+        } else {
+            0.0
+        };
+        let sat_center = if self.partial_sat_coverage() {
+            self.sat_step() * (self.sats_per_plane() - 1) as f64 / 2.0
+        } else {
+            0.0
+        };
+        leo_sim::orbit::Elements {
+            semi_major_km: (self.planet_radius + self.altitude_km) / (1.0 - self.eccentricity),
+            eccentricity: self.eccentricity,
+            inclination_rad: self.inclination_deg.to_radians(),
+            raan_rad: -self.raan_offset_deg.to_radians() + self.raan_step() * plane as f64
+                - plane_center,
+            argument_rad: self.arg_periapsis_deg.to_radians(),
+            mean_anomaly_rad: self.sat_step() * sat as f64 - sat_center
+                + self.phasing * 2.0 * PI / self.total_sats as f64 * plane as f64,
+            mu: self.planet_mu,
+            radius_km: self.planet_equatorial_radius,
+            j2: self.planet_j2,
+            propagation: if self.propagator == Propagator::J2 {
+                leo_sim::orbit::Propagation::J2
+            } else {
+                leo_sim::orbit::Propagation::Keplerian
+            },
+        }
+    }
+
+    fn sample_position(&self, plane: usize, sat: usize, time: f64) -> leo_sim::orbit::Position {
+        let elements = self.orbital_elements(plane, sat);
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.propagator == Propagator::Lib42 {
+            return self.lib42_position(elements, time);
+        }
+        elements.sample(if self.altitude_km < 100.0 { 0.0 } else { time })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn lib42_position(&self, e: leo_sim::orbit::Elements, time: f64) -> leo_sim::orbit::Position {
+        // Preserve the existing 42 propagation and convert metres/ECI to viewer coordinates.
+        let sma_m = e.semi_major_km * 1000.0;
+        let mu_m = e.mu * 1e9;
+        let re_m = e.radius_km * 1000.0;
+        let slr_m = sma_m * (1.0 - e.eccentricity * e.eccentricity);
+        let re_slr = re_m / slr_m;
+        let n = (mu_m / (sma_m * sma_m * sma_m)).sqrt();
+        let mut orb = leodos_lib42::sim::OrbitType::default();
+        orb.Regime = 2; // ORB_CENTRAL
+        orb.World = 3; // EARTH
+        orb.Exists = 1;
+        orb.mu = mu_m;
+        orb.SMA = sma_m;
+        orb.MeanSMA = sma_m;
+        orb.ecc = e.eccentricity;
+        orb.inc = e.inclination_rad;
+        orb.RAAN = e.raan_rad;
+        orb.RAAN0 = e.raan_rad;
+        orb.ArgP = e.argument_rad;
+        orb.ArgP0 = e.argument_rad;
+        orb.MeanAnom = e.mean_anomaly_rad;
+        orb.MeanAnom0 = e.mean_anomaly_rad;
+        orb.MeanMotion = n;
+        orb.Period = 2.0 * PI / n;
+        orb.SLR = slr_m;
+        orb.alpha = 1.0 / sma_m;
+        orb.rmin = sma_m * (1.0 - e.eccentricity);
+        orb.Epoch = 0.0;
+        orb.J2DriftEnabled = if self.altitude_km < 100.0 { 0 } else { 1 };
+        orb.RAANdot = -1.5 * e.j2 * re_slr * re_slr * n * e.inclination_rad.cos();
+        orb.ArgPdot =
+            1.5 * e.j2 * re_slr * re_slr * n * (2.0 - 2.5 * e.inclination_rad.sin().powi(2));
+        orb.J2Rw2bya = e.j2 * re_m * re_m / sma_m;
+        leodos_lib42::orbit::mean_eph_to_rv(&mut orb, time);
+        let xyz = [
+            orb.PosN[0] / 1000.0,
+            orb.PosN[2] / 1000.0,
+            -orb.PosN[1] / 1000.0,
+        ];
+        leo_sim::orbit::Position {
+            xyz,
+            lat_deg: (xyz[1] / leo_sim::geometry::norm(xyz))
+                .clamp(-1.0, 1.0)
+                .asin()
+                .to_degrees(),
+            inertial_lon_deg: -xyz[2].atan2(xyz[0]).to_degrees(),
+            ascending: (orb.anom + orb.ArgP).cos() > 0.0,
+        }
+    }
+
     pub fn single_satellite_lat_lon(
         &self,
         plane: usize,
         sat: usize,
         time: f64,
     ) -> (f64, f64, [f64; 3]) {
-        let sats_per_plane = self.sats_per_plane();
-        let perigee_radius = self.planet_radius + self.altitude_km;
-        let ecc = self.eccentricity;
-        let semi_major = perigee_radius / (1.0 - ecc);
-        let period = 2.0 * PI * (semi_major.powi(3) / self.planet_mu).sqrt();
-        let mean_motion = 2.0 * PI / period;
-        let inc = self.inclination_deg.to_radians();
-        let inc_cos = inc.cos();
-        let inc_sin = inc.sin();
-        let raan_step = self.raan_step();
-        let raan_offset = -self.raan_offset_deg.to_radians();
-        let sat_step = self.sat_step();
-        let omega = self.arg_periapsis_deg.to_radians();
-        let phase_step = self.phasing * 2.0 * PI / self.total_sats as f64;
-        let r_ratio = self.planet_equatorial_radius / semi_major;
-        let raan_drift_rate = -1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion * inc_cos;
-        let center_offset = if self.partial_coverage() {
-            raan_step * (self.num_planes - 1) as f64 / 2.0
-        } else {
-            0.0
-        };
-        let sat_center_offset = if self.partial_sat_coverage() {
-            sat_step * (sats_per_plane - 1) as f64 / 2.0
-        } else {
-            0.0
-        };
-        let dead = self.altitude_km < 100.0;
-
-        let raan_initial = raan_offset + raan_step * plane as f64 - center_offset;
-        let raan = raan_initial + if dead { 0.0 } else { raan_drift_rate * time };
-        let raan_cos = raan.cos();
-        let raan_sin = raan.sin();
-        let phase_offset = phase_step * plane as f64;
-
-        let mean_anomaly = sat_step * sat as f64 - sat_center_offset
-            + if dead { 0.0 } else { mean_motion * time }
-            + phase_offset;
-        let true_anomaly = if ecc < 1e-8 {
-            mean_anomaly
-        } else {
-            let mut ea = mean_anomaly;
-            for _ in 0..10 {
-                ea = ea - (ea - ecc * ea.sin() - mean_anomaly) / (1.0 - ecc * ea.cos());
-            }
-            2.0 * ((1.0 + ecc).sqrt() * (ea / 2.0).sin())
-                .atan2((1.0 - ecc).sqrt() * (ea / 2.0).cos())
-        };
-
-        let r = semi_major * (1.0 - ecc * ecc) / (1.0 + ecc * true_anomaly.cos());
-        let angle = true_anomaly + omega;
-        let x_orbital = r * angle.cos();
-        let y_orbital = -r * angle.sin();
-        let x = x_orbital * raan_cos - y_orbital * inc_cos * raan_sin;
-        let z = x_orbital * raan_sin + y_orbital * inc_cos * raan_cos;
-        let y = -y_orbital * inc_sin;
-
-        let lat = (y / r).asin().to_degrees();
-        let lon = -z.atan2(x).to_degrees();
-        (lat, lon, [x, y, z])
+        let p = self.sample_position(plane, sat, time);
+        (p.lat_deg, p.inertial_lon_deg, p.xyz)
     }
 
     pub fn satellite_positions(&self, time: f64) -> Vec<SatelliteState> {
         let mut positions = Vec::with_capacity(self.total_sats);
         let sats_per_plane = self.sats_per_plane();
-        let perigee_radius = self.planet_radius + self.altitude_km;
-        let ecc = self.eccentricity;
-        let semi_major = perigee_radius / (1.0 - ecc);
-        let period = 2.0 * PI * (semi_major.powi(3) / self.planet_mu).sqrt();
-        let mean_motion = 2.0 * PI / period;
-        let inc = self.inclination_deg.to_radians();
-        let raan_step = self.raan_step();
-        let raan_offset = -self.raan_offset_deg.to_radians();
-        let sat_step = self.sat_step();
         let is_star = self.walker_type == WalkerType::Star;
-        let omega = self.arg_periapsis_deg.to_radians();
-
-        let phase_step = self.phasing * 2.0 * PI / self.total_sats as f64;
-
-        let center_offset = if self.partial_coverage() {
-            raan_step * (self.num_planes - 1) as f64 / 2.0
-        } else {
-            0.0
-        };
-        let sat_center_offset = if self.partial_sat_coverage() {
-            sat_step * (sats_per_plane - 1) as f64 / 2.0
-        } else {
-            0.0
-        };
-        let dead = self.altitude_km < 100.0;
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let use_lib42 = self.propagator == Propagator::Lib42;
-        #[cfg(target_arch = "wasm32")]
-        let use_lib42 = false;
-
-        if use_lib42 {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                // 42 uses meters internally
-                let sma_m = semi_major * 1000.0;
-                let mu_m = self.planet_mu * 1e9; // km³/s² → m³/s²
-                let re_m = self.planet_equatorial_radius * 1000.0;
-                let j2 = self.planet_j2;
-                let slr_m = sma_m * (1.0 - ecc * ecc);
-                let re_slr = re_m / slr_m;
-                let n = (mu_m / (sma_m * sma_m * sma_m)).sqrt();
-                let j2_rw2bya = j2 * re_m * re_m / sma_m;
-
-                // J2 secular drift rates (same as 42's formulas)
-                let raan_dot = -1.5 * j2 * re_slr * re_slr * n * inc.cos();
-                let argp_dot = 1.5 * j2 * re_slr * re_slr * n * (2.0 - 2.5 * inc.sin().powi(2));
-
-                for plane in 0..self.num_planes {
-                    let raan_initial = raan_offset + raan_step * plane as f64 - center_offset;
-                    let phase_offset = phase_step * plane as f64;
-
-                    for sat in 0..sats_per_plane {
-                        let m0 = sat_step * sat as f64 - sat_center_offset + phase_offset;
-
-                        let mut orb = leodos_lib42::sim::OrbitType::default();
-                        orb.Regime = 2; // ORB_CENTRAL
-                        orb.World = 3; // EARTH
-                        orb.Exists = 1;
-                        orb.mu = mu_m;
-                        orb.SMA = sma_m;
-                        orb.MeanSMA = sma_m;
-                        orb.ecc = ecc;
-                        orb.inc = inc;
-                        orb.RAAN = raan_initial;
-                        orb.RAAN0 = raan_initial;
-                        orb.ArgP = omega;
-                        orb.ArgP0 = omega;
-                        orb.MeanAnom = m0;
-                        orb.MeanAnom0 = m0;
-                        orb.MeanMotion = n;
-                        orb.Period = 2.0 * PI / n;
-                        orb.SLR = slr_m;
-                        orb.alpha = 1.0 / sma_m;
-                        orb.rmin = sma_m * (1.0 - ecc);
-                        orb.Epoch = 0.0;
-                        orb.J2DriftEnabled = if dead { 0 } else { 1 };
-                        orb.RAANdot = raan_dot;
-                        orb.ArgPdot = argp_dot;
-                        orb.J2Rw2bya = j2_rw2bya;
-
-                        // DynTime = simulation time in seconds
-                        leodos_lib42::orbit::mean_eph_to_rv(&mut orb, time);
-
-                        // PosN is in meters, convert to km
-                        // 42 uses ECI: x,y equatorial, z north
-                        // Walker uses: x,z equatorial, y north
-                        let x = orb.PosN[0] / 1000.0;
-                        let y = orb.PosN[2] / 1000.0;
-                        let z = -orb.PosN[1] / 1000.0;
-
-                        let r = (x * x + y * y + z * z).sqrt();
-                        let ascending = (orb.anom + orb.ArgP).cos() > 0.0;
-                        let lat = (y / r).asin().to_degrees();
-                        let lon = -z.atan2(x).to_degrees();
-
-                        positions.push(SatelliteState {
-                            plane,
-                            sat_index: sat,
-                            x,
-                            y,
-                            z,
-                            lat,
-                            lon,
-                            ascending,
-                            neighbors: Vec::new(),
-                            name: None,
-                            tle_inclination_deg: None,
-                            tle_mean_motion: None,
-                        });
-                    }
-                }
-            }
-        } else {
-            let inc_cos = inc.cos();
-            let inc_sin = inc.sin();
-            let r_ratio = self.planet_equatorial_radius / semi_major;
-            let use_j2 = self.propagator == Propagator::J2;
-
-            // J2 secular perturbation rates
-            let e2 = ecc * ecc;
-            let one_minus_e2 = 1.0 - e2;
-            let p_factor = one_minus_e2 * one_minus_e2;
-            let j2_coeff = 1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion;
-
-            // Sign note: with this codebase's convention `lon = -atan2(z, x)`, a
-            // positive rotation of the ascending node around +y corresponds to a
-            // *decreasing* longitude. J2 physically gives prograde RAAN regression
-            // (−cos(i) rate) in standard astronomy; we flip the sign here so the
-            // drift direction matches this code's lon convention — retrograde i
-            // produces RAAN motion eastward (matching the Sun's apparent motion).
-            let raan_rate = if use_j2 {
-                j2_coeff * inc_cos / p_factor
-            } else {
-                0.0
-            };
-            let omega_rate = if use_j2 {
-                j2_coeff * (2.0 - 2.5 * inc_sin * inc_sin) / p_factor
-            } else {
-                0.0
-            };
-            let m_dot = if use_j2 {
-                mean_motion
-                    + 0.75
-                        * self.planet_j2
-                        * r_ratio
-                        * r_ratio
-                        * mean_motion
-                        * (3.0 * inc_cos * inc_cos - 1.0)
-                        * one_minus_e2.sqrt()
-                        / p_factor
-            } else {
-                mean_motion
-            };
-
-            for plane in 0..self.num_planes {
-                let raan_initial = raan_offset + raan_step * plane as f64 - center_offset;
-                let raan = raan_initial + if dead { 0.0 } else { raan_rate * time };
-                let raan_cos = raan.cos();
-                let raan_sin = raan.sin();
-                let omega_t = omega + if dead { 0.0 } else { omega_rate * time };
-                let phase_offset = phase_step * plane as f64;
-
-                for sat in 0..sats_per_plane {
-                    let raw_mean_anomaly = sat_step * sat as f64 - sat_center_offset
-                        + if dead { 0.0 } else { m_dot * time }
-                        + phase_offset;
-                    let mean_anomaly = raw_mean_anomaly.rem_euclid(2.0 * PI);
-
-                    let true_anomaly = if ecc < 1e-8 {
-                        mean_anomaly
-                    } else {
-                        let mut ea = mean_anomaly;
-                        for _ in 0..10 {
-                            ea -= (ea - ecc * ea.sin() - mean_anomaly) / (1.0 - ecc * ea.cos());
-                        }
-                        2.0 * ((1.0 + ecc).sqrt() * (ea / 2.0).sin())
-                            .atan2((1.0 - ecc).sqrt() * (ea / 2.0).cos())
-                    };
-
-                    let r = semi_major * (1.0 - ecc * ecc) / (1.0 + ecc * true_anomaly.cos());
-                    let ascending = (true_anomaly + omega_t).cos() > 0.0;
-
-                    let angle = true_anomaly + omega_t;
-                    let x_orbital = r * angle.cos();
-                    let y_orbital = -r * angle.sin();
-
-                    let x = x_orbital * raan_cos - y_orbital * inc_cos * raan_sin;
-                    let z = x_orbital * raan_sin + y_orbital * inc_cos * raan_cos;
-                    let y = -y_orbital * inc_sin;
-
-                    let lat = (y / r).asin().to_degrees();
-                    let lon = -z.atan2(x).to_degrees();
-
-                    positions.push(SatelliteState {
-                        plane,
-                        sat_index: sat,
-                        x,
-                        y,
-                        z,
-                        lat,
-                        lon,
-                        ascending,
-                        neighbors: Vec::new(),
-                        name: None,
-                        tle_inclination_deg: None,
-                        tle_mean_motion: None,
-                    });
-                }
+        for plane in 0..self.num_planes {
+            for sat in 0..sats_per_plane {
+                let p = self.sample_position(plane, sat, time);
+                positions.push(SatelliteState {
+                    plane,
+                    sat_index: sat,
+                    x: p.xyz[0],
+                    y: p.xyz[1],
+                    z: p.xyz[2],
+                    lat: p.lat_deg,
+                    lon: p.inertial_lon_deg,
+                    ascending: p.ascending,
+                    neighbors: Vec::new(),
+                    name: None,
+                    tle_inclination_deg: None,
+                    tle_mean_motion: None,
+                });
             }
         }
 
@@ -895,4 +740,72 @@ fn brute_force_knn(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod shared_orbit_tests {
+    use super::*;
+    use crate::{celestial::CelestialBody, config::ConstellationConfig};
+
+    #[test]
+    fn headless_and_viewer_earth_orbits_agree() {
+        let earth = CelestialBody::Earth;
+        let shell = leo_sim::orbit::WalkerShell {
+            propagation: leo_sim::orbit::Propagation::J2,
+            eccentricity: 0.1,
+            ..Default::default()
+        };
+        let mut config = ConstellationConfig::new(0);
+        config.num_planes = shell.planes;
+        config.sats_per_plane = shell.satellites_per_plane;
+        config.altitude_km = shell.altitude_km;
+        config.inclination = shell.inclination_deg;
+        config.phasing = shell.phasing as f64;
+        config.eccentricity = shell.eccentricity;
+        config.propagator = Propagator::J2;
+        let walker = config.constellation(
+            earth.radius_km(),
+            earth.mu(),
+            earth.j2(),
+            earth.equatorial_radius_km(),
+        );
+        for t in [0.0, 3600.0, 86400.0] {
+            for sat in walker.satellite_positions(t) {
+                let pos = shell.elements(sat.plane, sat.sat_index).sample(t);
+                assert!(leo_sim::geometry::distance([sat.x, sat.y, sat.z], pos.xyz) < 1e-8);
+            }
+        }
+    }
+
+    #[test]
+    fn single_queries_and_bulk_positions_share_propagation() {
+        let earth = CelestialBody::Earth;
+        #[allow(unused_mut)]
+        let mut propagators = vec![Propagator::Keplerian, Propagator::J2];
+        #[cfg(not(target_arch = "wasm32"))]
+        propagators.push(Propagator::Lib42);
+        for propagation in propagators {
+            let mut config = ConstellationConfig::new(0);
+            config.num_planes = 4;
+            config.sats_per_plane = 8;
+            config.altitude_km = 550.0;
+            config.inclination = 53.0;
+            config.phasing = 1.0;
+            config.eccentricity = 0.1;
+            config.propagator = propagation;
+            let walker = config.constellation(
+                earth.radius_km(),
+                earth.mu(),
+                earth.j2(),
+                earth.equatorial_radius_km(),
+            );
+            for t in [0.0, 3600.0, 86400.0] {
+                for p in walker.satellite_positions(t) {
+                    let (lat, lon, xyz) = walker.single_satellite_lat_lon(p.plane, p.sat_index, t);
+                    assert_eq!([p.x, p.y, p.z], xyz);
+                    assert_eq!((p.lat, p.lon), (lat, lon));
+                }
+            }
+        }
+    }
 }

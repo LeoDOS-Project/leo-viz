@@ -47,6 +47,7 @@ pub struct NumericalState {
 #[derive(Clone, Copy, PartialEq)]
 pub enum Preset {
     None,
+    Adam,
     Starlink,
     OneWeb,
     Iridium,
@@ -256,6 +257,7 @@ impl ConstellationConfig {
         }
         match self.preset {
             Preset::None => "Custom",
+            Preset::Adam => "ADAM",
             Preset::Starlink => "Starlink",
             Preset::OneWeb => "OneWeb",
             Preset::Iridium => "Iridium",
@@ -452,6 +454,7 @@ pub struct PlanetConfig {
     /// Accumulated sub-satellite points per tracked satellite, keyed by
     /// (constellation_idx, plane, sat_index). Stored as (lat_deg, lon_deg, sim_time_s).
     pub ground_track_history: HashMap<GroundTrackKey, Vec<GroundTrackSample>>,
+    pub pushbroom_history: crate::pushbroom::History,
     /// Optional per-planet projection override. When `None`, the tab's
     /// `TabSettings.planet_projection` is used.
     pub projection_override: Option<crate::projection::ProjectionKind>,
@@ -517,6 +520,7 @@ impl PlanetConfig {
             tle_isl_k: 0,
             tle_isl_max_lat_deg: 70.0,
             ground_track_history: HashMap::new(),
+            pushbroom_history: crate::pushbroom::History::default(),
             projection_override: None,
         }
     }
@@ -613,6 +617,8 @@ impl ViewMode {
 
 #[derive(Clone)]
 pub struct TabSettings {
+    pub pushbroom: crate::pushbroom::Settings,
+    pub observation_data: leo_sim::acquisition::CaptureProfile,
     pub time: f64,
     pub speed: f64,
     pub animate: bool,
@@ -700,6 +706,8 @@ pub struct TabSettings {
 impl Default for TabSettings {
     fn default() -> Self {
         Self {
+            pushbroom: crate::pushbroom::Settings::default(),
+            observation_data: leo_sim::acquisition::CaptureProfile::default(),
             time: 0.0,
             speed: 50.0,
             animate: true,

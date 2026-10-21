@@ -1,6 +1,8 @@
 //! Entry point and module declarations for the LEO satellite constellation visualizer.
 
 mod aep8;
+mod aoi;
+mod jobs;
 mod app;
 #[cfg(not(target_arch = "wasm32"))]
 mod bridge;
@@ -10,19 +12,25 @@ mod celestial;
 #[cfg(not(target_arch = "wasm32"))]
 mod cfs;
 mod config;
+mod orbit_presets;
 mod conjunction;
 mod demo;
 mod drawing;
 mod geo;
+mod globe_overlay;
 mod igrf;
 mod kessler;
 mod math;
 mod pass;
 mod physics;
 mod projection;
+mod pushbroom;
 mod radiation;
 mod renderer;
+mod revisit;
+mod earth_observation;
 mod settings;
+mod simulation_ui;
 mod slides;
 mod solar_system;
 mod spacecomp;

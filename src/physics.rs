@@ -102,12 +102,11 @@ pub(crate) fn is_eclipsed(
     sun_dir: &Vector3<f64>,
     planet_radius: f64,
 ) -> bool {
-    let proj = sat_pos.dot(sun_dir);
-    if proj >= 0.0 {
-        return false;
-    }
-    let perp_sq = sat_pos.dot(sat_pos) - proj * proj;
-    perp_sq < planet_radius * planet_radius
+    leo_sim::geometry::eclipsed(
+        [sat_pos.x, sat_pos.y, sat_pos.z],
+        [sun_dir.x, sun_dir.y, sun_dir.z],
+        planet_radius,
+    )
 }
 
 pub(crate) fn update_power(
@@ -118,12 +117,17 @@ pub(crate) fn update_power(
     extra_load_w: f64,
 ) {
     let can_charge = config.power_device_type == PowerDeviceType::Rtg || !eclipsed;
-    if can_charge {
-        state.battery_ws =
-            (state.battery_ws + config.charging_rate_w * dt).min(config.max_battery_ws);
-    }
-    let total_load_w = config.idle_power_w + extra_load_w;
-    state.battery_ws = (state.battery_ws - total_load_w * dt).max(0.0);
+    state.battery_ws = leo_sim::resources::integrate_energy(
+        state.battery_ws,
+        config.max_battery_ws,
+        if can_charge {
+            config.charging_rate_w
+        } else {
+            0.0
+        },
+        config.idle_power_w + extra_load_w,
+        dt,
+    );
 }
 
 pub(crate) fn update_thermal(

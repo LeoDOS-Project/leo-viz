@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "epoch_unix_s": 1791158400.0,
+  "step_s": 1,
+  "duration_s": 600,
+  "shells": [
+    {
+      "planes": 1,
+      "satellites_per_plane": 16,
+      "inclination_deg": 0,
+      "phasing": 0,
+      "altitude_km": 550
+    }
+  ],
+  "satellite": {
+    "compute_units_per_s": 1,
+    "storage_bytes": 100000000,
+    "duty": {
+      "window_s": 86400,
+      "max_fraction": 0.2,
+      "initial_utilization": 0
+    }
+  },
+  "ground_stations": [
+    {
+      "name": "smoke-ground",
+      "lat_deg": 0,
+      "lon_deg": 8.81481941882521,
+      "min_elevation_deg": 10,
+      "per_link_bps": 8000000,
+      "aggregate_bps": 8000000,
+      "max_contacts": 1
+    }
+  ],
+  "initial_objects": [
+    {
+      "node": {
+        "satellite": 0
+      },
+      "object": {
+        "id": "input",
+        "bytes": 10000000
+      }
+    }
+  ],
+  "actions": [
+    {
+      "id": "compute",
+      "at_s": 0,
+      "type": "compute",
+      "satellite": 0,
+      "work": 5,
+      "inputs": [
+        "input"
+      ],
+      "output": {
+        "id": "result",
+        "bytes": 1000000
+      }
+    },
+    {
+      "id": "deliver",
+      "at_s": 0,
+      "type": "transfer",
+      "object": "result",
+      "path": [
+        {
+          "satellite": 0
+        },
+        {
+          "satellite": 1
+        },
+        {
+          "ground": 0
+        }
+      ]
+    }
+  ]
+}

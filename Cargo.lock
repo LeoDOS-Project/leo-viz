@@ -1450,6 +1450,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "leo-sim"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "leo-viz"
 version = "0.1.0"
 dependencies = [
@@ -1463,9 +1471,11 @@ dependencies = [
  "egui_dock",
  "egui_extras",
  "egui_plot",
+ "flate2",
  "image",
  "indoc",
  "js-sys",
+ "leo-sim",
  "leodos-bridge",
  "leodos-lib42",
  "log",

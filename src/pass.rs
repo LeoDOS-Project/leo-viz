@@ -139,28 +139,11 @@ pub(crate) fn gs_eci_position(
     planet_radius: f64,
     body_rot: f64,
 ) -> [f64; 3] {
-    let lat = lat_deg.to_radians();
-    let lon = (-lon_deg).to_radians() - body_rot;
-    let x = planet_radius * lat.cos() * lon.cos();
-    let y = planet_radius * lat.sin();
-    let z = planet_radius * lat.cos() * lon.sin();
-    [x, y, z]
+    leo_sim::geometry::ground_position(lat_deg, lon_deg, planet_radius, body_rot)
 }
 
 pub(crate) fn elevation_from_ground(gs_xyz: [f64; 3], sat_xyz: [f64; 3]) -> f64 {
-    let r = (gs_xyz[0] * gs_xyz[0] + gs_xyz[1] * gs_xyz[1] + gs_xyz[2] * gs_xyz[2]).sqrt();
-    let ux = gs_xyz[0] / r;
-    let uy = gs_xyz[1] / r;
-    let uz = gs_xyz[2] / r;
-    let dx = sat_xyz[0] - gs_xyz[0];
-    let dy = sat_xyz[1] - gs_xyz[1];
-    let dz = sat_xyz[2] - gs_xyz[2];
-    let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-    if dist < 1e-9 {
-        return 90.0;
-    }
-    let dot = ux * dx + uy * dy + uz * dz;
-    (dot / dist).asin().to_degrees()
+    leo_sim::geometry::elevation(gs_xyz, sat_xyz)
 }
 
 fn refine_pass_details(

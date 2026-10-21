@@ -4,30 +4,14 @@
 //! planetary rotation angles for accurate Earth-fixed positioning.
 
 use crate::celestial::CelestialBody;
-use crate::tle::SECONDS_PER_DAY;
 use chrono::{DateTime, Utc};
 use std::f64::consts::PI;
 
-pub const DAYS_PER_JULIAN_CENTURY: f64 = 36525.0;
-pub const GMST_BASE_DEG: f64 = 280.46061837;
-pub const GMST_ROTATION_PER_DAY: f64 = 360.98564736629;
-pub const GMST_CORRECTION: f64 = 0.000387933;
 pub const SOLAR_DECLINATION_MAX: f64 = -23.45;
 pub const DAYS_PER_YEAR: f64 = 365.0;
 
 pub fn greenwich_mean_sidereal_time(timestamp: DateTime<Utc>) -> f64 {
-    let j2000 = DateTime::parse_from_rfc3339("2000-01-01T12:00:00Z")
-        .unwrap()
-        .with_timezone(&Utc);
-    let days_since_j2000 =
-        (timestamp - j2000).num_milliseconds() as f64 / (1000.0 * SECONDS_PER_DAY);
-    let centuries = days_since_j2000 / DAYS_PER_JULIAN_CENTURY;
-    let gmst_degrees = GMST_BASE_DEG
-        + GMST_ROTATION_PER_DAY * days_since_j2000
-        + GMST_CORRECTION * centuries * centuries
-        - centuries * centuries * centuries / 38710000.0;
-    let gmst_normalized = gmst_degrees.rem_euclid(360.0);
-    gmst_normalized.to_radians()
+    leo_sim::geometry::gmst(timestamp.timestamp_millis() as f64 / 1000.0)
 }
 
 /// Compute a continuous "day of year" value that advances linearly with sim
