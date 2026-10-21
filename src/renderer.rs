@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use crate::celestial::{CelestialBody, Skin, TextureResolution};
 use crate::texture::{EarthTexture, RingTexture};
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests;
+
 fn profile_render_section(name: &str, start: web_time::Instant) {
     if std::env::var_os("LEO_VIZ_RENDER_PROF").is_some() {
         let ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -30,6 +33,7 @@ pub struct PlanetUniforms {
     pub star_rot_2: [f32; 4],
     pub sun_dir_flat: [f32; 4],
     pub bg_aspect: [f32; 4],
+    /// West/east longitude in degrees, south/north Web Mercator ordinate.
     pub detail_bounds: [f32; 4],
     pub uv_etc: [f32; 4],
     pub flags_a: [f32; 4],
@@ -118,9 +122,7 @@ pub struct GpuResources {
     pub _target_format: wgpu::TextureFormat,
 
     pub sun_ub: wgpu::Buffer,
-    pub planet_bg_queue: Vec<PlanetBindGroupSlot>,
-    pub planet_bg_prepare_idx: usize,
-    pub planet_bg_paint_idx: std::sync::atomic::AtomicUsize,
+    pub planet_bind_groups: HashMap<egui::Id, PlanetBindGroupSlot>,
     pub heatmap_bg_queue: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     pub heatmap_bg_paint_idx: std::sync::atomic::AtomicUsize,
     pub map_bg_queue: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
@@ -677,9 +679,7 @@ impl GpuResources {
             _dummy_view_rgba: dummy_view_rgba,
             _target_format: format,
             sun_ub,
-            planet_bg_queue: Vec::new(),
-            planet_bg_prepare_idx: 0,
-            planet_bg_paint_idx: std::sync::atomic::AtomicUsize::new(0),
+            planet_bind_groups: HashMap::new(),
             heatmap_bg_queue: Vec::new(),
             heatmap_bg_paint_idx: std::sync::atomic::AtomicUsize::new(0),
             map_bg_queue: Vec::new(),
@@ -1322,6 +1322,7 @@ pub fn mat3_to_padded_cols(m: &Matrix3<f64>) -> [[f32; 4]; 3] {
 }
 
 pub struct PlanetPaintCallback {
+    pub view_id: egui::Id,
     pub uniforms: PlanetUniforms,
     pub texture_key: (CelestialBody, Skin, TextureResolution),
     pub show_milky_way: bool,
@@ -1330,12 +1331,14 @@ pub struct PlanetPaintCallback {
 
 impl PlanetPaintCallback {
     pub fn new(
+        view_id: egui::Id,
         uniforms: PlanetUniforms,
         texture_key: (CelestialBody, Skin, TextureResolution),
         show_milky_way: bool,
         has_detail: bool,
     ) -> Self {
         Self {
+            view_id,
             uniforms,
             texture_key,
             show_milky_way,
@@ -1355,18 +1358,11 @@ impl CallbackTrait for PlanetPaintCallback {
     ) -> Vec<wgpu::CommandBuffer> {
         let start = web_time::Instant::now();
         let gpu = res.get_mut::<GpuResources>().unwrap();
-        let paint_idx = gpu
-            .planet_bg_paint_idx
-            .load(std::sync::atomic::Ordering::Relaxed);
-        if paint_idx >= gpu.planet_bg_queue.len() {
-            gpu.planet_bg_prepare_idx = 0;
-            gpu.planet_bg_paint_idx
-                .store(0, std::sync::atomic::Ordering::Relaxed);
-        }
-        let slot_idx = gpu.planet_bg_prepare_idx;
-        gpu.planet_bg_prepare_idx += 1;
-
-        let slot_matches = gpu.planet_bg_queue.get(slot_idx).is_some_and(|slot| {
+        // Clipped callbacks may be prepared without painting. Never infer a view
+        // from paint order, and release bind groups that retain replaced textures.
+        let generation = gpu.texture_gen;
+        gpu.planet_bind_groups.retain(|_, slot| slot.texture_gen == generation);
+        let slot_matches = gpu.planet_bind_groups.get(&self.view_id).is_some_and(|slot| {
             slot.texture_key == self.texture_key
                 && slot.show_milky_way == self.show_milky_way
                 && slot.has_detail == self.has_detail
@@ -1374,7 +1370,7 @@ impl CallbackTrait for PlanetPaintCallback {
         });
 
         if slot_matches {
-            let slot = &gpu.planet_bg_queue[slot_idx];
+            let slot = &gpu.planet_bind_groups[&self.view_id];
             queue.write_buffer(&slot.ub, 0, bytemuck::bytes_of(&self.uniforms));
         } else {
             let ub = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1447,11 +1443,7 @@ impl CallbackTrait for PlanetPaintCallback {
                 has_detail: self.has_detail,
                 texture_gen: gpu.texture_gen,
             };
-            if slot_idx < gpu.planet_bg_queue.len() {
-                gpu.planet_bg_queue[slot_idx] = slot;
-            } else {
-                gpu.planet_bg_queue.push(slot);
-            }
+            gpu.planet_bind_groups.insert(self.view_id, slot);
         }
         profile_render_section("planet.prepare", start);
         Vec::new()
@@ -1465,10 +1457,7 @@ impl CallbackTrait for PlanetPaintCallback {
     ) {
         let start = web_time::Instant::now();
         let gpu = res.get::<GpuResources>().unwrap();
-        let idx = gpu
-            .planet_bg_paint_idx
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if let Some(slot) = gpu.planet_bg_queue.get(idx) {
+        if let Some(slot) = gpu.planet_bind_groups.get(&self.view_id) {
             render_pass.set_pipeline(&gpu.planet_pipeline);
             render_pass.set_bind_group(0, &slot.bg, &[]);
             render_pass.draw(0..4, 0..1);
@@ -1994,19 +1983,19 @@ fn star_rot() -> mat3x3f { return mat3x3f(u.star_rot_0.xyz, u.star_rot_1.xyz, u.
     let tex_u = (lon_ortho + PI) / (2.0 * PI);
     let tex_v = (PI / 2.0 - lat_ortho) / PI;
 
-    var day_color: vec3f;
+    let base_color = textureSampleLevel(t_planet, samp_r, vec2f(tex_u, tex_v), 0.0).rgb;
+    var day_color = base_color;
     if use_detail > 0.5 {
         var lon_deg = lon_ortho * 180.0 / PI;
         if lon_deg < u.detail_bounds.x { lon_deg += 360.0; }
         let du = (lon_deg - u.detail_bounds.x) / (u.detail_bounds.y - u.detail_bounds.x);
-        let dv = (u.detail_bounds.w - lat_ortho) / (u.detail_bounds.w - u.detail_bounds.z);
-        if du >= 0.0 && du <= 1.0 && dv >= 0.0 && dv <= 1.0 {
-            day_color = textureSampleLevel(t_detail, samp_c, vec2f(du, dv), 0.0).rgb;
-        } else {
-            day_color = textureSampleLevel(t_planet, samp_r, vec2f(tex_u, tex_v), 0.0).rgb;
+        let mercator_limit = 1.48442223;
+        let mercator_y = asinh(tan(clamp(lat_ortho, -mercator_limit, mercator_limit)));
+        let dv = (u.detail_bounds.w - mercator_y) / (u.detail_bounds.w - u.detail_bounds.z);
+        if abs(lat_ortho) <= mercator_limit && du >= 0.0 && du <= 1.0 && dv >= 0.0 && dv <= 1.0 {
+            let detail = textureSampleLevel(t_detail, samp_c, vec2f(du, dv), 0.0);
+            day_color = base_color * (1.0 - detail.a) + detail.rgb;
         }
-    } else {
-        day_color = textureSampleLevel(t_planet, samp_r, vec2f(tex_u, tex_v), 0.0).rgb;
     }
 
     if show_clouds > 0.5 && use_detail < 0.5 {

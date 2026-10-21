@@ -1405,7 +1405,7 @@ pub fn draw_3d_view(
 
         let callback = egui_wgpu::Callback::new_paint_callback(
             rect,
-            PlanetPaintCallback::new(uniforms, key, show_stars, has_detail),
+            PlanetPaintCallback::new(ui.id().with((id, "planet")), uniforms, key, show_stars, has_detail),
         );
         ui.painter().add(callback);
 

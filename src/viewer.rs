@@ -597,12 +597,7 @@ impl ViewerState {
             return None;
         }
         let dt = self.tile_overlay.detail_texture.as_ref()?;
-        Some([
-            dt.bounds.min_lon as f32,
-            dt.bounds.max_lon as f32,
-            dt.bounds.min_lat as f32,
-            dt.bounds.max_lat as f32,
-        ])
+        Some(dt.bounds.shader_bounds())
     }
 
     #[cfg(target_arch = "wasm32")]

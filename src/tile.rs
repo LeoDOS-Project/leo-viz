@@ -22,6 +22,18 @@ pub struct DetailBounds {
     pub max_lat: f64,
 }
 
+impl DetailBounds {
+    pub fn shader_bounds(&self) -> [f32; 4] {
+        // The atlas is Web Mercator, not an equirectangular latitude image.
+        [
+            self.min_lon as f32,
+            self.max_lon as f32,
+            self.min_lat.tan().asinh() as f32,
+            self.max_lat.tan().asinh() as f32,
+        ]
+    }
+}
+
 pub struct DetailTexture {
     pub bounds: DetailBounds,
 }
@@ -231,4 +243,49 @@ pub fn tile_to_lon_lat(t: &TileCoord) -> (f64, f64) {
 pub fn camera_zoom_to_tile_zoom(camera_zoom: f64) -> u8 {
     let z = (camera_zoom.log2() + 4.0).floor() as i32;
     z.clamp(0, 18) as u8
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn bounds(z: u8, x: u32, y: u32, cols: u32, rows: u32) -> DetailBounds {
+        let (west, north) = tile_to_lon_lat(&TileCoord { x, y, z });
+        let (east, south) = tile_to_lon_lat(&TileCoord {
+            x: x + cols,
+            y: y + rows,
+            z,
+        });
+        DetailBounds {
+            min_lon: west,
+            max_lon: east,
+            min_lat: south.to_radians(),
+            max_lat: north.to_radians(),
+        }
+    }
+    #[test]
+    fn shader_bounds_are_in_web_mercator_units() {
+        let b = bounds(4, 8, 1, 4, 7).shader_bounds();
+        assert!((b[2] as f64).abs() < 1e-6);
+        assert!((b[3] as f64 - PI * 0.875).abs() < 1e-6);
+        let p = tile_to_lon_lat(&TileCoord { x: 9, y: 3, z: 4 });
+        let u = (p.0 - b[0] as f64) / (b[1] - b[0]) as f64;
+        let v = (b[3] as f64 - p.1.to_radians().tan().asinh()) / (b[3] - b[2]) as f64;
+        assert!((u - 0.25).abs() < 1e-6);
+        assert!((v - 2.0 / 7.0).abs() < 1e-6);
+    }
+    #[test]
+    fn atlas_rebuilds_keep_global_tile_coordinates_fixed() {
+        for (lon, lat) in [(30.0_f64, 60.0_f64), (179.0, 60.0), (-179.0, -60.0)] {
+            let tile = lon_lat_to_tile(lon, lat, 5);
+            let n = 32.0;
+            let expected_y = (1.0 - lat.to_radians().tan().asinh() / PI) * 0.5 * n;
+            for (cols, rows) in [(2, 2), (4, 4), (6, 6)] {
+                let x = tile.x.saturating_sub(cols / 2);
+                let y = tile.y.saturating_sub(rows / 2);
+                let b = bounds(5, x, y, cols, rows).shader_bounds();
+                let v = (b[3] as f64 - lat.to_radians().tan().asinh()) / (b[3] - b[2]) as f64;
+                assert!((y as f64 + v * rows as f64 - expected_y).abs() < 1e-5);
+            }
+        }
+    }
 }
