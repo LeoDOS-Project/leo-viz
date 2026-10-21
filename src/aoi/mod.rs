@@ -2,6 +2,7 @@
 //! the circular routing-demo targets and do not acquire application semantics.
 
 mod environment;
+mod gpu;
 mod presets;
 pub(crate) mod preview;
 mod spatial;

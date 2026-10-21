@@ -2863,7 +2863,7 @@ pub fn draw_3d_view(
                 let selected = selected_aoi.filter(|(p, _)| Arc::ptr_eq(p, preview)).map(|(_, i)| i);
                 plot_ui.add(crate::aoi::preview::Overlay::new(
                     Arc::clone(preview), surface_rotation, planet_radius, flattening, *opacity,
-                ).with_selection(selected));
+                ).with_selection(selected).with_gpu(gpu_available && use_gpu_rendering));
             }
         }
 

@@ -6,7 +6,7 @@ use nalgebra::{Matrix3, Vector3};
 use serde::Deserialize;
 use std::{
     ops::RangeInclusive,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 #[derive(Deserialize)]
@@ -131,6 +131,7 @@ pub(crate) struct Preview {
     boundaries: Vec<Boundary>,
     spatial: super::spatial::Index,
     mesh_cache: Mutex<Vec<(Vec<f64>, Arc<Mesh>)>>,
+    gpu_geometry: OnceLock<Arc<super::gpu::Geometry>>,
 }
 
 fn unit([lon, lat]: [f64; 2]) -> Vector3<f64> {
@@ -188,6 +189,7 @@ impl Preview {
             boundaries: Vec::with_capacity(doc.aois.len()),
             spatial: super::spatial::Index::default(),
             mesh_cache: Mutex::new(Vec::new()),
+            gpu_geometry: OnceLock::new(),
         };
         const COLORS: [[u8; 3]; 6] = [
             [61, 222, 230],
@@ -282,6 +284,44 @@ impl Preview {
         );
         Ok(preview)
     }
+
+    pub(super) fn gpu_geometry(&self) -> Arc<super::gpu::Geometry> {
+        Arc::clone(self.gpu_geometry.get_or_init(|| {
+            let mut segments = Vec::new();
+            let mut dots = Vec::with_capacity(self.boundaries.len());
+            for boundary in &self.boundaries {
+                let anchor = boundary.anchor.map(|v| v as f32).into();
+                let color = [boundary.color[0], boundary.color[1], boundary.color[2], 255];
+                dots.push(super::gpu::Dot {
+                    anchor,
+                    radius: boundary.radius as f32,
+                    color,
+                });
+                for detail in &boundary.rings {
+                    for (level, (error, points)) in detail.levels.iter().enumerate() {
+                        let min_scale = detail.levels.get(level + 1)
+                            .map_or(0.0, |(next_error, _)| (0.7 / next_error) as f32);
+                        let max_scale = if *error > 0.0 {
+                            (0.7 / error) as f32
+                        } else {
+                            f32::MAX
+                        };
+                        for edge in points.windows(2) {
+                            segments.push(super::gpu::Segment {
+                                start: edge[0].map(|v| v as f32).into(),
+                                end: edge[1].map(|v| v as f32).into(),
+                                anchor,
+                                radius: boundary.radius as f32,
+                                color,
+                                scales: [min_scale, max_scale],
+                            });
+                        }
+                    }
+                }
+            }
+            Arc::new(super::gpu::Geometry::new(segments, dots))
+        }))
+    }
 }
 
 #[derive(Clone)]
@@ -319,6 +359,7 @@ pub(crate) struct Overlay {
     polar_scale: f64,
     opacity: f32,
     selected: Option<usize>,
+    use_gpu: bool,
 }
 
 impl Overlay {
@@ -337,11 +378,17 @@ impl Overlay {
             polar_scale: 1.0 - flattening,
             opacity,
             selected: None,
+            use_gpu: false,
         }
     }
 
     pub fn with_selection(mut self, selected: Option<usize>) -> Self {
         self.selected = selected;
+        self
+    }
+
+    pub fn with_gpu(mut self, enabled: bool) -> Self {
+        self.use_gpu = enabled;
         self
     }
 
@@ -472,7 +519,7 @@ impl Overlay {
         mesh
     }
 
-    fn mesh(&self, transform: &PlotTransform) -> Mesh {
+    pub(super) fn mesh(&self, transform: &PlotTransform) -> Mesh {
         let mut mesh = Mesh::default();
         let scale = transform
             .dpos_dvalue_x()
@@ -621,8 +668,21 @@ impl Overlay {
 }
 
 impl PlotItem for Overlay {
-    fn shapes(&self, _ui: &egui::Ui, transform: &PlotTransform, shapes: &mut Vec<Shape>) {
-        shapes.push(Shape::Mesh(self.cached_mesh(transform)));
+    fn shapes(&self, ui: &egui::Ui, transform: &PlotTransform, shapes: &mut Vec<Shape>) {
+        if self.use_gpu {
+            let callback = super::gpu::PaintCallback::new(
+                ui.id(),
+                self.preview.gpu_geometry(),
+                &self.rotation,
+                self.radius,
+                self.polar_scale,
+                self.opacity,
+                transform,
+            );
+            shapes.push(egui_wgpu::Callback::new_paint_callback(*transform.frame(), callback).into());
+        } else {
+            shapes.push(Shape::Mesh(self.cached_mesh(transform)));
+        }
         if self.selected.is_some() {
             shapes.push(Shape::Mesh(Arc::new(self.selection_mesh(transform))));
         }
@@ -652,6 +712,31 @@ impl PlotItem for Overlay {
 mod tests {
     use super::*;
     use egui::Pos2;
+    #[test]
+    fn gpu_geometry_is_cached_and_keeps_the_cpu_fallback_and_picking() {
+        let preview = Arc::new(Preview::from_json(br#"{"schema_version":1,"config":{"seed":42,"count":1},"aois":[{"area_km2":100,"anchor_lon":-90,"anchor_lat":0,"geometry":{"type":"Polygon","coordinates":[[[-91,-1],[-89,-1],[-89,1],[-91,1],[-91,-1]]]}}]}"#).unwrap());
+        let geometry = preview.gpu_geometry();
+        let transform = PlotTransform::new(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)),
+            PlotBounds::new_symmetrical(7000.0), [false, false]);
+        let context = egui::Context::default();
+        let mut output = context.run_ui(Default::default(), |ui| {
+            for angle in [0.0, 0.2, 0.5] {
+                let overlay = Overlay::new(preview.clone(), crate::math::rotation_from_drag(angle, 0.0), 6371.0, 0.0, 0.8);
+                let mut shapes = Vec::new();
+                overlay.with_gpu(true).shapes(ui, &transform, &mut shapes);
+                assert_eq!(shapes.len(), 1);
+                assert!(matches!(shapes[0], Shape::Callback(_)));
+                assert!(Arc::ptr_eq(&geometry, &preview.gpu_geometry()));
+            }
+            let overlay = Overlay::new(preview.clone(), Matrix3::identity(), 6371.0, 0.0, 0.8);
+            let mut shapes = Vec::new();
+            overlay.shapes(ui, &transform, &mut shapes);
+            assert!(matches!(shapes[0], Shape::Mesh(_)));
+            let center = transform.position_from_point(&PlotPoint::new(0.0, 0.0));
+            assert_eq!(overlay.pick(center, &transform).len(), 1);
+        });
+        output.textures_delta.clear();
+    }
     #[test]
     fn picks_interiors_holes_overlaps_and_dateline_without_backside_hits() {
         let geometry = serde_json::json!({"type":"Polygon", "coordinates":[

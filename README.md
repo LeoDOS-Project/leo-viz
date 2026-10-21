@@ -47,8 +47,20 @@ independent overlays. Global source caches live outside Git and are prepared on
 first use if absent. WorldCover uses a coarse 0.025° tree-cover proxy; sensor GSD
 is independent. See the [source assumptions and setup](tools/leo-aoi/README.md#environmental-sources).
 
-AOI rendering uses a spatial visibility hierarchy, zoom-dependent outline detail,
-and grouped distant dots. These display approximations do not alter stored AOIs.
+Generated AOIs use persistent GPU buffers by default. Camera transforms, horizon
+clipping, outline detail selection, and distant-dot rendering run in shaders;
+moving the globe does not rebuild AOI meshes on the CPU. Buffers are shared
+between globe views, with independent camera uniforms per view. Exact picking
+and the selection highlight still use the original geographic boundaries.
+
+Disabling **GPU rendering** uses the CPU fallback with its spatial visibility
+hierarchy, zoom-dependent outlines, and grouped distant dots. Display
+approximations do not alter stored AOIs. To run the native GPU pixel tests and
+the release benchmark with the bundled 50,000 AOIs:
+
+```sh
+cargo test --release aoi::gpu::tests -- --ignored --nocapture
+```
 
 
 ## Job configurations and steady workload totals
