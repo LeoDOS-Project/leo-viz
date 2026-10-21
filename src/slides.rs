@@ -62,7 +62,7 @@ struct DeckInfo {
 }
 
 pub const SPACECOMP_PRIMER: DeckId = DeckId("spacecomp-primer");
-pub const SPACECOMP_PRIMER_SLIDE_COUNT: usize = 76;
+pub const SPACECOMP_PRIMER_SLIDE_COUNT: usize = 81;
 
 const ALL_DECKS: &[DeckInfo] = &[DeckInfo {
     id: SPACECOMP_PRIMER,
