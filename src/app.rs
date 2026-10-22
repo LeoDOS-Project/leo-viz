@@ -10,8 +10,6 @@ use crate::drawing::draw_satellite_camera;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::geo::{dirs_cache, load_geo_overlay, GeoLoadState};
 use crate::renderer::GpuResources;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::texture::decode_jpeg_pixels;
 use crate::texture::load_earth_texture;
 use crate::texture::TextureLoadState;
 #[cfg(target_arch = "wasm32")]
@@ -19,9 +17,10 @@ use crate::texture::{
     CLOUD_TEXTURE_RESULT, MILKY_WAY_TEXTURE_RESULT, NIGHT_TEXTURE_RESULT, STAR_TEXTURE_RESULT,
     TEXTURE_RESULT,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use crate::tile::{
-    camera_zoom_to_tile_zoom, lon_lat_to_tile, tile_to_lon_lat, DetailBounds, DetailTexture,
-    TileCacheEntry, TileCoord, TileFetchResult, TileOverlayState, TileQuadTree,
+    fetch_tile, lon_lat_to_tile, stable_tile_zoom, AtlasLayout, DetailAtlas, DetailTexture,
+    TileCacheEntry, TileCoord, TileFetchRequest, TileFetchResult, TileOverlayState, TileQuadTree,
 };
 use crate::time::{body_rotation_angle, greenwich_mean_sidereal_time};
 #[cfg(target_arch = "wasm32")]
@@ -32,9 +31,14 @@ use chrono::{Duration, Utc};
 use eframe::egui;
 use egui_dock::{DockArea, DockState};
 use nalgebra::{Matrix3, Vector3};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashSet;
+#[cfg(not(target_arch = "wasm32"))]
 use std::f64::consts::PI;
-use std::sync::{mpsc, Arc};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::mpsc;
+use std::sync::Arc;
 
 fn compute_sat_heading(x: f64, y: f64, z: f64, vx: f64, vy: f64, vz: f64) -> f64 {
     let r = (x * x + y * y + z * z).sqrt();
@@ -81,6 +85,10 @@ pub(crate) struct App {
     max_animation_dt: Option<f64>,
     #[cfg(not(target_arch = "wasm32"))]
     frame_pacer: FramePacer,
+    #[cfg(not(target_arch = "wasm32"))]
+    tile_diagnostics: Option<crate::tile_diagnostics::Replay>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pushbroom_images: crate::pushbroom_image::Cameras,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -266,6 +274,10 @@ impl App {
             }
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let tile_diagnostics = crate::tile_diagnostics::Replay::from_env();
+        #[cfg(not(target_arch = "wasm32"))]
+        let tile_trace = tile_diagnostics.as_ref().map(|run| Arc::clone(&run.trace));
         #[allow(unused_mut)]
         let mut app = Self {
             dock_state: DockState::new(vec![0]),
@@ -317,7 +329,9 @@ impl App {
                 show_tab_info: false,
                 slideshow_fade_alpha: 1.0,
                 use_gpu_rendering: std::env::var_os("LEO_VIZ_DISABLE_PLANET_GPU").is_none(),
+                #[cfg(not(target_arch = "wasm32"))]
                 show_borders: false,
+                #[cfg(not(target_arch = "wasm32"))]
                 show_cities: false,
                 active_tab_idx: 0,
                 prev_active_tab_idx: 0,
@@ -346,8 +360,7 @@ impl App {
                 tle_fetch_rx,
                 #[cfg(not(target_arch = "wasm32"))]
                 tile_overlay: {
-                    let (fetch_tx, fetch_rx) =
-                        mpsc::channel::<(TileCoord, std::path::PathBuf, u64)>();
+                    let (fetch_tx, fetch_rx) = mpsc::channel::<TileFetchRequest>();
                     let (result_tx, result_rx) = mpsc::channel::<TileFetchResult>();
                     let disk_cache_dir = dirs_cache().join("leo-viz").join("tiles");
                     let _ = std::fs::create_dir_all(&disk_cache_dir);
@@ -359,117 +372,40 @@ impl App {
                         let rx = fetch_rx.clone();
                         let tx = result_tx.clone();
                         let gen = fetch_generation.clone();
-                        std::thread::spawn(move || loop {
-                            let msg = {
-                                let lock = rx.lock().unwrap();
-                                lock.recv()
-                            };
-                            let (coord, cache_dir, req_gen) = match msg {
-                                Ok(m) => m,
-                                Err(_) => break,
-                            };
-                            if coord.z > 6
-                                && gen.load(std::sync::atomic::Ordering::Relaxed) != req_gen
-                            {
-                                let _ = tx.send(TileFetchResult {
+                        std::thread::spawn(move || {
+                            let agent = ureq::AgentBuilder::new()
+                                .timeout(std::time::Duration::from_secs(8))
+                                .build();
+                            loop {
+                                let msg = {
+                                    let lock = rx.lock().unwrap();
+                                    lock.recv()
+                                };
+                                let request = match msg {
+                                    Ok(m) => m,
+                                    Err(_) => break,
+                                };
+                                let TileFetchRequest {
                                     coord,
-                                    pixels: Vec::new(),
-                                    width: 0,
-                                    height: 0,
-                                });
-                                continue;
-                            }
-                            let cache_path = cache_dir
-                                .join(coord.z.to_string())
-                                .join(coord.y.to_string())
-                                .join(format!("{}.jpg", coord.x));
-
-                            let pixels_result = if cache_path.exists() {
-                                std::fs::read(&cache_path)
-                                    .ok()
-                                    .and_then(|bytes| decode_jpeg_pixels(&bytes))
-                            } else {
-                                None
-                            };
-
-                            let fetched = if let Some(p) = pixels_result {
-                                Some(p)
-                            } else {
-                                let url = format!(
-                                        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{}/{}/{}",
-                                        coord.z, coord.y, coord.x
-                                    );
-                                match ureq::get(&url).call() {
-                                    Ok(resp) => {
-                                        let mut bytes = Vec::new();
-                                        if std::io::Read::read_to_end(
-                                            &mut resp.into_reader(),
-                                            &mut bytes,
-                                        )
-                                        .is_ok()
-                                        {
-                                            if let Some(p) = decode_jpeg_pixels(&bytes) {
-                                                if let Some(parent) = cache_path.parent() {
-                                                    let _ = std::fs::create_dir_all(parent);
-                                                }
-                                                let _ = std::fs::write(&cache_path, &bytes);
-                                                Some(p)
-                                            } else {
-                                                None
-                                            }
-                                        } else {
-                                            None
-                                        }
-                                    }
-                                    Err(_) => None,
+                                    generation: req_gen,
+                                    cancel_if_stale,
+                                    ref trace,
+                                    ..
+                                } = request;
+                                if let Some(trace) = &trace {
+                                    trace.started();
                                 }
-                            };
-
-                            if coord.z >= 10 {
-                                if let Some((ref px, _, _)) = fetched {
-                                    let step = (px.len() / 256).max(1);
-                                    let n = (px.len() / step).max(1) as u64;
-                                    let (mut sr, mut sg, mut sb) = (0u64, 0u64, 0u64);
-                                    for i in 0..n as usize {
-                                        let p = px[i * step];
-                                        sr += p[0] as u64;
-                                        sg += p[1] as u64;
-                                        sb += p[2] as u64;
+                                if cancel_if_stale
+                                    && coord.z > 6
+                                    && gen.load(std::sync::atomic::Ordering::Relaxed) != req_gen
+                                {
+                                    if let Some(trace) = &trace {
+                                        trace.record("cancelled", serde_json::json!({}));
                                     }
-                                    let (ar, ag, ab) = (sr / n, sg / n, sb / n);
-                                    let mut var = 0u64;
-                                    for i in 0..n as usize {
-                                        let p = px[i * step];
-                                        let dr = p[0] as i64 - ar as i64;
-                                        let dg = p[1] as i64 - ag as i64;
-                                        let db = p[2] as i64 - ab as i64;
-                                        var += (dr * dr + dg * dg + db * db) as u64;
-                                    }
-                                    if var / n < 100 {
-                                        let _ = tx.send(TileFetchResult {
-                                            coord,
-                                            pixels: Vec::new(),
-                                            width: 0,
-                                            height: 0,
-                                        });
-                                        continue;
-                                    }
+                                    let _ = tx.send(TileFetchResult::empty(&request));
+                                    continue;
                                 }
-                            }
-                            if let Some((pixels, w, h)) = fetched {
-                                let _ = tx.send(TileFetchResult {
-                                    coord,
-                                    pixels,
-                                    width: w,
-                                    height: h,
-                                });
-                            } else {
-                                let _ = tx.send(TileFetchResult {
-                                    coord,
-                                    pixels: Vec::new(),
-                                    width: 0,
-                                    height: 0,
-                                });
+                                let _ = tx.send(fetch_tile(&request, &agent));
                             }
                         });
                     }
@@ -486,11 +422,12 @@ impl App {
                         generation: 0,
                         tile_x_origin: 0,
                         pending_tiles: HashSet::new(),
+                        missing_tiles: HashMap::new(),
                         needed_tiles: Vec::new(),
                         dirty: false,
-                        last_compose: web_time::Instant::now(),
                         base_fetched: false,
-                        compose_buffer: Vec::new(),
+                        atlas: DetailAtlas::default(),
+                        diagnostics: tile_trace,
                     }
                 },
                 view_width: 800.0,
@@ -551,6 +488,10 @@ impl App {
                 .map(|v| v / 1000.0),
             #[cfg(not(target_arch = "wasm32"))]
             frame_pacer: FramePacer::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            tile_diagnostics,
+            #[cfg(not(target_arch = "wasm32"))]
+            pushbroom_images: crate::pushbroom_image::Cameras::default(),
         };
 
         {
@@ -756,9 +697,18 @@ impl eframe::App for App {
             };
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(run) = &mut self.tile_diagnostics {
+            run.before_frame(&mut self.viewer, ctx);
+        }
+
         self.simulation_ui.show(ctx, &self.viewer);
         self.viewer.aoi_generator.poll(ctx);
-        self.viewer.revisit.show(ctx, &self.viewer.tabs[self.viewer.active_tab_idx], self.viewer.start_timestamp);
+        self.viewer.revisit.show(
+            ctx,
+            &self.viewer.tabs[self.viewer.active_tab_idx],
+            self.viewer.start_timestamp,
+        );
         let v = &mut self.viewer;
 
         let effective_dark_mode = v
@@ -860,6 +810,7 @@ impl eframe::App for App {
                 }
             }
             v.moon_image_handles.retain(|b, _| needed_moons.contains(b));
+            #[cfg(not(target_arch = "wasm32"))]
             let gpu_ok = v.render_state.is_some();
             for &moon_body in &needed_moons {
                 if v.moon_image_handles.contains_key(&moon_body) {
@@ -1055,10 +1006,17 @@ impl eframe::App for App {
         }
 
         #[cfg(not(target_arch = "wasm32"))]
-        if v.tile_overlay.enabled {
+        {
             while let Ok(result) = v.tile_overlay.result_rx.try_recv() {
                 v.tile_overlay.pending_tiles.remove(&result.coord);
+                if result.missing {
+                    v.tile_overlay.remember_missing(result.coord);
+                    v.tile_overlay
+                        .queue_tile_request(result.coord, result.cancel_if_stale);
+                }
                 if !result.pixels.is_empty() {
+                    let before = v.tile_overlay.tile_tree.tile_count;
+                    let added = usize::from(!v.tile_overlay.tile_tree.has_tile(&result.coord));
                     v.tile_overlay.tile_tree.insert(
                         result.coord,
                         TileCacheEntry {
@@ -1067,10 +1025,21 @@ impl eframe::App for App {
                             height: result.height,
                         },
                     );
+                    if let Some(trace) = &v.tile_overlay.diagnostics {
+                        let evicted =
+                            (before + added).saturating_sub(v.tile_overlay.tile_tree.tile_count);
+                        trace.record("received", serde_json::json!({"tile": result.coord}));
+                        if evicted > 0 {
+                            trace.record("ram_evicted", serde_json::json!({"count": evicted}));
+                        }
+                    }
                     v.tile_overlay.dirty = true;
                 }
             }
+        }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        if v.tile_overlay.enabled {
             if !v.tile_overlay.base_fetched {
                 v.tile_overlay.base_fetched = true;
                 for bz in 0u8..=3 {
@@ -1083,12 +1052,7 @@ impl eframe::App for App {
                                 z: bz,
                             };
                             if !v.tile_overlay.tile_tree.has_tile(&c) {
-                                v.tile_overlay.pending_tiles.insert(c);
-                                let _ = v.tile_overlay.fetch_tx.send((
-                                    c,
-                                    v.tile_overlay.disk_cache_dir.clone(),
-                                    v.tile_overlay.generation,
-                                ));
+                                v.tile_overlay.queue_tile(c);
                             }
                         }
                     }
@@ -1215,8 +1179,8 @@ impl eframe::App for App {
                     let margin = 1.5;
                     let lon_center = (min_lon + max_lon) / 2.0;
                     let lat_center = (min_lat + max_lat) / 2.0;
-                    let tile_deg =
-                        360.0 / (1u64 << camera_zoom_to_tile_zoom(tile_zoom).clamp(2, 18)) as f64;
+                    let detail_zoom = stable_tile_zoom(tile_zoom, v.tile_overlay.last_zoom).max(2);
+                    let tile_deg = 360.0 / (1u64 << detail_zoom) as f64;
                     let min_half = tile_deg * 3.0;
                     let lon_half = ((max_lon - min_lon) / 2.0 * margin).max(min_half);
                     let lat_half = ((max_lat - min_lat) / 2.0 * margin).max(min_half);
@@ -1226,7 +1190,11 @@ impl eframe::App for App {
                     max_lat = (lat_center + lat_half).min(85.0);
                     let lon_span = max_lon - min_lon;
 
-                    let mut tile_zoom = camera_zoom_to_tile_zoom(tile_zoom).max(2);
+                    let mut tile_zoom = detail_zoom;
+                    let max_dimension = v
+                        .render_state
+                        .as_ref()
+                        .map_or(8192, |rs| rs.device.limits().max_texture_dimension_2d);
                     let (needed, x_origin) = loop {
                         let n = 1u32 << tile_zoom;
                         let tl = lon_lat_to_tile(min_lon, max_lat, tile_zoom);
@@ -1248,7 +1216,11 @@ impl eframe::App for App {
                         let y_max = tl.y.max(br.y);
                         let y_count = y_max - y_min + 1;
                         let total = x_count as usize * y_count as usize;
-                        if total <= 256 || tile_zoom <= 2 {
+                        if (total <= 256
+                            && x_count * crate::tile::TILE_SIZE <= max_dimension
+                            && y_count * crate::tile::TILE_SIZE <= max_dimension)
+                            || tile_zoom <= 2
+                        {
                             let mut tiles = Vec::with_capacity(total);
                             for &tx in &x_range_v {
                                 for ty in y_min..=y_max {
@@ -1276,12 +1248,23 @@ impl eframe::App for App {
                         || v.tile_overlay.needed_tiles != needed;
 
                     if bounds_changed && !needed.is_empty() {
-                        let needed_set: HashSet<TileCoord> = needed.iter().copied().collect();
+                        if let Some(trace) = &v.tile_overlay.diagnostics {
+                            trace.record("selection", serde_json::json!({
+                                "layout": AtlasLayout::new(&needed, x_origin),
+                                "needed": needed.len(),
+                                "ram_hits": needed.iter().filter(|c| v.tile_overlay.tile_tree.has_tile(c)).count(),
+                                "pending_hits": needed.iter().filter(|c| v.tile_overlay.pending_tiles.contains(c)).count(),
+                            }));
+                        }
+                        let mut keep_set: HashSet<TileCoord> = needed.iter().copied().collect();
+                        for coord in &needed {
+                            keep_set.extend(std::iter::successors(coord.parent(), |c| c.parent()));
+                        }
                         let stale_count = v
                             .tile_overlay
                             .pending_tiles
                             .iter()
-                            .filter(|c| !needed_set.contains(c))
+                            .filter(|c| !keep_set.contains(c))
                             .count();
                         if stale_count > 8 {
                             v.tile_overlay.generation = v.tile_overlay.generation.wrapping_add(1);
@@ -1294,19 +1277,6 @@ impl eframe::App for App {
                         v.tile_overlay.tile_x_origin = x_origin;
                         v.tile_overlay.needed_tiles = needed.clone();
                         v.tile_overlay.dirty = true;
-                        let mut keep_set = needed_set.clone();
-                        for coord in &needed {
-                            for step in &[2u8, 4] {
-                                if coord.z > *step + 3 {
-                                    let az = coord.z - step;
-                                    keep_set.insert(TileCoord {
-                                        x: coord.x >> step,
-                                        y: coord.y >> step,
-                                        z: az,
-                                    });
-                                }
-                            }
-                        }
                         v.tile_overlay
                             .pending_tiles
                             .retain(|c| keep_set.contains(c));
@@ -1315,12 +1285,7 @@ impl eframe::App for App {
                             if !v.tile_overlay.tile_tree.has_tile(coord)
                                 && !v.tile_overlay.pending_tiles.contains(coord)
                             {
-                                v.tile_overlay.pending_tiles.insert(*coord);
-                                let _ = v.tile_overlay.fetch_tx.send((
-                                    *coord,
-                                    v.tile_overlay.disk_cache_dir.clone(),
-                                    v.tile_overlay.generation,
-                                ));
+                                v.tile_overlay.queue_tile(*coord);
                             }
                             for step in &[2u8, 4] {
                                 if coord.z > *step + 3 {
@@ -1333,156 +1298,109 @@ impl eframe::App for App {
                                     if !v.tile_overlay.tile_tree.has_tile(&ac)
                                         && !v.tile_overlay.pending_tiles.contains(&ac)
                                     {
-                                        v.tile_overlay.pending_tiles.insert(ac);
-                                        let _ = v.tile_overlay.fetch_tx.send((
-                                            ac,
-                                            v.tile_overlay.disk_cache_dir.clone(),
-                                            v.tile_overlay.generation,
-                                        ));
+                                        v.tile_overlay.queue_tile(ac);
                                     }
                                 }
                             }
                         }
                     }
 
-                    let all_loaded = v.tile_overlay.pending_tiles.is_empty();
-                    let compose_elapsed = v.tile_overlay.last_compose.elapsed().as_millis() >= 200;
-                    if v.tile_overlay.dirty
-                        && !v.tile_overlay.needed_tiles.is_empty()
-                        && (bounds_changed || all_loaded || compose_elapsed)
-                    {
-                        v.tile_overlay.dirty = false;
-                        v.tile_overlay.last_compose = web_time::Instant::now();
-                        let needed = v.tile_overlay.needed_tiles.clone();
-                        let y_min = needed.iter().map(|c| c.y).min().unwrap();
-                        let y_max = needed.iter().map(|c| c.y).max().unwrap();
-                        let x_org = v.tile_overlay.tile_x_origin;
-                        let z = needed[0].z;
-                        let n = 1u32 << z;
-                        let col_of = |x: u32| -> u32 {
-                            if x >= x_org {
-                                x - x_org
-                            } else {
-                                n - x_org + x
-                            }
-                        };
-                        let cols = needed.iter().map(|c| col_of(c.x)).max().unwrap() + 1;
-                        let rows = y_max - y_min + 1;
-                        let tile_size = 256u32;
-                        let tex_w = cols * tile_size;
-                        let tex_h = rows * tile_size;
-                        let pixel_count = (tex_w * tex_h) as usize;
-                        v.tile_overlay
-                            .compose_buffer
-                            .resize(pixel_count, [0u8, 0, 0, 0]);
-                        v.tile_overlay
-                            .compose_buffer
-                            .iter_mut()
-                            .for_each(|p| *p = [0, 0, 0, 0]);
-                        let pixels = &mut v.tile_overlay.compose_buffer;
-                        for coord in &needed {
-                            let dst_ox = (col_of(coord.x) * tile_size) as usize;
-                            let dst_oy = ((coord.y - y_min) * tile_size) as usize;
-                            if let Some(found_z) = v.tile_overlay.tile_tree.best_tile_zoom(coord) {
-                                let d = coord.z - found_z;
-                                if d == 0 {
-                                    let entry =
-                                        v.tile_overlay.tile_tree.get_tile_at(coord).unwrap();
-                                    let tw = entry.width.min(tile_size) as usize;
-                                    let th = entry.height.min(tile_size) as usize;
-                                    for row in 0..th {
-                                        for col in 0..tw {
-                                            let src_idx = row * entry.width as usize + col;
-                                            let dst_idx =
-                                                (dst_oy + row) * tex_w as usize + (dst_ox + col);
-                                            if src_idx < entry.pixels.len()
-                                                && dst_idx < pixels.len()
-                                            {
-                                                let [r, g, b] = entry.pixels[src_idx];
-                                                pixels[dst_idx] = [r, g, b, 255];
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    let anc = TileCoord {
-                                        x: coord.x >> d,
-                                        y: coord.y >> d,
-                                        z: found_z,
-                                    };
-                                    let entry = v.tile_overlay.tile_tree.get_tile_at(&anc).unwrap();
-                                    let scale = 1u32 << d;
-                                    let sub_x = coord.x & (scale - 1);
-                                    let sub_y = coord.y & (scale - 1);
-                                    let src_ox = sub_x as f64 * entry.width as f64 / scale as f64;
-                                    let src_oy = sub_y as f64 * entry.height as f64 / scale as f64;
-                                    let src_w = entry.width as f64 / scale as f64;
-                                    let src_h = entry.height as f64 / scale as f64;
-                                    for row in 0..256usize {
-                                        for col in 0..256usize {
-                                            let sr = (src_oy + row as f64 * src_h / 256.0) as usize;
-                                            let sc = (src_ox + col as f64 * src_w / 256.0) as usize;
-                                            let ew = entry.width as usize;
-                                            let eh = entry.height as usize;
-                                            let si = sr.min(eh - 1) * ew + sc.min(ew - 1);
-                                            let di =
-                                                (dst_oy + row) * tex_w as usize + (dst_ox + col);
-                                            if si < entry.pixels.len() && di < pixels.len() {
-                                                let [r, g, b] = entry.pixels[si];
-                                                pixels[di] = [r, g, b, 255];
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        let (top_left_lon, top_left_lat) = tile_to_lon_lat(&TileCoord {
-                            x: x_org,
-                            y: y_min,
-                            z,
-                        });
-                        let right_x = x_org + cols;
-                        let (bot_right_lon, bot_right_lat) = if right_x <= n {
-                            tile_to_lon_lat(&TileCoord {
-                                x: right_x,
-                                y: y_max + 1,
-                                z,
-                            })
-                        } else {
-                            let (lon, lat) = tile_to_lon_lat(&TileCoord {
-                                x: right_x - n,
-                                y: y_max + 1,
-                                z,
-                            });
-                            (lon + 360.0, lat)
-                        };
-
-                        let new_bounds = DetailBounds {
-                            min_lon: top_left_lon,
-                            max_lon: bot_right_lon,
-                            min_lat: bot_right_lat.to_radians(),
-                            max_lat: top_left_lat.to_radians(),
-                        };
-
+                    let fading = v
+                        .tile_overlay
+                        .detail_texture
+                        .as_ref()
+                        .is_some_and(|detail| detail.blend() < 1.0);
+                    if fading {
+                        ctx.request_repaint();
+                    }
+                    if v.tile_overlay.dirty && !v.tile_overlay.needed_tiles.is_empty() && !fading {
                         if let Some(ref rs) = v.render_state {
-                            let flat_pixels: &[u8] = unsafe {
-                                std::slice::from_raw_parts(
-                                    v.tile_overlay.compose_buffer.as_ptr() as *const u8,
-                                    v.tile_overlay.compose_buffer.len() * 4,
-                                )
-                            };
                             let mut wr = rs.renderer.write();
                             if let Some(gpu) = wr.callback_resources.get_mut::<GpuResources>() {
-                                gpu.upload_detail_texture(
+                                let overlay = &mut v.tile_overlay;
+                                let layout =
+                                    AtlasLayout::new(&overlay.needed_tiles, overlay.tile_x_origin);
+                                let published = overlay.detail_texture.as_ref().map(|t| t.layout);
+                                let layout_changed = overlay.atlas.layout != Some(layout);
+                                let updating_current = published == Some(layout)
+                                    && !gpu.detail_atlas_pending()
+                                    && overlay.atlas.needs_updates(
+                                        &mut overlay.tile_tree,
+                                        &overlay.needed_tiles,
+                                    );
+                                // Preserve the displayed texture while preparing its replacement.
+                                if layout_changed || updating_current {
+                                    let started = overlay
+                                        .diagnostics
+                                        .as_ref()
+                                        .map(|_| std::time::Instant::now());
+                                    gpu.move_detail_atlas(
+                                        &rs.device,
+                                        &rs.queue,
+                                        overlay.atlas.layout,
+                                        layout,
+                                    );
+                                    overlay.atlas.set_layout(layout);
+                                    if let Some(trace) = &overlay.diagnostics {
+                                        trace.record("atlas_move", serde_json::json!({
+                                            "layout": layout, "updating_current": updating_current,
+                                            "elapsed_ms": started.unwrap().elapsed().as_secs_f64() * 1000.0,
+                                        }));
+                                    }
+                                }
+                                let upload_started = overlay
+                                    .diagnostics
+                                    .as_ref()
+                                    .map(|_| std::time::Instant::now());
+                                let mut writer = gpu.detail_atlas_writer(
                                     &rs.device,
                                     &rs.queue,
-                                    tex_w,
-                                    tex_h,
-                                    flat_pixels,
+                                    &overlay.needed_tiles,
                                 );
+                                overlay.dirty = overlay.atlas.update_tiles(
+                                    &mut overlay.tile_tree,
+                                    &overlay.needed_tiles,
+                                    &mut writer,
+                                );
+                                let stats = writer.finish();
+                                if let Some(trace) = &overlay.diagnostics {
+                                    trace.record("atlas_upload", serde_json::json!({
+                                        "tiles": stats.uploaded_tiles,
+                                        "bytes": stats.uploaded_tiles * (crate::tile::TILE_SIZE as usize).pow(2) * 4,
+                                        "gpu_reused_tiles": stats.reused_tiles,
+                                        "gpu_resampled_tiles": stats.resampled_tiles,
+                                        "gpu_evicted_tiles": stats.evicted_tiles,
+                                        "gpu_cached_tiles": stats.cached_tiles,
+                                        "elapsed_ms": upload_started.unwrap().elapsed().as_secs_f64() * 1000.0,
+                                        "more_uploads": overlay.dirty, "covered": overlay.atlas.covers(&overlay.needed_tiles),
+                                    }));
+                                }
+                                // Finish the staged refinement before starting another fade.
+                                if gpu.detail_atlas_pending()
+                                    && !overlay.dirty
+                                    && overlay.atlas.covers(&overlay.needed_tiles)
+                                {
+                                    gpu.publish_detail_atlas();
+                                    if let Some(trace) = &overlay.diagnostics {
+                                        trace.record(
+                                            "published",
+                                            serde_json::json!({"layout": layout}),
+                                        );
+                                    }
+                                    let previous_bounds =
+                                        overlay.detail_texture.as_ref().map(|t| t.bounds.clone());
+                                    overlay.detail_texture = Some(DetailTexture {
+                                        bounds: layout.bounds(),
+                                        layout,
+                                        previous_bounds,
+                                        fade_started: web_time::Instant::now(),
+                                    });
+                                    ctx.request_repaint();
+                                }
+                                if overlay.dirty {
+                                    ctx.request_repaint();
+                                }
                             }
-                            v.tile_overlay.detail_texture =
-                                Some(DetailTexture { bounds: new_bounds });
                         }
                     }
                 }
@@ -2620,7 +2538,9 @@ impl eframe::App for App {
                 .show(ctx, |ui| {
                     ui.add_space(4.0);
                     ui.toggle_value(&mut self.viewer.earth_observation.open, "Earth Observation")
-                        .on_hover_text("Show the right sidebar: AOIs, observation model and data collection");
+                        .on_hover_text(
+                            "Show the right sidebar: AOIs, observation model and data collection",
+                        );
                     ui.horizontal(|ui| {
                         ui.add_space(4.0);
                         ui.strong("LeoDOS Visualiser")
@@ -2885,10 +2805,15 @@ impl eframe::App for App {
         }
         let active = self.viewer.active_tab_idx;
         if let Some(request) = self.viewer.earth_observation.sidebar(
-            ctx, &mut self.viewer.aoi_generator, &mut self.viewer.tabs[active],
-            active, self.viewer.start_timestamp,
+            ctx,
+            &mut self.viewer.aoi_generator,
+            &mut self.viewer.tabs[active],
+            active,
+            self.viewer.start_timestamp,
         ) {
-            self.viewer.revisit.open_for(request.planet, request.cycle_s);
+            self.viewer
+                .revisit
+                .open_for(request.planet, request.cycle_s);
         }
         mark_frame!("side-panel");
 
@@ -2966,7 +2891,8 @@ impl eframe::App for App {
                 let idx = self.viewer.active_tab_idx;
                 if let Some(tab) = self.viewer.tabs.get_mut(idx) {
                     let factor = if zoom_in_key { 1.2 } else { 1.0 / 1.2 };
-                    tab.settings.zoom = (tab.settings.zoom * factor).clamp(0.01, 20000.0);
+                    tab.settings.zoom =
+                        (tab.settings.zoom * factor).clamp(0.01, crate::math::MAX_CAMERA_ZOOM);
                 }
             } else if j_key || k_key {
                 let tab_data: Vec<(egui_dock::SurfaceIndex, egui_dock::NodeIndex, usize)> = self
@@ -3122,6 +3048,9 @@ impl eframe::App for App {
                 self.viewer.editing_tab = None;
             }
         }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        self.pushbroom_images.show(&mut self.viewer, ctx);
 
         let active_idx = self.viewer.active_tab_idx;
         for (ti, tab) in self.viewer.tabs.iter().enumerate() {
@@ -3280,7 +3209,7 @@ impl eframe::App for App {
                             ))
                             .line_segment(
                                 [screen_pos, win_center],
-                                egui::Stroke::new(1.5, egui::Color32::WHITE),
+                                egui::Stroke::new(1.5_f32, egui::Color32::WHITE),
                             );
                         }
                     }
@@ -3350,6 +3279,10 @@ impl eframe::App for App {
         }
 
         self.first_frame = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(run) = &mut self.tile_diagnostics {
+            run.after_frame(&self.viewer, ctx);
+        }
     }
 
     fn on_exit(&mut self) {}

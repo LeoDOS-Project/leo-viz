@@ -240,6 +240,7 @@ pub struct RingTexture {
 }
 
 impl RingTexture {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         use std::io::Cursor;
         let cursor = Cursor::new(bytes);

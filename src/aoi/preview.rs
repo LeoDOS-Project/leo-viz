@@ -298,6 +298,8 @@ impl Preview {
                 })
                 .collect::<Vec<_>>(),
         );
+        // Build render data while generation/loading still runs off the native UI thread.
+        self.gpu_geometry();
         self
     }
 
@@ -884,7 +886,7 @@ mod tests {
                 hotspot_spread: 10.0,
                 hotspot_fraction: 0.8,
             }),
-            Some(super::super::data::Dataset::bundled_gdp().unwrap()),
+            Some(super::super::data::load(&super::super::data::Input::default(), "gdp").unwrap()),
         )
         .unwrap();
         let preview = loop {

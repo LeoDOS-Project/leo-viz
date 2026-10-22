@@ -3,7 +3,9 @@ use super::model::{Generator, Job};
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use leo_sim::acquisition::CaptureProfile;
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Write};
+use std::io::Read;
+#[cfg(not(target_arch = "wasm32"))]
+use std::io::Write;
 
 #[derive(Serialize, Deserialize)]
 pub struct Document {

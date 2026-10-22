@@ -53,6 +53,8 @@ pub enum TextureResolution {
     R2048,
     R4096,
     R8192,
+    // Retained for shared texture-resolution handling; only offered on desktop.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     R21504,
 }
 

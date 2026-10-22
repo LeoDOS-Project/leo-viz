@@ -1,0 +1,15 @@
+[package]
+name = "leo-aoi-data"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "leo-aoi-data"
+path = "main.rs"
+
+[dependencies]
+base64 = "0.22"
+flate2 = "1"
+npyz = { version = "0.9.1", features = ["npz"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }

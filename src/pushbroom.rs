@@ -18,6 +18,8 @@ pub(crate) struct Settings {
     pub swath_km: f64,
     pub trail_s: f64,
     pub show_fan: bool,
+    pub show_images: bool,
+    pub image_length_km: f64,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -26,6 +28,8 @@ impl Default for Settings {
             swath_km: 20.0,
             trail_s: 60.0,
             show_fan: false,
+            show_images: false,
+            image_length_km: 50.0,
         }
     }
 }
@@ -41,14 +45,21 @@ impl Settings {
                 ui.label("Swath width");
                 ui.add(egui::DragValue::new(&mut self.swath_km).range(1.0..=500.0).speed(1.0).suffix(" km"));
             });
-            if self.enabled {
+            ui.add_enabled_ui(self.enabled, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Recent trail");
                     ui.add(egui::DragValue::new(&mut self.trail_s).range(5.0..=300.0).speed(5.0).suffix(" s"));
                 });
                 ui.checkbox(&mut self.show_fan, "Show sensor fan");
-                ui.small("Continuous nadir-imaging preview. Animate to build a trail; scheduling and clouds are not applied.");
-            }
+                ui.add_enabled(cfg!(not(target_arch = "wasm32")), egui::Checkbox::new(&mut self.show_images, "Pushbroom images"))
+                    .on_hover_text("Click a satellite to open its swept-ground image from Esri World Imagery; desktop only");
+                ui.add_enabled_ui(self.show_images && cfg!(not(target_arch = "wasm32")), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Image length");
+                        ui.add(egui::DragValue::new(&mut self.image_length_km).range(1.0..=2000.0).speed(1.0).suffix(" km"));
+                    });
+                });
+            });
         });
     }
 }
@@ -70,6 +81,101 @@ struct Track {
 pub(crate) struct History {
     tracks: HashMap<Key, Track>,
     time: Option<f64>,
+    sources: HashMap<usize, Vec<u64>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+pub(crate) struct ImageLine {
+    pub edges: [Vector; 2],
+    pub distance_km: f64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+pub(crate) struct ImageStrip {
+    pub lines: Vec<ImageLine>,
+    pub time: f64,
+    pub source: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl History {
+    pub fn image_strip(
+        &self,
+        source_index: usize,
+        plane: usize,
+        satellite: usize,
+        settings: Settings,
+        radius: f64,
+    ) -> Option<ImageStrip> {
+        let source = *self
+            .sources
+            .get(&source_index)?
+            .iter()
+            .find(|&&source| self.tracks.contains_key(&(source, plane, satellite)))?;
+        let track = self.tracks.get(&(source, plane, satellite))?;
+        let mut samples: Vec<_> = track.samples.iter().copied().collect();
+        if samples.last().is_some_and(|s| s.time != track.head.time) {
+            samples.push(track.head);
+        }
+        if samples.len() < 2 {
+            return None;
+        }
+        let cutoff = track.head.time - settings.trail_s;
+        if samples[0].time < cutoff && samples[1].time > cutoff {
+            let fraction = (cutoff - samples[0].time) / (samples[1].time - samples[0].time);
+            samples[0].centre = normalized(std::array::from_fn(|i| {
+                samples[0].centre[i] * (1.0 - fraction) + samples[1].centre[i] * fraction
+            }))?;
+            samples[0].time = cutoff;
+        }
+        let mut lines: Vec<ImageLine> = Vec::new();
+        let mut distance = 0.0;
+        for i in (0..samples.len()).rev() {
+            if i + 1 < samples.len() {
+                let a = samples[i].centre;
+                let b = samples[i + 1].centre;
+                distance +=
+                    norm(cross(a, b)).atan2(a.iter().zip(b).map(|(a, b)| a * b).sum()) * radius;
+            }
+            let direction = sub(
+                samples[(i + 1).min(samples.len() - 1)].centre,
+                samples[i.saturating_sub(1)].centre,
+            );
+            let mut edges = scanline(
+                samples[i].centre,
+                direction,
+                settings.swath_km,
+                radius,
+                samples[i].radius_ratio,
+            )?;
+            if distance > settings.image_length_km {
+                let previous = lines.last()?;
+                let fraction = (settings.image_length_km - previous.distance_km)
+                    / (distance - previous.distance_km);
+                for side in 0..2 {
+                    edges[side] = normalized(std::array::from_fn(|axis| {
+                        previous.edges[side][axis] * (1.0 - fraction) + edges[side][axis] * fraction
+                    }))?;
+                }
+                lines.push(ImageLine {
+                    edges,
+                    distance_km: settings.image_length_km,
+                });
+                break;
+            }
+            lines.push(ImageLine {
+                edges,
+                distance_km: distance,
+            });
+        }
+        (distance > 0.001).then_some(ImageStrip {
+            lines,
+            time: track.head.time,
+            source,
+        })
+    }
 }
 
 fn cross(a: Vector, b: Vector) -> Vector {
@@ -105,6 +211,7 @@ impl History {
     pub fn clear(&mut self) {
         self.tracks.clear();
         self.time = None;
+        self.sources.clear();
     }
 
     pub fn update(
@@ -126,6 +233,7 @@ impl History {
             self.clear();
         }
         let mut seen = HashSet::new();
+        self.sources.clear();
         for (draw_index, (orbit, positions, color_offset, kind, source_index, label)) in
             constellations.iter().enumerate()
         {
@@ -152,6 +260,7 @@ impl History {
                 v.to_bits().hash(&mut hasher);
             }
             let source = hasher.finish();
+            self.sources.entry(*source_index).or_default().push(source);
             for sat in positions {
                 let body = rotation.transpose() * Vector3::new(sat.x, sat.y, sat.z);
                 let xyz = [body.x, body.y, body.z];
@@ -477,6 +586,36 @@ mod tests {
         };
         h.record((0, 0, 0), teleport, Color32::GREEN, 60.0, R);
         assert_eq!(h.tracks[&(0, 0, 0)].samples.len(), 1);
+    }
+
+    #[test]
+    fn image_strip_uses_recorded_scanlines_and_clips_its_ground_length() {
+        let mut history = History::default();
+        history.sources.insert(2, vec![0]);
+        let settings = Settings {
+            enabled: true,
+            image_length_km: 10.0,
+            ..Default::default()
+        };
+        assert!(history.image_strip(2, 0, 0, settings, R).is_none());
+        for time in 0..20 {
+            history.record((0, 0, 0), sample(time as f64), Color32::GREEN, 60.0, R);
+        }
+        let strip = history.image_strip(2, 0, 0, settings, R).unwrap();
+        assert_eq!(strip.time, 19.0);
+        assert_eq!(strip.lines[0].distance_km, 0.0);
+        assert!((strip.lines.last().unwrap().distance_km - 10.0).abs() < 1e-8);
+        assert!(strip
+            .lines
+            .windows(2)
+            .all(|lines| lines[1].distance_km > lines[0].distance_km));
+        for line in strip.lines {
+            assert!(
+                (angular_distance(line.edges[0], line.edges[1]) * R - settings.swath_km).abs()
+                    < 0.01
+            );
+        }
+        assert!(history.image_strip(3, 0, 0, settings, R).is_none());
     }
     #[test]
     fn globe_mesh_clips_hidden_side_and_fan_adds_geometry() {

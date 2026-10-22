@@ -4,7 +4,6 @@ use serde::Deserialize;
 use std::{io::Read, sync::Arc};
 
 const MAX_BYTES: u64 = 512 * 1024 * 1024;
-const GDP: &[u8] = include_bytes!("../../assets/aois/gdp.aoi-data.json.gz");
 
 #[derive(Clone, Default)]
 pub(super) struct Input {
@@ -13,6 +12,9 @@ pub(super) struct Input {
 }
 
 impl Input {
+    pub fn is_default(&self) -> bool {
+        self.path.trim().is_empty() && self.bytes.is_none()
+    }
     pub fn ui(&mut self, ui: &mut eframe::egui::Ui) {
         ui.label("Dataset file or URL");
         if ui.text_edit_singleline(&mut self.path).changed() {
@@ -177,6 +179,9 @@ fn dimensions(columns: usize, rows: usize, limit: usize) -> Result<usize, String
 
 impl Dataset {
     pub fn decode(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.starts_with(b"version https://git-lfs.github.com/spec/v1") {
+            return Err("Dataset is a Git LFS pointer, not geographic data. Run git lfs pull --include=\"assets/aois/**\"; web deployments must publish the resolved LFS files.".into());
+        }
         if bytes.len() as u64 > MAX_BYTES {
             return Err("AOI dataset exceeds 512 MiB".into());
         }
@@ -193,7 +198,7 @@ impl Dataset {
             return Err("AOI dataset is empty or exceeds 512 MiB".into());
         }
         let doc: Document = serde_json::from_slice(&decoded)
-            .map_err(|e| format!("Invalid AOI dataset: {e}. Use a prepared .aoi-data.json.gz file, not an .npz or raw raster."))?;
+            .map_err(|e| format!("Invalid AOI dataset: {e}. Use a prepared .aoi-data.json.gz file; see tools/leo-aoi/README.md for the Rust exporter."))?;
         if doc.schema_version != 1 {
             return Err("Unsupported AOI dataset version".into());
         }
@@ -250,11 +255,43 @@ impl Dataset {
             Source::Coast { network } => Self::Coast(network.decode()?),
         })
     }
+}
 
-    pub fn bundled_gdp() -> Result<Arc<Self>, String> {
-        static DATA: std::sync::OnceLock<Result<Arc<Dataset>, String>> = std::sync::OnceLock::new();
-        DATA.get_or_init(|| Self::decode(GDP).map(Arc::new)).clone()
+fn cache(kind: &str) -> Result<&'static std::sync::OnceLock<Arc<Dataset>>, String> {
+    static GDP: std::sync::OnceLock<Arc<Dataset>> = std::sync::OnceLock::new();
+    static FOREST: std::sync::OnceLock<Arc<Dataset>> = std::sync::OnceLock::new();
+    static RIVER: std::sync::OnceLock<Arc<Dataset>> = std::sync::OnceLock::new();
+    static COAST: std::sync::OnceLock<Arc<Dataset>> = std::sync::OnceLock::new();
+    match kind {
+        "gdp" => Ok(&GDP),
+        "forest" => Ok(&FOREST),
+        "river" => Ok(&RIVER),
+        "coast" => Ok(&COAST),
+        _ => Err("Unknown geographic dataset".into()),
     }
+}
+
+fn asset_path(kind: &str) -> String {
+    format!("assets/aois/{kind}.aoi-data.json.gz")
+}
+
+fn publish(result: Arc<Dataset>, kind: &str, defaults: bool) -> Result<Arc<Dataset>, String> {
+    let matches = matches!(
+        (kind, result.as_ref()),
+        ("gdp", Dataset::Demand(_))
+            | ("forest", Dataset::Forest(_))
+            | ("river", Dataset::River(_))
+            | ("coast", Dataset::Coast(_))
+    );
+    if !matches {
+        return Err(format!("Dataset does not match the selected {kind} source"));
+    }
+    if defaults {
+        let cached = cache(kind)?;
+        let _ = cached.set(Arc::clone(&result));
+        return Ok(Arc::clone(cached.get().unwrap()));
+    }
+    Ok(result)
 }
 
 impl Network {
@@ -295,17 +332,23 @@ impl Network {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn load(input: &Input, bundled: bool) -> Result<Arc<Dataset>, String> {
+pub(super) fn load(input: &Input, kind: &str) -> Result<Arc<Dataset>, String> {
     if let Some(bytes) = &input.bytes {
-        return Dataset::decode(bytes).map(Arc::new);
+        return publish(Arc::new(Dataset::decode(bytes)?), kind, false);
     }
-    if input.bytes.is_none() && input.path.trim().is_empty() && bundled {
-        return Dataset::bundled_gdp();
+    let defaults = input.is_default();
+    if defaults {
+        if let Some(data) = cache(kind)?.get() {
+            return Ok(Arc::clone(data));
+        }
     }
-    let bytes = if let Some(bytes) = &input.bytes {
-        bytes.to_vec()
-    } else if input.path.starts_with("https://") || input.path.starts_with("http://") {
-        let response = ureq::get(&input.path)
+    let path = if defaults {
+        asset_path(kind)
+    } else {
+        input.path.trim().to_owned()
+    };
+    let bytes = if path.starts_with("https://") || path.starts_with("http://") {
+        let response = ureq::get(&path)
             .timeout(std::time::Duration::from_secs(120))
             .call()
             .map_err(|e| format!("Could not download AOI dataset: {e}"))?;
@@ -317,13 +360,20 @@ pub(super) fn load(input: &Input, bundled: bool) -> Result<Arc<Dataset>, String>
             .map_err(|e| e.to_string())?;
         bytes
     } else {
-        let path = std::path::Path::new(&input.path);
+        let path = std::path::Path::new(&path);
         let path = if path.is_absolute() {
             path.to_owned()
+        } else if defaults {
+            let deployed = std::env::current_exe()
+                .ok()
+                .and_then(|e| e.parent().map(|p| p.join(path)));
+            deployed
+                .filter(|p| p.is_file())
+                .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path))
         } else {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
         };
-        let file = std::fs::File::open(&path).map_err(|e| format!("Could not open {}: {e}. Prepare this dataset offline; see tools/leo-aoi/README.md.", path.display()))?;
+        let file = std::fs::File::open(&path).map_err(|e| format!("Could not open {}: {e}. Run git lfs pull --include=\"assets/aois/**\" or select another dataset.", path.display()))?;
         let mut bytes = Vec::new();
         file.take(MAX_BYTES + 1)
             .read_to_end(&mut bytes)
@@ -333,21 +383,29 @@ pub(super) fn load(input: &Input, bundled: bool) -> Result<Arc<Dataset>, String>
     if bytes.len() as u64 > MAX_BYTES {
         return Err("AOI dataset exceeds 512 MiB".into());
     }
-    Dataset::decode(&bytes).map(Arc::new)
+    publish(Arc::new(Dataset::decode(&bytes)?), kind, defaults)
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(super) async fn load(input: &Input, bundled: bool) -> Result<Arc<Dataset>, String> {
+pub(super) async fn load(input: &Input, kind: &str) -> Result<Arc<Dataset>, String> {
     use wasm_bindgen::JsCast;
     use wasm_bindgen_futures::JsFuture;
     if let Some(bytes) = &input.bytes {
-        return Dataset::decode(bytes).map(Arc::new);
+        return publish(Arc::new(Dataset::decode(bytes)?), kind, false);
     }
-    if input.path.trim().is_empty() && bundled {
-        return Dataset::bundled_gdp();
+    let defaults = input.is_default();
+    if defaults {
+        if let Some(data) = cache(kind)?.get() {
+            return Ok(Arc::clone(data));
+        }
     }
+    let path = if defaults {
+        asset_path(kind)
+    } else {
+        input.path.trim().to_owned()
+    };
     let window = web_sys::window().ok_or("No browser window")?;
-    let response: web_sys::Response = JsFuture::from(window.fetch_with_str(&input.path))
+    let response: web_sys::Response = JsFuture::from(window.fetch_with_str(&path))
         .await
         .map_err(|e| format!("Dataset download failed: {e:?}"))?
         .dyn_into()
@@ -362,7 +420,7 @@ pub(super) async fn load(input: &Input, bundled: bool) -> Result<Arc<Dataset>, S
         .await
         .map_err(|e| format!("{e:?}"))?;
     let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
-    Dataset::decode(&bytes).map(Arc::new)
+    publish(Arc::new(Dataset::decode(&bytes)?), kind, defaults)
 }
 
 #[cfg(test)]
@@ -392,15 +450,77 @@ pub(super) fn fixture(kind: &str) -> Input {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn bundled_demand_is_valid_and_cached() {
-        let a = Dataset::bundled_gdp().unwrap();
-        assert!(Arc::ptr_eq(&a, &Dataset::bundled_gdp().unwrap()));
+    fn default_demand_is_valid_and_cached() {
+        let a = load(&Input::default(), "gdp").unwrap();
+        assert!(Arc::ptr_eq(&a, &load(&Input::default(), "gdp").unwrap()));
         let Dataset::Demand(d) = a.as_ref() else {
             panic!()
         };
         assert_eq!((d.columns, d.rows), (1440, 720));
         assert_eq!(d.cells.len(), 264199);
+    }
+
+    #[test]
+    fn lfs_pointers_return_an_actionable_error() {
+        let error = Dataset::decode(
+            b"version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 12\n",
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("git lfs pull"));
+    }
+
+    #[test]
+    fn wrong_source_does_not_enter_the_default_cache() {
+        let river = Arc::new(Dataset::decode(fixture("river").bytes.as_ref().unwrap()).unwrap());
+        assert!(publish(river, "forest", true).is_err());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn compact_environmental_datasets_generate_aois_and_are_cached() {
+        use super::super::generate::{Environment, Job, Settings};
+        for kind in ["forest", "river", "coast"] {
+            let dataset = load(&Input::default(), kind).unwrap();
+            assert!(Arc::ptr_eq(
+                &dataset,
+                &load(&Input::default(), kind).unwrap()
+            ));
+            match dataset.as_ref() {
+                Dataset::Forest(f) => assert_eq!((f.columns, f.rows), (7200, 3600)),
+                Dataset::River(n) => assert_eq!(n.ids.len(), 857210),
+                Dataset::Coast(n) => assert_eq!(n.ids.len(), 6847),
+                _ => panic!("Wrong geographic source"),
+            }
+            let mut job = Job::new(
+                Settings::Environment(Environment {
+                    kind,
+                    count: 5,
+                    seed: 42,
+                    mean_area: 1000.0,
+                    size_ratio: 100.0,
+                    mean_length: 100.0,
+                    length_ratio: 20.0,
+                    buffer: 2.0,
+                    inland: 2.0,
+                    offshore: 1.0,
+                    flow: 10.0,
+                    compactness: 0.7,
+                    latitude: 70.0,
+                    tile_edge: 0.1,
+                }),
+                Some(dataset),
+            )
+            .unwrap();
+            let preview = loop {
+                if let Some(p) = job.step().unwrap() {
+                    break p;
+                }
+            };
+            assert_eq!(preview.count, 5);
+        }
     }
     #[test]
     fn invalid_datasets_return_errors() {

@@ -46,10 +46,7 @@ impl Source {
             compactness: 0.7,
             latitude: 70.0,
             tile_edge: 0.1,
-            dataset: data::Input {
-                path: format!("assets/aois/{kind}.aoi-data.json.gz"),
-                bytes: None,
-            },
+            dataset: data::Input::default(),
         }
     }
 
@@ -84,6 +81,10 @@ impl Source {
         ui: &mut egui::Ui,
         busy: bool,
     ) -> Option<(generate::Settings, data::Input)> {
+        let bundled = self.dataset.is_default();
+        if bundled && self.kind == "river" {
+            self.flow = self.flow.max(10.0);
+        }
         let mut request = None;
         ui.push_id(self.kind, |ui| {
             ui.heading(self.name);
@@ -91,17 +92,17 @@ impl Source {
                 "forest" => {
                     ui.hyperlink_to("ESA WorldCover 2021", "https://esa-worldcover.org/en/data-access");
                     ui.label("Area-weighted tree-cover locations. Connected patches grow to a sampled area, preferring forested cells.");
-                    ui.small("Coarse tree-cover proxy: 0.025° cells (about 2.8 km north–south). This does not set imagery resolution.");
+                    if bundled { ui.label("Tree-cover grid: 0.05 degrees"); }
                 }
                 "river" => {
-                    ui.hyperlink_to("HydroRIVERS v1.0", "https://www.hydrosheds.org/products/hydrorivers");
+                    ui.hyperlink_to(if bundled {"RiverATLAS v1.0 (compact)"} else {"River network"}, "https://www.hydrosheds.org/hydroatlas");
                     ui.label("Length-weighted river locations. Follow connected reaches downstream and buffer both banks.");
                     ui.small("Paths end at outlets or missing connections. The buffer is a monitoring corridor, not a flood prediction.");
                 }
                 _ => {
-                    ui.hyperlink_to("OpenStreetMap coastlines", "https://osmdata.openstreetmap.de/data/coastlines.html");
+                    ui.hyperlink_to(if bundled {"Natural Earth 1:10 million"} else {"Coastline network"}, "https://www.naturalearthdata.com/downloads/10m-physical-vectors/10m-land/");
                     ui.label("Length-weighted coastline locations. Follow connected shoreline segments with land and sea buffers.");
-                    ui.small("Paths stop at gaps or after one circuit of an island. © OpenStreetMap contributors, ODbL.");
+                    if bundled { ui.label("Made with Natural Earth. Public domain."); }
                 }
             }
             ui.add_enabled_ui(!busy, |ui| {
@@ -118,7 +119,7 @@ impl Source {
                         ui.label("Length range (max/min)"); ui.add(egui::DragValue::new(&mut self.length_ratio).range(1.0..=100.0).suffix("×")); ui.end_row();
                         if self.kind == "river" {
                             ui.label("Buffer on each bank"); ui.add(egui::DragValue::new(&mut self.buffer).range(0.1..=50.0).speed(0.1).suffix(" km")); ui.end_row();
-                            ui.label("Minimum discharge"); ui.add(egui::DragValue::new(&mut self.flow).range(1.0..=1e6).speed(1.0).suffix(" m³/s")); ui.end_row();
+                            ui.label("Minimum discharge"); ui.add(egui::DragValue::new(&mut self.flow).range(if bundled {10.0..=1e6} else {1.0..=1e6}).speed(1.0).suffix(" m³/s")); ui.end_row();
                         } else {
                             ui.label("Inland buffer"); ui.add(egui::DragValue::new(&mut self.inland).range(0.1..=50.0).speed(0.1).suffix(" km")); ui.end_row();
                             ui.label("Offshore buffer"); ui.add(egui::DragValue::new(&mut self.offshore).range(0.1..=50.0).speed(0.1).suffix(" km")); ui.end_row();
@@ -150,7 +151,7 @@ impl Source {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 

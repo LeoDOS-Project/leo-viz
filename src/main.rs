@@ -2,7 +2,6 @@
 
 mod aep8;
 mod aoi;
-mod jobs;
 mod app;
 #[cfg(not(target_arch = "wasm32"))]
 mod bridge;
@@ -12,36 +11,43 @@ mod celestial;
 #[cfg(not(target_arch = "wasm32"))]
 mod cfs;
 mod config;
-mod orbit_presets;
 mod conjunction;
 mod demo;
 mod drawing;
+mod earth_observation;
 mod geo;
 mod globe_overlay;
 mod igrf;
+mod jobs;
 mod kessler;
 mod math;
+mod orbit_presets;
 mod pass;
 mod physics;
 mod projection;
 mod pushbroom;
+#[cfg(not(target_arch = "wasm32"))]
+mod pushbroom_image;
 mod radiation;
 mod renderer;
 mod revisit;
-mod earth_observation;
 mod settings;
 mod simulation_ui;
 mod slides;
 mod solar_system;
 mod spacecomp;
 mod texture;
+#[cfg(not(target_arch = "wasm32"))]
 mod tile;
+#[cfg(not(target_arch = "wasm32"))]
+mod tile_diagnostics;
 mod time;
 mod tle;
 mod viewer;
 mod walker;
 
 pub(crate) use app::App;
+#[cfg(not(target_arch = "wasm32"))]
 use eframe::egui;
 #[cfg(target_arch = "wasm32")]
 use eframe::wasm_bindgen::JsCast;
@@ -65,6 +71,9 @@ fn main() -> eframe::Result<()> {
         .and_then(|v| v.parse::<u32>().ok())
         .or(Some(2));
     let options = eframe::NativeOptions {
+        persist_window: !crate::tile_diagnostics::enabled(),
+        persistence_path: crate::tile_diagnostics::enabled()
+            .then(|| std::path::PathBuf::from("target/esri-diagnostics-eframe.ron")),
         viewport: egui::ViewportBuilder::default().with_inner_size([1600.0, 1000.0]),
         vsync: matches!(
             present_mode,

@@ -22,15 +22,16 @@ use crate::texture::{
     STAR_TEXTURE_RESULT, TEXTURE_RESULT,
 };
 use crate::texture::{EarthTexture, RingTexture, TextureLoadState};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::tile::TileOverlayState;
 use crate::time::{
     body_rotation_angle, continuous_day_of_year, DAYS_PER_YEAR, SOLAR_DECLINATION_MAX,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::tle::TleSatellite;
 #[cfg(target_arch = "wasm32")]
 use crate::tle::TLE_FETCH_RESULT;
-use crate::tle::{
-    mean_motion_to_altitude_km, TleLoadState, TlePreset, TleSatellite, TleShell, SECONDS_PER_DAY,
-};
+use crate::tle::{mean_motion_to_altitude_km, TleLoadState, TlePreset, TleShell, SECONDS_PER_DAY};
 use crate::walker::{SatelliteState, WalkerConstellation, WalkerType};
 use chrono::{DateTime, Utc};
 use eframe::egui;
@@ -39,7 +40,9 @@ use egui_dock::{NodeIndex, SurfaceIndex, TabViewer};
 use nalgebra::{Matrix3, Vector3};
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
-use std::sync::{mpsc, Arc};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::mpsc;
+use std::sync::Arc;
 
 pub(crate) struct ContextMenuState {
     pub(crate) screen_pos: egui::Pos2,
@@ -311,7 +314,9 @@ pub(crate) struct ViewerState {
     pub(crate) show_tab_info: bool,
     pub(crate) slideshow_fade_alpha: f32,
     pub(crate) use_gpu_rendering: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) show_borders: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) show_cities: bool,
     pub(crate) active_tab_idx: usize,
     pub(crate) prev_active_tab_idx: usize,
@@ -592,16 +597,29 @@ impl ViewerState {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn tile_overlay_detail_bounds(&self, body: CelestialBody) -> Option<[f32; 4]> {
+    fn tile_overlay_detail_bounds(
+        &self,
+        body: CelestialBody,
+    ) -> Option<crate::renderer::DetailLayer> {
         if !self.tile_overlay.enabled || body != CelestialBody::Earth {
             return None;
         }
         let dt = self.tile_overlay.detail_texture.as_ref()?;
-        Some(dt.bounds.shader_bounds())
+        Some(crate::renderer::DetailLayer {
+            bounds: dt.bounds.mercator_bounds(),
+            previous_bounds: dt
+                .previous_bounds
+                .as_ref()
+                .map_or([0.0; 4], |b| b.mercator_bounds()),
+            blend: dt.blend(),
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn tile_overlay_detail_bounds(&self, _body: CelestialBody) -> Option<[f32; 4]> {
+    fn tile_overlay_detail_bounds(
+        &self,
+        _body: CelestialBody,
+    ) -> Option<crate::renderer::DetailLayer> {
         None
     }
 
@@ -809,7 +827,7 @@ impl ViewerState {
                         egui::pos2(sep_x, planet_rect.min.y),
                         egui::pos2(sep_x, planet_rect.max.y),
                     ],
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 80)),
+                    egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(80, 80, 80)),
                 );
             }
             // Horizontal separator between rows.
@@ -820,7 +838,7 @@ impl ViewerState {
                         egui::pos2(available_rect.min.x, sep_y),
                         egui::pos2(available_rect.max.x, sep_y),
                     ],
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 80)),
+                    egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(80, 80, 80)),
                 );
             }
         }
@@ -2887,7 +2905,8 @@ impl ViewerState {
         }); });
 
                 if adam_applied {
-                    self.tabs[tab_idx].settings.pushbroom.swath_km = crate::orbit_presets::ADAM_SWATH_KM;
+                    self.tabs[tab_idx].settings.pushbroom.swath_km =
+                        crate::orbit_presets::ADAM_SWATH_KM;
                     let planet = &mut self.tabs[tab_idx].planets[planet_idx];
                     planet.ground_track_history.clear();
                     planet.pushbroom_history.clear();
@@ -2929,10 +2948,7 @@ impl ViewerState {
         let view_name = planet.name.clone();
 
         #[cfg(not(target_arch = "wasm32"))]
-        #[cfg(not(target_arch = "wasm32"))]
         let hide_sats = self.tabs[tab_idx].settings.zoom > 100.0 && self.tile_overlay.enabled;
-        #[cfg(target_arch = "wasm32")]
-        let hide_sats = false;
         #[cfg(target_arch = "wasm32")]
         let hide_sats = false;
         let mut constellations_data: Vec<DrawConstellationData> = if hide_sats {
@@ -3919,7 +3935,7 @@ impl ViewerState {
                                     egui_plot::PlotPoints::new(inner_line),
                                 )
                                 .color(inner_color)
-                                .width(2.0),
+                                .width(2.0_f32),
                             );
                             plot_ui.line(
                                 egui_plot::Line::new(
@@ -3927,7 +3943,7 @@ impl ViewerState {
                                     egui_plot::PlotPoints::new(outer_line),
                                 )
                                 .color(outer_color)
-                                .width(2.0),
+                                .width(2.0_f32),
                             );
                         });
 
@@ -4050,15 +4066,17 @@ impl ViewerState {
             planet.show_moons_window = show_moons_window;
         }
 
-        let mut available = ui.available_size();
+        let available = ui.available_size();
         #[cfg(not(target_arch = "wasm32"))]
-        {
+        let available = {
+            let mut available = available;
             available.x = constrained_width.min(available.x);
             let clip = ui.clip_rect();
             let cursor = ui.cursor().min;
             available.x = available.x.min((clip.max.x - cursor.x).max(0.0));
             available.y = available.y.min((clip.max.y - cursor.y).max(0.0));
-        }
+            available
+        };
         let settings = &self.tabs[tab_idx].settings;
         let view_mode = settings.view_mode;
         let render_planet = view_mode == crate::config::ViewMode::Planet;
@@ -4214,8 +4232,13 @@ impl ViewerState {
                     ui.vertical(|ui| {
                         let planet = &mut self.tabs[tab_idx].planets[planet_idx];
                         if celestial_body == CelestialBody::Earth && pushbroom_settings.enabled {
-                            planet.pushbroom_history.update(time, &body_y_rotation, planet_radius,
-                                &constellations_data, pushbroom_settings);
+                            planet.pushbroom_history.update(
+                                time,
+                                &body_y_rotation,
+                                planet_radius,
+                                &constellations_data,
+                                pushbroom_settings,
+                            );
                         } else {
                             planet.pushbroom_history.clear();
                         }
@@ -4523,13 +4546,21 @@ impl ViewerState {
                         let (rot, new_zoom) = draw_3d_view(
                             ui,
                             Draw3dInput {
-                                observation_sampler: self.earth_observation.armed_for(tab_idx, planet_idx),
-                                observation_marker: self.earth_observation.marker_for(tab_idx, planet_idx),
+                                observation_sampler: self
+                                    .earth_observation
+                                    .armed_for(tab_idx, planet_idx),
+                                observation_marker: self
+                                    .earth_observation
+                                    .marker_for(tab_idx, planet_idx),
                                 generated_aois: self.aoi_generator.overlays(),
                                 selected_aoi: self.aoi_generator.jobs.selected(),
-                                pushbroom: if celestial_body == CelestialBody::Earth && pushbroom_settings.enabled {
+                                pushbroom: if celestial_body == CelestialBody::Earth
+                                    && pushbroom_settings.enabled
+                                {
                                     Some((&planet.pushbroom_history, pushbroom_settings))
-                                } else { None },
+                                } else {
+                                    None
+                                },
                                 id: &view_name,
                                 constellations: &constellations_data,
                                 flags: view_flags,

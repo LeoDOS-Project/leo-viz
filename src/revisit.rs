@@ -8,10 +8,11 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use eframe::egui;
+use leo_sim::{geometry::Vector, orbit::Elements, revisit::PointStats};
+#[cfg(any(test, not(target_arch = "wasm32")))]
 use leo_sim::{
-    geometry::{gmst, norm, Vector},
-    orbit::Elements,
-    revisit::{unit, Accumulator, GroundPoint, PointStats},
+    geometry::{gmst, norm},
+    revisit::{unit, Accumulator, GroundPoint},
 };
 use std::{
     hash::{Hash, Hasher},
@@ -38,6 +39,7 @@ impl Orbit {
                 .map_err(|e| format!("TLE propagation failed for {}: {e:?}", t.name)),
         }
     }
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     fn inclination(&self) -> f64 {
         match self {
             Self::Analytical(e) => e.inclination_rad.to_degrees(),
@@ -106,14 +108,22 @@ pub(crate) fn fingerprint(p: &PlanetConfig, swath: f64, epoch: DateTime<Utc>) ->
 }
 
 pub(crate) fn orbits(p: &PlanetConfig) -> Result<Vec<Orbit>, String> {
-    Ok(orbit_groups(p)?.into_iter().flat_map(|(_, orbits)| orbits).collect())
+    Ok(orbit_groups(p)?
+        .into_iter()
+        .flat_map(|(_, orbits)| orbits)
+        .collect())
 }
 
 /// Shared selection and propagation inputs for coverage and acquisition estimates.
 pub(crate) fn orbit_groups(p: &PlanetConfig) -> Result<Vec<(String, Vec<Orbit>)>, String> {
     let body = CelestialBody::Earth;
     let mut result = Vec::new();
-    for (index, c) in p.constellations.iter().enumerate().filter(|(_, c)| !c.hidden) {
+    for (index, c) in p
+        .constellations
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !c.hidden)
+    {
         if !matches!(c.propagator, Propagator::Keplerian | Propagator::J2) {
             return Err("This estimate supports Keplerian, J2 and TLE/SGP4 orbits. Switch visible numerical/42 constellations to Keplerian or J2 to calculate.".into());
         }
@@ -171,6 +181,7 @@ struct Row {
     label: String,
     indices: std::ops::Range<usize>,
 }
+#[cfg(any(test, not(target_arch = "wasm32")))]
 fn ground_points(limit: f64, opts: Options) -> (Vec<GroundPoint>, Vec<Row>) {
     let mut points = vec![GroundPoint {
         lat: opts.latitude,
@@ -208,6 +219,7 @@ fn ground_points(limit: f64, opts: Options) -> (Vec<GroundPoint>, Vec<Row>) {
     }
     (points, rows)
 }
+#[cfg(any(test, not(target_arch = "wasm32")))]
 struct Request {
     orbits: Vec<Orbit>,
     epoch: f64,
@@ -227,6 +239,7 @@ struct Report {
     limit: f64,
     step: f64,
 }
+#[cfg(any(test, not(target_arch = "wasm32")))]
 fn calculate(r: Request, cancel: &AtomicBool, progress: &AtomicUsize) -> Result<Report, String> {
     let radius = CelestialBody::Earth.radius_km();
     let duration = r.options.days * 86400.0;
@@ -369,8 +382,12 @@ impl Panel {
     pub fn open_for(&mut self, planet: usize, cycle_s: Option<f64>) {
         self.open = true;
         self.planet = planet;
-        if let Some(p) = self.pending.take() {p.cancel.store(true, Ordering::Relaxed);}
-        if let Some(seconds) = cycle_s {self.options.days = seconds / 86400.0;}
+        if let Some(p) = self.pending.take() {
+            p.cancel.store(true, Ordering::Relaxed);
+        }
+        if let Some(seconds) = cycle_s {
+            self.options.days = seconds / 86400.0;
+        }
     }
     pub fn show(&mut self, ctx: &egui::Context, tab: &TabConfig, epoch: DateTime<Utc>) {
         if let Some(pending) = &self.pending {

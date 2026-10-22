@@ -3,16 +3,25 @@ use crate::config::ConstellationConfig;
 
 #[test]
 fn opening_a_repeat_cycle_preserves_its_fractional_day_duration_in_the_ui() {
-    let mut panel=Panel::default();
-    let cycle=6000.0; // Equatorial synodic repeats can be shorter than 0.1 day.
-    panel.open_for(0,Some(cycle));
-    let ctx=egui::Context::default();
-    let tab=TabConfig::new("Earth".into());
-    let epoch=DateTime::from_timestamp(946728000,0).unwrap();
+    let mut panel = Panel::default();
+    let cycle = 6000.0; // Equatorial synodic repeats can be shorter than 0.1 day.
+    panel.open_for(0, Some(cycle));
+    let ctx = egui::Context::default();
+    let tab = TabConfig::new("Earth".into());
+    let epoch = DateTime::from_timestamp(946728000, 0).unwrap();
     for _ in 0..3 {
-        let _=ctx.run_ui(egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1400.0,1000.0))),..Default::default()},|ui|panel.show(ui.ctx(),&tab,epoch));
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 1000.0),
+                )),
+                ..Default::default()
+            },
+            |ui| panel.show(ui.ctx(), &tab, epoch),
+        );
     }
-    assert!((panel.options.days*86400.0-cycle).abs()<1e-8);
+    assert!((panel.options.days * 86400.0 - cycle).abs() < 1e-8);
 }
 
 fn request(inc: f64, swath: f64, lat: f64, fine: bool) -> Request {

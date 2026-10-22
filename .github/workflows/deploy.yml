@@ -22,10 +22,10 @@ jobs:
         with:
           lfs: false
 
-      - name: Fetch presentation assets
+      - name: Fetch presentation and geographic assets
         run: |
           git lfs install --local --force
-          git lfs pull --include="assets/presentations/**" --exclude="textures/**"
+          git lfs pull --include="assets/presentations/**,assets/aois/*.aoi-data.json.gz" --exclude="textures/**"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -58,6 +58,12 @@ jobs:
             echo "Presentation slides were deployed as Git LFS pointers" >&2
             exit 1
           fi
+
+      - name: Check deployed geographic datasets
+        run: |
+          for source in gdp forest river coast; do
+            gzip -t "dist/assets/aois/$source.aoi-data.json.gz"
+          done
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

@@ -23,10 +23,8 @@ and the boundary between infrastructure actions and the future job layer.
 
 ## Spatial workloads
 
-The offline [`leo-aoi`](tools/leo-aoi/README.md) pipeline ingests GDP or other
-weighted rasters and generates reproducible, overlapping AOIs as rectangles
-or connected rectangular mosaics. It supports compact continent-scale geometry, dataset
-mixtures, masks and adjustable clustering, without application categories.
+The Rust AOI generator creates reproducible, overlapping AOIs as rectangles
+or connected rectangular mosaics, using weighted GDP demand or uniform sampling.
 In the right **Earth Observation** sidebar, open **AOI Generator → Default Jobs → Load preset** to display the bundled
 50,000 AOIs without Python or external data files. Generation defaults are an
 expected mean area of 1,000 km², a 1,000× max/min area ratio, seed 42, 600 hotspots,
@@ -38,20 +36,26 @@ The adjacent manifest records provenance, library versions, statistics and hashe
 
 For new samples, tune the parameters and click **Generate**. Generation runs in
 Rust on desktop and in the browser, with no Python installation or subprocess.
-The 2024 GDP demand field is bundled; **Uniform globe** requires no dataset.
+The 2024 GDP demand field is distributed with Git LFS; **Uniform globe** requires no dataset.
 Custom prepared datasets can be loaded from a local file on desktop, a URL, or
 by dropping a `.aoi-data.json.gz` file onto the selected AOI source page.
-Python is now only an optional offline tool for ingesting raw geographic data
-and reproducing the original preset. See the [dataset export instructions](tools/leo-aoi/README.md#portable-datasets).
+The optional [dataset exporter](tools/leo-aoi/README.md) is also written in Rust.
 Job parameters are assigned in the **Jobs** pane described below; acquisition scheduling remains a later stage.
 
 The AOI panel also has independent **Forests**, **Rivers** and **Coasts** pages,
-using ESA WorldCover, HydroRIVERS and OpenStreetMap coastlines. They generate
+using compact ESA WorldCover, RiverATLAS and Natural Earth snapshots. They generate
 bounded patches or connected buffered paths, with source-specific controls and
-independent overlays. Prepare these larger datasets offline once, export them,
-and load the exported files into the app; generation never downloads raw sources
-or launches Python. WorldCover uses a coarse 0.025° tree-cover proxy; sensor GSD
-is independent. See the [source assumptions and setup](tools/leo-aoi/README.md#environmental-sources).
+independent overlays. Fetch the prepared snapshots for desktop or local web builds:
+
+```sh
+git lfs pull --include="assets/aois/*.aoi-data.json.gz"
+```
+
+In the browser, each source is fetched only when generating AOIs and cached for
+the session, rather than embedded in WebAssembly. The four snapshots total about
+26 MiB compressed. WorldCover uses a coarse 0.05-degree tree-cover proxy; sensor
+GSD is independent. See the [dataset notes](assets/aois/DATASETS.md) and
+[Rust workflow](tools/leo-aoi/README.md).
 
 Generated AOIs use persistent GPU buffers by default. Camera transforms, horizon
 clipping, outline detail selection, and distant-dot rendering run in shaders;
@@ -166,7 +170,8 @@ compute profiles remain editable.
 
 ## Pushbroom observation preview
 
-Open **Observation model** in the right **Earth Observation** sidebar and enable **Pushbroom sweeps**. Each displayed satellite
+Enable **Display > Constellations > Pushbroom sweeps**, or use **Observation model**
+in the right **Earth Observation** sidebar. Each displayed satellite
 leaves a fading, ground-fixed strip with a bright current cross-track scanline.
 The default swath is 20 km and the trail covers the last 60 simulation seconds;
 both are adjustable. **Show sensor fan** adds faint rays from the satellite to
@@ -178,6 +183,25 @@ not claim scheduled observations or apply daylight, weather, resource or AOI
 acceptance constraints. Animate to accumulate the first two position samples.
 Trails reset on reverse time, large time jumps and position discontinuities.
 The physical swath stays to scale; line strokes remain visible at small zoom.
+
+On desktop, enable **Pushbroom images** and click a satellite to open its image
+window. The image follows its recorded swept ground, clipped to **Image length**
+(50 km by default) and the available trail history. The newest scanline is at
+the top. Width and along-track length retain their physical proportions.
+**Freeze image** holds the current image; closing the window deselects that
+satellite. Up to four image windows can be open at once.
+
+The preview is textured on the GPU every frame, independently of tile loading.
+Source detail follows the window size and display density rather than a fixed
+320-pixel bitmap. It has a separate 512-tile RAM cache and a persistent
+`leo-viz/pushbroom-tiles` cache in the system cache directory, so moving the globe
+does not evict its imagery or compete for the same download queue. It uses
+cached parents while sharper tiles load, keeps overlapping atlas regions on the
+GPU, and stops fetching when disabled. Requests are limited to 256 tiles per
+strip, with five-second retries on failures and 24-hour caching of missing tiles.
+This is an ESRI basemap preview, not a live satellite feed or a sensor-quality
+product. Imagery is unavailable beyond Web Mercator's polar limit. Like the
+existing ESRI globe overlay, the image windows are currently desktop-only.
 
 The existing **Rendering → Texture → 21K** option uses
 `textures/earth/Earth_Diffuse_21k.jpg`. Large textures are Git LFS assets; fetching
@@ -346,6 +370,52 @@ complete AOI/mosaic coverage. Simultaneous events within 1 ms are coalesced.
 ```bash
 cargo build --release
 ```
+
+### ESRI Diagnostics
+
+Desktop ESRI imagery supports levels up to 23 where coverage exists. The globe
+can zoom down to a displayed altitude of 0.01 km. Missing tiles fall back to the
+nearest available parent without replacing imagery with a placeholder. Missing
+tile responses are cached for 24 hours, including across app restarts. Existing
+tile reuse and fades also apply to the higher levels and pushbroom image windows.
+
+Run an automatic native replay without manually moving the camera:
+
+```bash
+LEO_VIZ_TILE_DIAGNOSTICS=1 cargo run --release
+```
+
+It exercises 3000/1000/2000 km transitions, repeats them with warm caches,
+and moves to a nearby location. It saves `target/esri-diagnostics.json` and
+`target/esri-diagnostics-*.png`, then closes the diagnostic window automatically.
+The existing disk cache is not cleared. Optional
+`LEO_VIZ_TILE_DIAGNOSTICS_LAT` and `LEO_VIZ_TILE_DIAGNOSTICS_LON` override the
+default location of 48.7 N, 25.5 E.
+
+The report separates RAM reuse, disk hits, actual HTTP requests, cancellations,
+queue delays, RAM/GPU evictions, GPU tile reuse, and atlas upload frames. The native
+GPU cache retains up to 512 geographic tiles (128 MiB, allocated as needed),
+independently of the displayed atlas, so returning to a level or nearby area does
+not require uploading those tiles again. Cached parent tiles can also fill a new
+detail level on the GPU while sharper tiles load. It replaces the least recently used
+tiles outside the requested area when full. Atlas CPU timings include
+conversion and queue submission, not GPU execution. Settle time includes the
+existing 150 ms fade and a 250 ms quiet-period check. Diagnostic HTTP requests
+have an eight-second timeout; each view has a fifteen-second deadline.
+
+To exercise a moving satellite and the live image window in the same automatic
+replay, also set `LEO_VIZ_PUSHBROOM_DIAGNOSTICS=1`. This writes
+`target/pushbroom-diagnostics.json` and matching screenshots, including image
+preview resolution, rendered frames, tile uploads, and CPU timings in the trace.
+The regular GPU tests also compare
+maximum-zoom panning with double-precision Mercator coordinates and check the
+per-frame budget for parent-tile preparation.
+Set `LEO_VIZ_TILE_DIAGNOSTICS_CLOSEUP=1` to append three real 0.5 km views with
+small north/south movements to the native replay.
+Set `LEO_VIZ_TILE_DIAGNOSTICS_HIGH_RESOLUTION=1` instead to exercise levels 19-23
+in Ukraine, Stockholm, and Los Angeles, including missing coverage and returns
+to cached views. This saves `target/esri-high-resolution-diagnostics.json` and
+matching screenshots. Each step reports the source levels used for fallback.
 
 ## TODO
 

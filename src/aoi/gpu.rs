@@ -36,8 +36,11 @@ pub(super) struct Geometry {
 }
 
 impl Geometry {
-    pub fn new(segments: Vec<Segment>, dots: Vec<Dot>) -> Self {
+    pub fn new(mut segments: Vec<Segment>, dots: Vec<Dot>) -> Self {
         static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+        segments.sort_unstable_by_key(|segment| {
+            (segment.scales[0].to_bits(), segment.scales[1].to_bits())
+        });
         Self {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             segments,
@@ -57,7 +60,7 @@ struct Uniforms {
 
 struct UploadedGeometry {
     owner: Weak<Geometry>,
-    segments: Vec<(wgpu::Buffer, u32)>,
+    segments: Vec<(wgpu::Buffer, u32, [f32; 2])>,
     dots: wgpu::Buffer,
     dot_count: u32,
 }
@@ -68,6 +71,8 @@ struct View {
 }
 
 struct Resources {
+    #[cfg(test)]
+    submit_all_lods: bool,
     lines: wgpu::RenderPipeline,
     dots: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
@@ -147,6 +152,8 @@ impl Resources {
             ],
         );
         Self {
+            #[cfg(test)]
+            submit_all_lods: false,
             lines,
             dots,
             layout,
@@ -182,16 +189,20 @@ impl Resources {
                     segments: callback
                         .geometry
                         .segments
-                        .chunks(
-                            (device.limits().max_buffer_size
-                                / std::mem::size_of::<Segment>() as u64)
-                                .min(u64::from(u32::MAX))
-                                .max(1) as usize,
-                        )
+                        .chunk_by(|a, b| a.scales == b.scales)
+                        .flat_map(|level| {
+                            level.chunks(
+                                (device.limits().max_buffer_size
+                                    / std::mem::size_of::<Segment>() as u64)
+                                    .min(u64::from(u32::MAX))
+                                    .max(1) as usize,
+                            )
+                        })
                         .map(|chunk| {
                             (
                                 upload("aoi_segments", bytemuck::cast_slice(chunk)),
                                 chunk.len() as u32,
+                                chunk[0].scales,
                             )
                         })
                         .collect(),
@@ -322,7 +333,14 @@ impl CallbackTrait for PaintCallback {
         };
         pass.set_bind_group(0, &view.bind_group, &[]);
         pass.set_pipeline(&resources.lines);
-        for (buffer, count) in &geometry.segments {
+        for (buffer, count, scales) in &geometry.segments {
+            let scale = self.uniforms.params[1];
+            let selected = scale > scales[0] && scale <= scales[1];
+            #[cfg(test)]
+            let selected = selected || resources.submit_all_lods;
+            if !selected {
+                continue;
+            }
             pass.set_vertex_buffer(0, buffer.slice(..));
             pass.draw(0..6, 0..*count);
         }

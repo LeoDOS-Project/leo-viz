@@ -1,5 +1,6 @@
 //! Job configuration and steady averages, separate from infrastructure scheduling.
 pub(crate) mod model;
+#[cfg(any(test, not(target_arch = "wasm32")))]
 mod storage;
 
 use crate::aoi::preview::{Hit, Preview};
@@ -21,6 +22,7 @@ pub(crate) struct Panel {
     reveal: bool,
     capture: Option<CaptureProfile>,
     report: Option<Result<(Totals, [Totals; 3]), String>>,
+    #[cfg(not(target_arch = "wasm32"))]
     path: String,
     message: Option<String>,
 }
@@ -39,6 +41,7 @@ impl Default for Panel {
             reveal: false,
             capture: None,
             report: None,
+            #[cfg(not(target_arch = "wasm32"))]
             path: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("assets/jobs/default-workload.json.gz")
                 .to_string_lossy()

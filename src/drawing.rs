@@ -10,9 +10,9 @@ use crate::config::{
     SatelliteCamera, View3DFlags,
 };
 use crate::geo::CityLabel;
-use crate::math::{rotate_point_matrix, rotation_from_drag};
+use crate::math::{camera_pan_sensitivity, rotate_point_matrix, rotation_from_drag};
 use crate::renderer::{
-    mat3_to_padded_cols, HeatmapPaintCallback, HeatmapUniforms, MapPaintCallback,
+    mat3_to_padded_cols, DetailLayer, HeatmapPaintCallback, HeatmapUniforms, MapPaintCallback,
     PlanetPaintCallback, PlanetUniforms, SunPaintCallback, SunUniforms,
 };
 use crate::texture::EarthTexture;
@@ -26,6 +26,145 @@ use std::f64::consts::PI;
 use std::sync::Arc;
 
 use crate::EARTH_VISUAL_SCALE;
+
+fn camera_gesture_input(ui: &egui::Ui) -> (egui::Vec2, f32, f64) {
+    let (scroll, zoom, rotation, time, pinching, new_pan) = ui.input(|i| {
+        let zoom = i.zoom_delta();
+        let pinching = zoom != 1.0 || i.events.iter().any(|e| matches!(e, egui::Event::Zoom(_)));
+        let new_pan = i.events.iter().any(|event| {
+            matches!(
+                event,
+                egui::Event::MouseWheel {
+                    phase: egui::TouchPhase::Start,
+                    ..
+                } | egui::Event::PointerButton { pressed: true, .. }
+            )
+        });
+        (
+            i.smooth_scroll_delta,
+            zoom,
+            i.rotation_delta() as f64,
+            i.time,
+            pinching,
+            new_pan,
+        )
+    });
+    let id = egui::Id::new("camera_pinch_time");
+    let locked = ui.data_mut(|data| {
+        if pinching {
+            data.insert_temp(id, time);
+        } else if new_pan {
+            data.remove::<f64>(id);
+        }
+        data.get_temp::<f64>(id)
+            .is_some_and(|last| time - last < 0.2)
+    });
+    if locked {
+        // Discard trailing scroll momentum rather than replaying it after the pinch.
+        ui.input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
+        (egui::Vec2::ZERO, zoom, 0.0)
+    } else {
+        (scroll, zoom, rotation)
+    }
+}
+
+fn camera_zoom_active(
+    ui: &egui::Ui,
+    gesture: Option<(egui::Vec2, f32, f64)>,
+    trackpad_rotate: bool,
+) -> bool {
+    let time = ui.input(|input| input.time);
+    ui.data(|data| {
+        data.get_temp::<f64>(egui::Id::new("camera_pinch_time"))
+            .is_some_and(|last| time - last < 0.2)
+    }) || gesture
+        .is_some_and(|(scroll, zoom, _)| zoom != 1.0 || (!trackpad_rotate && scroll.y != 0.0))
+}
+
+#[cfg(test)]
+mod camera_gesture_tests {
+    use super::*;
+
+    fn frame(ctx: &egui::Context, time: f64, events: Vec<egui::Event>) -> (egui::Vec2, f32, f64) {
+        let mut result = None;
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                result = Some(camera_gesture_input(ui));
+            },
+        );
+        result.unwrap()
+    }
+
+    fn pan() -> egui::Event {
+        egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(8.0, 10.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn pinches_exclude_pan_and_twist_without_delaying_the_next_gesture() {
+        let ctx = egui::Context::default();
+        let (scroll, zoom, twist) = frame(
+            &ctx,
+            0.0,
+            vec![pan(), egui::Event::Zoom(1.0002), egui::Event::Rotate(0.05)],
+        );
+        assert_eq!(zoom, 1.0002);
+        assert_eq!(scroll, egui::Vec2::ZERO);
+        assert_eq!(twist, 0.0);
+        let mut new_pan = pan();
+        if let egui::Event::MouseWheel { phase, .. } = &mut new_pan {
+            *phase = egui::TouchPhase::Start;
+        }
+        let (scroll, zoom, twist) = frame(&ctx, 0.02, vec![new_pan, egui::Event::Rotate(0.02)]);
+        assert_ne!(scroll, egui::Vec2::ZERO);
+        assert_eq!(zoom, 1.0);
+        assert!((twist - 0.02).abs() < 1e-6);
+    }
+
+    #[test]
+    fn neutral_pinch_frames_still_exclude_rotation() {
+        let ctx = egui::Context::default();
+        let (scroll, zoom, twist) = frame(
+            &ctx,
+            0.0,
+            vec![pan(), egui::Event::Zoom(1.0), egui::Event::Rotate(0.05)],
+        );
+        assert_eq!((scroll, zoom, twist), (egui::Vec2::ZERO, 1.0, 0.0));
+    }
+
+    #[test]
+    fn rotation_without_zoom_still_works() {
+        let ctx = egui::Context::default();
+        let (scroll, zoom, twist) = frame(&ctx, 0.0, vec![pan(), egui::Event::Rotate(0.1)]);
+        assert_ne!(scroll, egui::Vec2::ZERO);
+        assert_eq!(zoom, 1.0);
+        assert!((twist - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn trailing_pinch_events_cannot_rotate_the_camera() {
+        let ctx = egui::Context::default();
+        frame(&ctx, 0.0, vec![egui::Event::Zoom(1.1)]);
+        for time in [0.016, 0.050, 0.150] {
+            assert_eq!(
+                frame(&ctx, time, vec![pan(), egui::Event::Rotate(0.05)]),
+                (egui::Vec2::ZERO, 1.0, 0.0)
+            );
+        }
+        let (_, zoom, rotation) = frame(&ctx, 0.3, vec![egui::Event::Rotate(0.05)]);
+        assert_eq!(zoom, 1.0);
+        assert!((rotation - 0.05).abs() < 1e-6);
+    }
+}
 
 pub(crate) type DrawConstellationData = (
     WalkerConstellation,
@@ -1158,7 +1297,7 @@ pub struct Draw3dInput<'a> {
     pub device_layers: &'a [DeviceLayer],
     pub body_rot_angle: f64,
     pub drag_tab_planet: (usize, usize),
-    pub detail_bounds: Option<[f32; 4]>,
+    pub detail_bounds: Option<DetailLayer>,
     pub geo_borders: &'a [Vec<(f64, f64)>],
     pub geo_cities: &'a [CityLabel],
     pub conjunction_lines: &'a [(ConjunctionInfo, f64)],
@@ -1375,7 +1514,9 @@ pub fn draw_3d_view(
         };
 
         let has_detail = detail_bounds.is_some();
-        let db = detail_bounds.unwrap_or([0.0; 4]);
+        let db = detail_bounds.unwrap_or_default();
+        let [detail_center, detail_current_uv, detail_previous_uv] =
+            db.camera_coordinates(&inv_rotation, f64::from(flat));
 
         let uniforms = PlanetUniforms {
             inv_rot_0: rot_cols[0],
@@ -1386,7 +1527,12 @@ pub fn draw_3d_view(
             star_rot_2: star_cols[2],
             sun_dir_flat: [sun_dir[0], sun_dir[1], sun_dir[2], flat],
             bg_aspect: [bg_color[0], bg_color[1], bg_color[2], logical_aspect],
-            detail_bounds: db,
+            detail_bounds: db.bounds.map(|value| value as f32),
+            detail_previous_bounds: db.previous_bounds.map(|value| value as f32),
+            detail_blend: [db.blend, 0.0, 0.0, 0.0],
+            detail_center,
+            detail_current_uv,
+            detail_previous_uv,
             uv_etc: [1.0, 1.0, scale, atmosphere],
             flags_a: [
                 if show_clouds { 1.0 } else { 0.0 },
@@ -1405,7 +1551,13 @@ pub fn draw_3d_view(
 
         let callback = egui_wgpu::Callback::new_paint_callback(
             rect,
-            PlanetPaintCallback::new(ui.id().with((id, "planet")), uniforms, key, show_stars, has_detail),
+            PlanetPaintCallback::new(
+                ui.id().with((id, "planet")),
+                uniforms,
+                key,
+                show_stars,
+                has_detail,
+            ),
         );
         ui.painter().add(callback);
 
@@ -1731,7 +1883,7 @@ pub fn draw_3d_view(
                     Polygon::new("", earth_pts)
                         .fill_color(egui::Color32::from_rgb(30, 60, 120))
                         .stroke(egui::Stroke::new(
-                            2.0,
+                            2.0_f32,
                             egui::Color32::from_rgb(70, 130, 180),
                         )),
                 );
@@ -1749,7 +1901,7 @@ pub fn draw_3d_view(
                 plot_ui.line(
                     Line::new("", border_pts)
                         .color(egui::Color32::WHITE)
-                        .width(1.0),
+                        .width(1.0_f32),
                 );
             }
 
@@ -1764,7 +1916,7 @@ pub fn draw_3d_view(
                 plot_ui.line(
                     Line::new("", circle_pts)
                         .color(egui::Color32::from_rgb(255, 200, 50))
-                        .width(1.0),
+                        .width(1.0_f32),
                 );
             }
 
@@ -1818,7 +1970,7 @@ pub fn draw_3d_view(
                             plot_ui.line(
                                 Line::new("", PlotPoints::new(std::mem::take(seg)))
                                     .color(color)
-                                    .width(2.0),
+                                    .width(2.0_f32),
                             );
                         } else {
                             seg.clear();
@@ -2121,7 +2273,7 @@ pub fn draw_3d_view(
                                 plot_ui.points(
                                     Points::new("", PlotPoints::new(vis_dots))
                                         .color(color)
-                                        .radius(2.0),
+                                        .radius(2.0_f32),
                                 );
                             }
                         }
@@ -2192,7 +2344,7 @@ pub fn draw_3d_view(
                                             plot_ui.line(
                                                 Line::new("", PlotPoints::new(vec![cp0, cp1]))
                                                     .color(seg_color)
-                                                    .width(0.5),
+                                                    .width(0.5_f32),
                                             );
                                         }
                                     }
@@ -2302,7 +2454,7 @@ pub fn draw_3d_view(
                         plot_ui.polygon(
                             Polygon::new("", PlotPoints::new(pts))
                                 .fill_color(fill)
-                                .stroke(egui::Stroke::new(1.0, color)),
+                                .stroke(egui::Stroke::new(1.0_f32, color)),
                         );
                     } else {
                         let mut segment: Vec<[f64; 2]> = Vec::new();
@@ -2352,7 +2504,7 @@ pub fn draw_3d_view(
                         plot_ui.line(
                             Line::new("", PlotPoints::new(std::mem::take(&mut front_seg)))
                                 .color(eq_color)
-                                .width(1.5),
+                                .width(1.5_f32),
                         );
                     }
                     back_seg.push([rx, ry]);
@@ -2362,7 +2514,7 @@ pub fn draw_3d_view(
                             plot_ui.line(
                                 Line::new("", PlotPoints::new(std::mem::take(&mut back_seg)))
                                     .color(dim_eq)
-                                    .width(1.0),
+                                    .width(1.0_f32),
                             );
                         } else {
                             back_seg.clear();
@@ -2375,14 +2527,14 @@ pub fn draw_3d_view(
                 plot_ui.line(
                     Line::new("", PlotPoints::new(front_seg))
                         .color(eq_color)
-                        .width(1.5),
+                        .width(1.5_f32),
                 );
             }
             if !back_seg.is_empty() && !hide_behind_earth {
                 plot_ui.line(
                     Line::new("", PlotPoints::new(back_seg))
                         .color(dim_eq)
-                        .width(1.0),
+                        .width(1.0_f32),
                 );
             }
         }
@@ -2413,7 +2565,7 @@ pub fn draw_3d_view(
                             plot_ui.line(
                                 Line::new("", PlotPoints::new(std::mem::take(&mut front_seg)))
                                     .color(grat_color)
-                                    .width(0.5),
+                                    .width(0.5_f32),
                             );
                         }
                         back_seg.push([rx, ry]);
@@ -2423,7 +2575,7 @@ pub fn draw_3d_view(
                                 plot_ui.line(
                                     Line::new("", PlotPoints::new(std::mem::take(&mut back_seg)))
                                         .color(grat_dim)
-                                        .width(0.5),
+                                        .width(0.5_f32),
                                 );
                             } else {
                                 back_seg.clear();
@@ -2436,14 +2588,14 @@ pub fn draw_3d_view(
                     plot_ui.line(
                         Line::new("", PlotPoints::new(front_seg))
                             .color(grat_color)
-                            .width(0.5),
+                            .width(0.5_f32),
                     );
                 }
                 if !back_seg.is_empty() && !hide_behind_earth {
                     plot_ui.line(
                         Line::new("", PlotPoints::new(back_seg))
                             .color(grat_dim)
-                            .width(0.5),
+                            .width(0.5_f32),
                     );
                 }
             }
@@ -2467,7 +2619,7 @@ pub fn draw_3d_view(
                             plot_ui.line(
                                 Line::new("", PlotPoints::new(std::mem::take(&mut front_seg)))
                                     .color(grat_color)
-                                    .width(0.5),
+                                    .width(0.5_f32),
                             );
                         }
                         back_seg.push([rx, ry]);
@@ -2477,7 +2629,7 @@ pub fn draw_3d_view(
                                 plot_ui.line(
                                     Line::new("", PlotPoints::new(std::mem::take(&mut back_seg)))
                                         .color(grat_dim)
-                                        .width(0.5),
+                                        .width(0.5_f32),
                                 );
                             } else {
                                 back_seg.clear();
@@ -2490,14 +2642,14 @@ pub fn draw_3d_view(
                     plot_ui.line(
                         Line::new("", PlotPoints::new(front_seg))
                             .color(grat_color)
-                            .width(0.5),
+                            .width(0.5_f32),
                     );
                 }
                 if !back_seg.is_empty() && !hide_behind_earth {
                     plot_ui.line(
                         Line::new("", PlotPoints::new(back_seg))
                             .color(grat_dim)
-                            .width(0.5),
+                            .width(0.5_f32),
                     );
                 }
             }
@@ -2545,7 +2697,7 @@ pub fn draw_3d_view(
                                 plot_ui.line(
                                     Line::new("", PlotPoints::new(std::mem::take(&mut front_seg)))
                                         .color(base_color)
-                                        .width(2.0),
+                                        .width(2.0_f32),
                                 );
                             }
                             back_seg.push([rx, ry]);
@@ -2558,7 +2710,7 @@ pub fn draw_3d_view(
                                             PlotPoints::new(std::mem::take(&mut back_seg)),
                                         )
                                         .color(dim_color)
-                                        .width(1.0),
+                                        .width(1.0_f32),
                                     );
                                 } else {
                                     back_seg.clear();
@@ -2571,14 +2723,14 @@ pub fn draw_3d_view(
                         plot_ui.line(
                             Line::new("", PlotPoints::new(front_seg))
                                 .color(base_color)
-                                .width(2.0),
+                                .width(2.0_f32),
                         );
                     }
                     if !back_seg.is_empty() && !hide_behind_earth {
                         plot_ui.line(
                             Line::new("", PlotPoints::new(back_seg))
                                 .color(dim_color)
-                                .width(1.0),
+                                .width(1.0_f32),
                         );
                     }
                 }
@@ -2587,7 +2739,11 @@ pub fn draw_3d_view(
 
         if let Some((history, settings)) = pushbroom {
             plot_ui.add(crate::pushbroom::Overlay::new(
-                history, settings, surface_rotation, planet_radius, flattening,
+                history,
+                settings,
+                surface_rotation,
+                planet_radius,
+                flattening,
             ));
         }
 
@@ -2618,7 +2774,7 @@ pub fn draw_3d_view(
                         plot_ui.line(
                             Line::new("", PlotPoints::new(std::mem::take(front)))
                                 .color(base_color)
-                                .width(2.0),
+                                .width(2.0_f32),
                         );
                     } else {
                         front.clear();
@@ -2627,7 +2783,7 @@ pub fn draw_3d_view(
                         plot_ui.line(
                             Line::new("", PlotPoints::new(std::mem::take(back)))
                                 .color(dim_color)
-                                .width(1.0),
+                                .width(1.0_f32),
                         );
                     } else {
                         back.clear();
@@ -2656,7 +2812,7 @@ pub fn draw_3d_view(
                             plot_ui.line(
                                 Line::new("", PlotPoints::new(std::mem::take(&mut front_seg)))
                                     .color(base_color)
-                                    .width(2.0),
+                                    .width(2.0_f32),
                             );
                         }
                         back_seg.push([rx, ry]);
@@ -2666,7 +2822,7 @@ pub fn draw_3d_view(
                                 plot_ui.line(
                                     Line::new("", PlotPoints::new(std::mem::take(&mut back_seg)))
                                         .color(dim_color)
-                                        .width(1.0),
+                                        .width(1.0_f32),
                                 );
                             } else {
                                 back_seg.clear();
@@ -2705,7 +2861,7 @@ pub fn draw_3d_view(
                                 plot_ui.line(
                                     Line::new("", PlotPoints::new(std::mem::take(&mut front_seg)))
                                         .color(cursor_color)
-                                        .width(0.5),
+                                        .width(0.5_f32),
                                 );
                             } else {
                                 front_seg.clear();
@@ -2718,7 +2874,7 @@ pub fn draw_3d_view(
                         plot_ui.line(
                             Line::new("", PlotPoints::new(front_seg))
                                 .color(cursor_color)
-                                .width(0.5),
+                                .width(0.5_f32),
                         );
                     }
                     let cos_lon = lon.cos();
@@ -2736,7 +2892,7 @@ pub fn draw_3d_view(
                                 plot_ui.line(
                                     Line::new("", PlotPoints::new(std::mem::take(&mut front_seg)))
                                         .color(cursor_color)
-                                        .width(0.5),
+                                        .width(0.5_f32),
                                 );
                             } else {
                                 front_seg.clear();
@@ -2749,7 +2905,7 @@ pub fn draw_3d_view(
                         plot_ui.line(
                             Line::new("", PlotPoints::new(front_seg))
                                 .color(cursor_color)
-                                .width(0.5),
+                                .width(0.5_f32),
                         );
                     }
                 }
@@ -2775,7 +2931,7 @@ pub fn draw_3d_view(
                             plot_ui.line(
                                 Line::new("", PlotPoints::new(std::mem::take(&mut front_seg)))
                                     .color(border_color)
-                                    .width(1.0),
+                                    .width(1.0_f32),
                             );
                         }
                         back_seg.push([rx, ry]);
@@ -2785,7 +2941,7 @@ pub fn draw_3d_view(
                                 plot_ui.line(
                                     Line::new("", PlotPoints::new(std::mem::take(&mut back_seg)))
                                         .color(dim_border)
-                                        .width(0.5),
+                                        .width(0.5_f32),
                                 );
                             } else {
                                 back_seg.clear();
@@ -2798,14 +2954,14 @@ pub fn draw_3d_view(
                     plot_ui.line(
                         Line::new("", PlotPoints::new(front_seg))
                             .color(border_color)
-                            .width(1.0),
+                            .width(1.0_f32),
                     );
                 }
                 if !back_seg.is_empty() && !hide_behind_earth {
                     plot_ui.line(
                         Line::new("", PlotPoints::new(back_seg))
                             .color(dim_border)
-                            .width(0.5),
+                            .width(0.5_f32),
                     );
                 }
             }
@@ -2860,10 +3016,20 @@ pub fn draw_3d_view(
 
         if body_key.0 == CelestialBody::Earth {
             for (preview, opacity) in &generated_aois {
-                let selected = selected_aoi.filter(|(p, _)| Arc::ptr_eq(p, preview)).map(|(_, i)| i);
-                plot_ui.add(crate::aoi::preview::Overlay::new(
-                    Arc::clone(preview), surface_rotation, planet_radius, flattening, *opacity,
-                ).with_selection(selected).with_gpu(gpu_available && use_gpu_rendering));
+                let selected = selected_aoi
+                    .filter(|(p, _)| Arc::ptr_eq(p, preview))
+                    .map(|(_, i)| i);
+                plot_ui.add(
+                    crate::aoi::preview::Overlay::new(
+                        Arc::clone(preview),
+                        surface_rotation,
+                        planet_radius,
+                        flattening,
+                        *opacity,
+                    )
+                    .with_selection(selected)
+                    .with_gpu(gpu_available && use_gpu_rendering),
+                );
             }
         }
 
@@ -2905,7 +3071,7 @@ pub fn draw_3d_view(
                 plot_ui.polygon(
                     Polygon::new("", PlotPoints::new(pts))
                         .fill_color(fill)
-                        .stroke(egui::Stroke::new(2.0, aoi.color)),
+                        .stroke(egui::Stroke::new(2.0_f32, aoi.color)),
                 );
             } else {
                 let mut segment: Vec<[f64; 2]> = Vec::new();
@@ -2916,7 +3082,7 @@ pub fn draw_3d_view(
                         plot_ui.line(
                             Line::new("", PlotPoints::new(std::mem::take(&mut segment)))
                                 .color(aoi.color)
-                                .width(2.0),
+                                .width(2.0_f32),
                         );
                     }
                 }
@@ -2924,7 +3090,7 @@ pub fn draw_3d_view(
                     plot_ui.line(
                         Line::new("", PlotPoints::new(segment))
                             .color(aoi.color)
-                            .width(2.0),
+                            .width(2.0_f32),
                     );
                 }
             }
@@ -2976,7 +3142,7 @@ pub fn draw_3d_view(
                 plot_ui.polygon(
                     Polygon::new("", PlotPoints::new(pts))
                         .fill_color(fill)
-                        .stroke(egui::Stroke::new(2.0, gs.color)),
+                        .stroke(egui::Stroke::new(2.0_f32, gs.color)),
                 );
             } else {
                 let mut segment: Vec<[f64; 2]> = Vec::new();
@@ -2987,7 +3153,7 @@ pub fn draw_3d_view(
                         plot_ui.line(
                             Line::new("", PlotPoints::new(std::mem::take(&mut segment)))
                                 .color(gs.color)
-                                .width(2.0),
+                                .width(2.0_f32),
                         );
                     }
                 }
@@ -2995,7 +3161,7 @@ pub fn draw_3d_view(
                     plot_ui.line(
                         Line::new("", PlotPoints::new(segment))
                             .color(gs.color)
-                            .width(2.0),
+                            .width(2.0_f32),
                     );
                 }
             }
@@ -3086,7 +3252,7 @@ pub fn draw_3d_view(
                     plot_ui.polygon(
                         Polygon::new("", PlotPoints::new(pts))
                             .fill_color(fill)
-                            .stroke(egui::Stroke::new(1.5, layer.color)),
+                            .stroke(egui::Stroke::new(1.5_f32, layer.color)),
                     );
 
                     device_cluster_labels.push(([cx, cy], count, layer.color));
@@ -3100,7 +3266,7 @@ pub fn draw_3d_view(
             plot_ui.line(
                 Line::new("", PlotPoints::new(vec![[wn_x, wn_y], [ep_x, ep_y]]))
                     .color(egui::Color32::from_rgb(255, 100, 100))
-                    .width(1.5),
+                    .width(1.5_f32),
             );
 
             let (np_x, np_y, _) = rotate_point_matrix(0.0, axis_len, 0.0, &satellite_rotation);
@@ -3108,7 +3274,7 @@ pub fn draw_3d_view(
             plot_ui.line(
                 Line::new("", PlotPoints::new(vec![[sn_x, sn_y], [np_x, np_y]]))
                     .color(egui::Color32::from_rgb(100, 100, 255))
-                    .width(1.5),
+                    .width(1.5_f32),
             );
 
             let label_offset = axis_len * 1.15;
@@ -3144,7 +3310,7 @@ pub fn draw_3d_view(
             plot_ui.line(
                 Line::new("", PlotPoints::new(vec![[sp_x, sp_y], [np_x, np_y]]))
                     .color(egui::Color32::from_rgb(255, 100, 255))
-                    .width(1.5),
+                    .width(1.5_f32),
             );
             let label_offset = axis_len * 1.15;
             let (gmn_x, gmn_y, _) = rotate_point_matrix(
@@ -4310,7 +4476,7 @@ pub fn draw_3d_view(
                         // Same cross rendering as TLE debris, so Kessler
                         // fragments read as "debris" at a glance.
                         let d = scaled_sat_radius as f64 * 1.5 * margin / (width as f64 * 0.5);
-                        let w = if in_front { 1.5 } else { 0.8 };
+                        let w = if in_front { 1.5 } else { 0.8_f32 };
                         plot_ui.line(
                             egui_plot::Line::new(
                                 "",
@@ -4468,7 +4634,7 @@ pub fn draw_3d_view(
                         } else {
                             continue;
                         };
-                        let w_base = if tle_monochrome { 2.5 } else { 1.0 };
+                        let w_base = if tle_monochrome { 2.5 } else { 1.0_f32 };
                         let w = if in_front { w_base } else { w_base * 0.5 };
                         plot_ui.line(
                             egui_plot::Line::new(
@@ -4846,7 +5012,7 @@ pub fn draw_3d_view(
                         .transform
                         .position_from_point(&egui_plot::PlotPoint::new(p2[0], p2[1]));
                     ui.painter()
-                        .line_segment([sp1, sp2], egui::Stroke::new(1.5, color));
+                        .line_segment([sp1, sp2], egui::Stroke::new(1.5_f32, color));
                     if visible1 {
                         ui.painter().circle_filled(sp1, dot_radius, color);
                     }
@@ -4867,7 +5033,7 @@ pub fn draw_3d_view(
                     .transform
                     .position_from_point(&egui_plot::PlotPoint::new(rx2, ry2));
                 ui.painter()
-                    .line_segment([sp1, sp2], egui::Stroke::new(1.5, c));
+                    .line_segment([sp1, sp2], egui::Stroke::new(1.5_f32, c));
                 if visible1 {
                     ui.painter().circle_filled(sp1, dot_radius, color);
                 }
@@ -5018,7 +5184,7 @@ pub fn draw_3d_view(
                         line_a,
                     );
                     ui.painter()
-                        .line_segment([surface, sp], egui::Stroke::new(0.5, line_color));
+                        .line_segment([surface, sp], egui::Stroke::new(0.5_f32, line_color));
                 }
             }
 
@@ -5199,11 +5365,11 @@ pub fn draw_3d_view(
                 let h = square_size * 0.35;
                 ui.painter().line_segment(
                     [c - egui::vec2(h, h), c + egui::vec2(h, h)],
-                    egui::Stroke::new(1.5, egui::Color32::BLACK),
+                    egui::Stroke::new(1.5_f32, egui::Color32::BLACK),
                 );
                 ui.painter().line_segment(
                     [c + egui::vec2(-h, h), c + egui::vec2(h, -h)],
-                    egui::Stroke::new(1.5, egui::Color32::BLACK),
+                    egui::Stroke::new(1.5_f32, egui::Color32::BLACK),
                 );
             } else if *tle_kind == 3 {
                 let c = square_rect.center();
@@ -5234,7 +5400,7 @@ pub fn draw_3d_view(
                     ui.painter().circle_stroke(
                         screen_pos,
                         scaled_sat_radius * 2.5,
-                        egui::Stroke::new(2.0, color),
+                        egui::Stroke::new(2.0_f32, color),
                     );
 
                     if show_sat_labels {
@@ -5350,7 +5516,7 @@ pub fn draw_3d_view(
                     ui.painter().circle_stroke(
                         screen_pt,
                         scaled_sat_radius * 2.0,
-                        egui::Stroke::new(2.0, color),
+                        egui::Stroke::new(2.0_f32, color),
                     );
                     if show_sat_labels {
                         let id = match &sat.name {
@@ -5622,15 +5788,24 @@ pub fn draw_3d_view(
     if let Some((lat, lon)) = observation_marker {
         let (s, c) = lat.to_radians().sin_cos();
         let (sl, cl) = lon.to_radians().sin_cos();
-        let surface = if earth_fixed_camera { rotation } else { rotation * *body_rotation };
+        let surface = if earth_fixed_camera {
+            rotation
+        } else {
+            rotation * *body_rotation
+        };
         let (point, front) = crate::globe_overlay::project_surface(
-            Vector3::new(c * cl, s, -c * sl), &surface, planet_radius, 1.0-flattening,
+            Vector3::new(c * cl, s, -c * sl),
+            &surface,
+            planet_radius,
+            1.0 - flattening,
         );
         if front >= 0.0 {
-            let pos = response.transform.position_from_point(&egui_plot::PlotPoint::new(point.x, point.y));
+            let pos = response
+                .transform
+                .position_from_point(&egui_plot::PlotPoint::new(point.x, point.y));
             let painter = ui.painter().with_clip_rect(response.response.rect);
             painter.circle_filled(pos, 3.0, egui::Color32::YELLOW);
-            painter.circle_stroke(pos, 8.0, egui::Stroke::new(2.0, egui::Color32::YELLOW));
+            painter.circle_stroke(pos, 8.0, egui::Stroke::new(2.0_f32, egui::Color32::YELLOW));
         }
     }
     if observation_sampler && response.response.hovered() {
@@ -5676,7 +5851,12 @@ pub fn draw_3d_view(
         t == drag_tab_planet.0 && p == drag_tab_planet.1
     });
 
-    if response.response.dragged() && !response.response.drag_started() {
+    let gesture = response
+        .response
+        .hovered()
+        .then(|| camera_gesture_input(ui));
+    let zooming = camera_zoom_active(ui, gesture, trackpad_rotate);
+    if response.response.dragged() && !response.response.drag_started() && !zooming {
         if is_dragging_place {
             if let Some(pos) = response.response.interact_pointer_pos() {
                 let plot_pos = response.transform.value_from_position(pos);
@@ -5762,8 +5942,18 @@ pub fn draw_3d_view(
     if observation_sampler && response.response.clicked() {
         if let Some(pos) = response.response.interact_pointer_pos() {
             let point = response.transform.value_from_position(pos);
-            let surface = if earth_fixed_camera { rotation } else { rotation * *body_rotation };
-            *observation_pick = crate::globe_overlay::pick_surface(point.x, point.y, &surface, planet_radius, 1.0-flattening);
+            let surface = if earth_fixed_camera {
+                rotation
+            } else {
+                rotation * *body_rotation
+            };
+            *observation_pick = crate::globe_overlay::pick_surface(
+                point.x,
+                point.y,
+                &surface,
+                planet_radius,
+                1.0 - flattening,
+            );
         }
     }
     if !observation_sampler && response.response.clicked() {
@@ -5777,11 +5967,22 @@ pub fn draw_3d_view(
                 }
             }
             if !handled && body_key.0 == CelestialBody::Earth {
-                let surface = if earth_fixed_camera { rotation } else { rotation * *body_rotation };
+                let surface = if earth_fixed_camera {
+                    rotation
+                } else {
+                    rotation * *body_rotation
+                };
                 for (preview, opacity) in &generated_aois {
-                    job_pick.extend(crate::aoi::preview::Overlay::new(
-                        Arc::clone(preview), surface, planet_radius, flattening, *opacity,
-                    ).pick(pos, &response.transform));
+                    job_pick.extend(
+                        crate::aoi::preview::Overlay::new(
+                            Arc::clone(preview),
+                            surface,
+                            planet_radius,
+                            flattening,
+                            *opacity,
+                        )
+                        .pick(pos, &response.transform),
+                    );
                 }
                 handled = !job_pick.is_empty();
             }
@@ -5888,22 +6089,19 @@ pub fn draw_3d_view(
         }
     }
 
-    if response.response.hovered() {
+    if let Some((scroll_delta, zd, rot_delta)) = gesture {
         let north_up = north_up && (10000.0 / zoom) <= 30000.0;
-        let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
-        let zd = ui.input(|i| i.zoom_delta());
-        let rot_delta = ui.input(|i| i.rotation_delta()) as f64;
-        if rot_delta.abs() > 0.001 {
+        if !zooming && rot_delta.abs() > 0.001 {
             let cr = rot_delta.cos();
             let sr = rot_delta.sin();
             rotation = Matrix3::new(cr, sr, 0.0, -sr, cr, 0.0, 0.0, 0.0, 1.0) * rotation;
         }
-        let is_pinching = (zd - 1.0).abs() > 0.001;
+        let is_pinching = zd != 1.0;
         if trackpad_rotate && !is_pinching {
             let sx = scroll_delta.x as f64;
             let sy = scroll_delta.y as f64;
             if sx.abs() > 0.1 || sy.abs() > 0.1 {
-                let sensitivity = 0.002 / (1.0 + zoom.ln().max(0.0));
+                let sensitivity = camera_pan_sensitivity(zoom);
                 let pitch = -sy * sensitivity;
                 let yaw = sx * sensitivity;
                 let cp = pitch.cos();
@@ -5932,193 +6130,12 @@ pub fn draw_3d_view(
                     rotation = rx * ry * rotation;
                 }
             }
-        } else {
-            let scroll = scroll_delta.y;
-            if scroll != 0.0 {
-                let old_zoom = zoom;
-                let factor = 1.0 + scroll as f64 * 0.001;
-                zoom = (zoom * factor).clamp(0.01, 20000.0);
-
-                let alt_km = 10000.0 / zoom;
-                if alt_km <= 30000.0 {
-                    if let Some(hover_pos) = response.response.hover_pos() {
-                        let plot_pos = response.transform.value_from_position(hover_pos);
-                        let cx = plot_pos.x;
-                        let cy = plot_pos.y;
-                        let r_sq = planet_radius * planet_radius;
-                        if cx * cx + cy * cy <= r_sq {
-                            let ratio = old_zoom / zoom;
-                            let tx = cx * ratio;
-                            let ty = cy * ratio;
-                            if tx * tx + ty * ty <= r_sq {
-                                let a = Vector3::new(cx, cy, (r_sq - cx * cx - cy * cy).sqrt())
-                                    .normalize();
-                                let b = Vector3::new(tx, ty, (r_sq - tx * tx - ty * ty).sqrt())
-                                    .normalize();
-                                let cross = a.cross(&b);
-                                let cross_len = cross.norm();
-                                if cross_len > 1e-12 {
-                                    let axis = cross / cross_len;
-                                    let angle = cross_len.atan2(a.dot(&b));
-                                    let ca = angle.cos();
-                                    let sa = angle.sin();
-                                    let t = 1.0 - ca;
-                                    let (x, y, z) = (axis.x, axis.y, axis.z);
-                                    let rot = Matrix3::new(
-                                        t * x * x + ca,
-                                        t * x * y - sa * z,
-                                        t * x * z + sa * y,
-                                        t * x * y + sa * z,
-                                        t * y * y + ca,
-                                        t * y * z - sa * x,
-                                        t * x * z - sa * y,
-                                        t * y * z + sa * x,
-                                        t * z * z + ca,
-                                    );
-                                    rotation = rot * rotation;
-                                }
-                            }
-
-                            let center = rotation.transpose() * Vector3::new(0.0, 0.0, 1.0);
-                            let lat_limit = 85.0_f64.to_radians().sin();
-                            let clamped_y = center.y.clamp(-lat_limit, lat_limit);
-                            let needs_clamp = (center.y - clamped_y).abs() > 1e-8;
-                            if needs_clamp {
-                                let horiz = (center.x * center.x + center.z * center.z).sqrt();
-                                let new_horiz = (1.0 - clamped_y * clamped_y).sqrt();
-                                let scale = if horiz > 1e-10 {
-                                    new_horiz / horiz
-                                } else {
-                                    1.0
-                                };
-                                let clamped =
-                                    Vector3::new(center.x * scale, clamped_y, center.z * scale)
-                                        .normalize();
-                                let right_raw = Vector3::new(clamped.z, 0.0, -clamped.x);
-                                let right_len = right_raw.norm();
-                                if right_len > 0.01 {
-                                    let right = right_raw / right_len;
-                                    let up = clamped.cross(&right);
-                                    let r0 = Matrix3::new(
-                                        right.x, right.y, right.z, up.x, up.y, up.z, clamped.x,
-                                        clamped.y, clamped.z,
-                                    );
-                                    let up_screen = rotation * Vector3::new(0.0, 1.0, 0.0);
-                                    let bearing = up_screen.x.atan2(up_screen.y);
-                                    let cb = bearing.cos();
-                                    let sb = bearing.sin();
-                                    let rz = Matrix3::new(cb, sb, 0.0, -sb, cb, 0.0, 0.0, 0.0, 1.0);
-                                    rotation = rz * r0;
-                                }
-                            }
-                            if north_up {
-                                let north_blend = (zoom.log2() / 4.0).clamp(0.0, 1.0);
-                                if north_blend > 0.0 {
-                                    let up_screen = rotation * Vector3::new(0.0, 1.0, 0.0);
-                                    let bearing = up_screen.x.atan2(up_screen.y);
-                                    let zoom_octaves =
-                                        (zoom / old_zoom).ln().abs() / (2.0_f64).ln();
-                                    let decay = (-north_blend * zoom_octaves * 1.5).exp();
-                                    let correction = bearing * (decay - 1.0);
-                                    let ca = correction.cos();
-                                    let sa = correction.sin();
-                                    rotation =
-                                        Matrix3::new(ca, sa, 0.0, -sa, ca, 0.0, 0.0, 0.0, 1.0)
-                                            * rotation;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        } else if !is_pinching {
+            let factor = 1.0 + scroll_delta.y as f64 * 0.001;
+            zoom = (zoom * factor).clamp(0.01, crate::math::MAX_CAMERA_ZOOM);
         }
         if is_pinching {
-            let old_zoom = zoom;
-            zoom = (zoom * zd as f64).clamp(0.01, 20000.0);
-
-            if let Some(hover_pos) = response.response.hover_pos() {
-                let plot_pos = response.transform.value_from_position(hover_pos);
-                let cx = plot_pos.x;
-                let cy = plot_pos.y;
-                let r_sq = planet_radius * planet_radius;
-                if cx * cx + cy * cy <= r_sq {
-                    let ratio = old_zoom / zoom;
-                    let tx = cx * ratio;
-                    let ty = cy * ratio;
-                    if tx * tx + ty * ty <= r_sq {
-                        let a = Vector3::new(cx, cy, (r_sq - cx * cx - cy * cy).sqrt()).normalize();
-                        let b = Vector3::new(tx, ty, (r_sq - tx * tx - ty * ty).sqrt()).normalize();
-                        let cross = a.cross(&b);
-                        let cross_len = cross.norm();
-                        if cross_len > 1e-12 {
-                            let axis = cross / cross_len;
-                            let angle = cross_len.atan2(a.dot(&b));
-                            let ca = angle.cos();
-                            let sa = angle.sin();
-                            let t = 1.0 - ca;
-                            let (x, y, z) = (axis.x, axis.y, axis.z);
-                            let rot = Matrix3::new(
-                                t * x * x + ca,
-                                t * x * y - sa * z,
-                                t * x * z + sa * y,
-                                t * x * y + sa * z,
-                                t * y * y + ca,
-                                t * y * z - sa * x,
-                                t * x * z - sa * y,
-                                t * y * z + sa * x,
-                                t * z * z + ca,
-                            );
-                            rotation = rot * rotation;
-                        }
-                    }
-
-                    let center = rotation.transpose() * Vector3::new(0.0, 0.0, 1.0);
-                    let lat_limit = 85.0_f64.to_radians().sin();
-                    let clamped_y = center.y.clamp(-lat_limit, lat_limit);
-                    let needs_clamp = (center.y - clamped_y).abs() > 1e-8;
-                    if needs_clamp {
-                        let horiz = (center.x * center.x + center.z * center.z).sqrt();
-                        let new_horiz = (1.0 - clamped_y * clamped_y).sqrt();
-                        let scale = if horiz > 1e-10 {
-                            new_horiz / horiz
-                        } else {
-                            1.0
-                        };
-                        let clamped =
-                            Vector3::new(center.x * scale, clamped_y, center.z * scale).normalize();
-                        let right_raw = Vector3::new(clamped.z, 0.0, -clamped.x);
-                        let right_len = right_raw.norm();
-                        if right_len > 0.01 {
-                            let right = right_raw / right_len;
-                            let up = clamped.cross(&right);
-                            let r0 = Matrix3::new(
-                                right.x, right.y, right.z, up.x, up.y, up.z, clamped.x, clamped.y,
-                                clamped.z,
-                            );
-                            let up_screen = rotation * Vector3::new(0.0, 1.0, 0.0);
-                            let bearing = up_screen.x.atan2(up_screen.y);
-                            let cb = bearing.cos();
-                            let sb = bearing.sin();
-                            let rz = Matrix3::new(cb, sb, 0.0, -sb, cb, 0.0, 0.0, 0.0, 1.0);
-                            rotation = rz * r0;
-                        }
-                    }
-                    if north_up {
-                        let north_blend = (zoom.log2() / 4.0).clamp(0.0, 1.0);
-                        if north_blend > 0.0 {
-                            let up_screen = rotation * Vector3::new(0.0, 1.0, 0.0);
-                            let bearing = up_screen.x.atan2(up_screen.y);
-                            let zoom_octaves = (zoom / old_zoom).ln().abs() / (2.0_f64).ln();
-                            let decay = (-north_blend * zoom_octaves * 1.5).exp();
-                            let correction = bearing * (decay - 1.0);
-                            let ca = correction.cos();
-                            let sa = correction.sin();
-                            rotation =
-                                Matrix3::new(ca, sa, 0.0, -sa, ca, 0.0, 0.0, 0.0, 1.0) * rotation;
-                        }
-                    }
-                }
-            }
+            zoom = (zoom * zd as f64).clamp(0.01, crate::math::MAX_CAMERA_ZOOM);
         }
     }
 
@@ -6235,7 +6252,7 @@ pub fn draw_map_view(
                     plot_ui.line(
                         Line::new("", PlotPoints::new(seg))
                             .color(grid_color)
-                            .width(0.5),
+                            .width(0.5_f32),
                     );
                 }
             }
@@ -6248,7 +6265,7 @@ pub fn draw_map_view(
                     plot_ui.line(
                         Line::new("", PlotPoints::new(seg))
                             .color(grid_color)
-                            .width(0.5),
+                            .width(0.5_f32),
                     );
                 }
             }
@@ -6260,7 +6277,7 @@ pub fn draw_map_view(
                 plot_ui.line(
                     Line::new("", PlotPoints::new(seg))
                         .color(grid_color)
-                        .width(0.5),
+                        .width(0.5_f32),
                 );
             }
             let prime: Vec<(f64, f64)> =
@@ -6269,7 +6286,7 @@ pub fn draw_map_view(
                 plot_ui.line(
                     Line::new("", PlotPoints::new(seg))
                         .color(grid_color)
-                        .width(0.5),
+                        .width(0.5_f32),
                 );
             }
         }
@@ -6284,7 +6301,7 @@ pub fn draw_map_view(
                         plot_ui.line(
                             Line::new("", PlotPoints::new(seg))
                                 .color(cursor_color)
-                                .width(0.5),
+                                .width(0.5_f32),
                         );
                     }
                     let lon_line: Vec<(f64, f64)> =
@@ -6293,7 +6310,7 @@ pub fn draw_map_view(
                         plot_ui.line(
                             Line::new("", PlotPoints::new(seg))
                                 .color(cursor_color)
-                                .width(0.5),
+                                .width(0.5_f32),
                         );
                     }
                     if let Some(screen_pos) = plot_ui.response().hover_pos() {
@@ -6309,7 +6326,7 @@ pub fn draw_map_view(
                 plot_ui.line(
                     Line::new("", PlotPoints::new(seg))
                         .color(border_color)
-                        .width(0.8),
+                        .width(0.8_f32),
                 );
             }
         }
@@ -6328,7 +6345,7 @@ pub fn draw_map_view(
                 plot_ui.points(
                     Points::new("", PlotPoints::new(vec![[gx, gy]]))
                         .color(gs.color)
-                        .radius(4.0)
+                        .radius(4.0_f32)
                         .filled(true),
                 );
             }
@@ -6359,7 +6376,11 @@ pub fn draw_map_view(
                         .map(|(lat, lon)| (lat, lon))
                         .collect();
                     for seg in project_segments(proj, &latlon) {
-                        plot_ui.line(Line::new("", PlotPoints::new(seg)).color(dim).width(1.0));
+                        plot_ui.line(
+                            Line::new("", PlotPoints::new(seg))
+                                .color(dim)
+                                .width(1.0_f32),
+                        );
                     }
                 }
             }
@@ -6926,7 +6947,7 @@ pub fn draw_torus(
                                     plot_ui.line(
                                         Line::new("", PlotPoints::new(vec![[x1, y1], [x2, y2]]))
                                             .color(manhattan_color)
-                                            .width(2.5),
+                                            .width(2.5_f32),
                                     );
                                 }
                             }
@@ -6950,7 +6971,7 @@ pub fn draw_torus(
                                     plot_ui.line(
                                         Line::new("", PlotPoints::new(vec![[x1, y1], [x2, y2]]))
                                             .color(shortest_color)
-                                            .width(2.0),
+                                            .width(2.0_f32),
                                     );
                                 }
                             }
@@ -6978,7 +6999,7 @@ pub fn draw_torus(
                                     plot_ui.line(
                                         Line::new("", PlotPoints::new(vec![[x1, y1], [x2, y2]]))
                                             .color(rad_color)
-                                            .width(2.0),
+                                            .width(2.0_f32),
                                     );
                                 }
                             }
@@ -7086,7 +7107,7 @@ pub fn draw_torus(
             ui.painter().circle_stroke(
                 screen_pt,
                 scaled_sat_radius * 2.0,
-                egui::Stroke::new(2.0, color),
+                egui::Stroke::new(2.0_f32, color),
             );
             let font = egui::FontId::proportional(12.0);
             let galley = ui.painter().layout_no_wrap(tip, font, egui::Color32::WHITE);
@@ -7105,29 +7126,31 @@ pub fn draw_torus(
         }
     }
 
-    if response.response.dragged() && !response.response.drag_started() {
+    let gesture = response
+        .response
+        .hovered()
+        .then(|| camera_gesture_input(ui));
+    let zooming = camera_zoom_active(ui, gesture, trackpad_rotate);
+    if response.response.dragged() && !response.response.drag_started() && !zooming {
         let drag = response.response.drag_delta();
         let sens = 0.01 / zoom.max(1.0);
         let delta_rot = rotation_from_drag(drag.x as f64 * sens, drag.y as f64 * sens);
         user_rotation = delta_rot * user_rotation;
     }
 
-    if response.response.hovered() {
-        let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
-        let zd = ui.input(|i| i.zoom_delta());
-        let rot_delta = ui.input(|i| i.rotation_delta()) as f64;
-        if rot_delta.abs() > 0.001 {
+    if let Some((scroll_delta, zd, rot_delta)) = gesture {
+        if !zooming && rot_delta.abs() > 0.001 {
             let cr = rot_delta.cos();
             let sr = rot_delta.sin();
             user_rotation = Matrix3::new(cr, sr, 0.0, -sr, cr, 0.0, 0.0, 0.0, 1.0) * user_rotation;
         }
-        if (zd - 1.0).abs() > 0.001 {
+        if zd != 1.0 {
             zoom = (zoom * zd as f64).clamp(0.01, 20000.0);
         } else if trackpad_rotate {
             let sx = scroll_delta.x as f64;
             let sy = scroll_delta.y as f64;
             if sx.abs() > 0.1 || sy.abs() > 0.1 {
-                let sensitivity = 0.002 / (1.0 + zoom.ln().max(0.0));
+                let sensitivity = camera_pan_sensitivity(zoom);
                 let pitch = -sy * sensitivity;
                 let yaw = sx * sensitivity;
                 let cp = pitch.cos();

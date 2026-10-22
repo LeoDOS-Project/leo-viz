@@ -416,7 +416,7 @@ pub fn draw_circular_calendar(
         let shape = eframe::egui::Shape::convex_polygon(
             screen_pts,
             month_colors[m],
-            eframe::egui::Stroke::new(1.0, stroke_color),
+            eframe::egui::Stroke::new(1.0_f32, stroke_color),
         );
         painter.add(shape);
 
@@ -451,7 +451,7 @@ pub fn draw_circular_calendar(
 
         painter.line_segment(
             [to_screen(s1x, s1y), to_screen(s2x, s2y)],
-            eframe::egui::Stroke::new(2.5, eframe::egui::Color32::from_rgb(255, 220, 50)),
+            eframe::egui::Stroke::new(2.5_f32, eframe::egui::Color32::from_rgb(255, 220, 50)),
         );
     }
 }
@@ -577,7 +577,7 @@ pub fn draw_hohmann_overlay(
     plot_ui.line(
         Line::new("", ellipse_pts)
             .color(ellipse_color)
-            .width(2.0)
+            .width(2.0_f32)
             .style(egui_plot::LineStyle::dashed_dense()),
     );
 
@@ -600,7 +600,7 @@ pub fn draw_hohmann_overlay(
             } else {
                 eframe::egui::Color32::from_rgba_unmultiplied(200, 150, 0, 120)
             };
-            plot_ui.line(Line::new("", trail_pts).color(trail_color).width(2.5));
+            plot_ui.line(Line::new("", trail_pts).color(trail_color).width(2.5_f32));
         }
 
         let bounds = plot_ui.plot_bounds();
@@ -608,11 +608,11 @@ pub fn draw_hohmann_overlay(
         let marker_r = view_size * 0.008;
         let marker_pts = circle_points(sp[0], sp[1], marker_r, 16);
         let sc_color = eframe::egui::Color32::from_rgb(255, 220, 50);
-        plot_ui.line(Line::new("", marker_pts).color(sc_color).width(3.0));
+        plot_ui.line(Line::new("", marker_pts).color(sc_color).width(3.0_f32));
         plot_ui.points(
             egui_plot::Points::new("", vec![sp])
                 .color(sc_color)
-                .radius(5.0),
+                .radius(5.0_f32),
         );
 
         let dep_pos = scale_position(r1 * depart_angle.cos(), r1 * depart_angle.sin(), log_power);
@@ -754,7 +754,9 @@ pub struct Asteroid {
 
 pub enum AsteroidLoadState {
     NotLoaded,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     Loading,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     Loaded(Vec<Asteroid>),
     #[allow(dead_code)]
     Failed(String),
@@ -965,7 +967,7 @@ pub fn draw_solar_system_view(
         } else {
             eframe::egui::Color32::from_rgb(30, 140, 60)
         };
-        let orbit_width = if body == focused_body { 5.0 } else { 4.0 };
+        let orbit_width = if body == focused_body { 5.0 } else { 4.0_f32 };
 
         plot_ui.line(Line::new("", points).color(orbit_color).width(orbit_width));
     }
@@ -992,7 +994,7 @@ pub fn draw_solar_system_view(
             } else {
                 moon_body.display_color().gamma_multiply(0.4)
             };
-            plot_ui.line(Line::new("", orbit_pts).color(orbit_color).width(1.0));
+            plot_ui.line(Line::new("", orbit_pts).color(orbit_color).width(1.0_f32));
         }
     }
 
@@ -1037,7 +1039,7 @@ pub fn draw_solar_system_view(
                     [edge * t.cos(), edge * t.sin()]
                 })
                 .collect();
-            plot_ui.line(Line::new("", pts).color(edge_color).width(1.5));
+            plot_ui.line(Line::new("", pts).color(edge_color).width(1.5_f32));
         }
         // Belt label, placed just outside the outer edge on the +y axis so it
         // doesn't overlap with Ceres' orbit (which lies inside the belt).
@@ -1128,7 +1130,7 @@ pub fn draw_solar_system_view(
             plot_ui.points(
                 egui_plot::Points::new("", vec![[x, y]])
                     .color(label_color)
-                    .radius(4.0)
+                    .radius(4.0_f32)
                     .filled(true),
             );
         }
@@ -1180,7 +1182,7 @@ pub fn draw_solar_system_view(
             plot_ui.line(
                 Line::new("", vec![[0.0, 0.0], [pointer.x, pointer.y]])
                     .color(line_color)
-                    .width(1.0),
+                    .width(1.0_f32),
             );
 
             let sr = (pointer.x.powi(2) + pointer.y.powi(2)).sqrt();
@@ -1222,7 +1224,7 @@ pub fn draw_solar_system_view(
                 plot_ui.line(
                     Line::new("", ring_pts)
                         .color(body.display_color())
-                        .width(2.0),
+                        .width(2.0_f32),
                 );
 
                 eframe::egui::Tooltip::always_open(
@@ -1298,7 +1300,7 @@ pub fn draw_solar_system_view(
                     plot_ui.line(
                         Line::new("", ring_pts)
                             .color(eframe::egui::Color32::from_rgb(200, 170, 120))
-                            .width(2.0),
+                            .width(2.0_f32),
                     );
                     let ast = &asteroids[idx];
                     eframe::egui::Tooltip::always_open(
@@ -1710,7 +1712,7 @@ pub fn draw_planet_sizes(
                             egui::Pos2::new(cx + ring_r * a0.cos(), cy + ring_r * a0.sin()),
                             egui::Pos2::new(cx + ring_r * a1.cos(), cy + ring_r * a1.sin()),
                         ],
-                        egui::Stroke::new(2.0, body.display_color()),
+                        egui::Stroke::new(2.0_f32, body.display_color()),
                     );
                 }
             };

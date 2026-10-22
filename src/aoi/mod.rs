@@ -232,7 +232,7 @@ impl AoiGenerator {
                     });
                     ui.collapsing("Dataset", |ui| {
                         ui.add_enabled_ui(!self.uniform, |ui| self.dataset.ui(ui));
-                        if self.dataset.path.is_empty() { ui.label("Bundled GDP 2024"); }
+                        if self.dataset.is_default() && !self.uniform { ui.label("GDP 2024"); }
                     });
                     // Keep the batch generator's 100 m projected tile grid.
                     let valid_size = minimum >= 0.01;

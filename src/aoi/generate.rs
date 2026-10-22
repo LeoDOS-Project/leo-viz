@@ -79,6 +79,12 @@ fn range(value: f64, lo: f64, hi: f64) -> Result<(), String> {
 }
 
 impl Settings {
+    pub fn source_kind(&self) -> &'static str {
+        match self {
+            Self::Gdp(_) => "gdp",
+            Self::Environment(c) => c.kind,
+        }
+    }
     pub fn count(&self) -> usize {
         match self {
             Self::Gdp(c) => c.count,

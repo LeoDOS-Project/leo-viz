@@ -304,3 +304,98 @@ fn benchmark_fifty_thousand_aois_and_reuse_uploaded_geometry() {
     );
     assert_eq!(harness.resources.get::<Resources>().unwrap().views.len(), 1);
 }
+
+#[test]
+#[ignore = "Requires a native GPU; generates and benchmarks the three environmental overlays"]
+fn benchmark_three_thousand_environmental_aois() {
+    use crate::aoi::{
+        data,
+        generate::{Environment, Job, Settings},
+    };
+    let mut previews = Vec::new();
+    for kind in ["forest", "river", "coast"] {
+        let start = std::time::Instant::now();
+        let source = data::load(&data::Input::default(), kind).unwrap();
+        let mut job = Job::new(
+            Settings::Environment(Environment {
+                kind,
+                count: 1000,
+                seed: 42,
+                mean_area: 1000.0,
+                size_ratio: 100.0,
+                mean_length: 100.0,
+                length_ratio: 20.0,
+                buffer: 2.0,
+                inland: 2.0,
+                offshore: 1.0,
+                flow: 10.0,
+                compactness: 0.7,
+                latitude: 70.0,
+                tile_edge: 0.1,
+            }),
+            Some(source),
+        )
+        .unwrap();
+        let preview = loop {
+            if let Some(p) = job.step().unwrap() {
+                break Arc::new(p);
+            }
+        };
+        eprintln!(
+            "{kind}: {} total LOD segments; generated in {:?}",
+            preview.gpu_geometry().segments.len(),
+            start.elapsed()
+        );
+        previews.push(preview);
+    }
+    let mut harness = Harness::new();
+    let frame = Rect::from_min_size(Pos2::ZERO, egui::vec2(SIZE as f32, SIZE as f32));
+    for zoom in [7000.0, 1000.0, 250.0] {
+        let transform = transform(frame, zoom);
+        let mut active = 0;
+        for preview in &previews {
+            let scale = transform.dpos_dvalue_x().abs() as f32 * RADIUS as f32;
+            active += preview
+                .gpu_geometry()
+                .segments
+                .iter()
+                .filter(|s| scale > s.scales[0] && scale <= s.scales[1])
+                .count();
+        }
+        let rotation = crate::math::lat_lon_to_matrix(48.7_f64.to_radians(), 25.5_f64.to_radians());
+        let callbacks = previews
+            .iter()
+            .enumerate()
+            .map(|(index, p)| {
+                callback(
+                    p,
+                    &rotation,
+                    &transform,
+                    ["forest", "river", "coast"][index],
+                )
+            })
+            .collect::<Vec<_>>();
+        for _ in 0..3 {
+            harness.render(&callbacks, &[0, 1, 2], frame, 1.0);
+        }
+        let mut reference = None;
+        for all_lods in [true, false] {
+            harness
+                .resources
+                .get_mut::<Resources>()
+                .unwrap()
+                .submit_all_lods = all_lods;
+            let start = std::time::Instant::now();
+            for _ in 0..30 {
+                harness.render(&callbacks, &[0, 1, 2], frame, 1.0);
+            }
+            let pixels = harness.pixels();
+            if all_lods {
+                reference = Some(pixels);
+            } else {
+                assert_eq!(reference.as_ref().unwrap(), &pixels);
+            }
+            eprintln!("3,000 environmental AOIs zoom={zoom}, all_lods={all_lods}: {active} selected segments; GPU render + wait {:.3} ms/frame", start.elapsed().as_secs_f64() * 1000.0 / 30.0);
+        }
+    }
+}

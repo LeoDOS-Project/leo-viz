@@ -715,11 +715,11 @@ impl Default for TabSettings {
             animate: true,
             zoom: 1.0,
             rotation: lat_lon_to_matrix(0.0, 0.0),
-            earth_fixed_camera: false,
+            earth_fixed_camera: true,
             camera_mode: CameraMode::Unlocked,
             show_camera_windows: false,
             show_orbits: true,
-            show_links: true,
+            show_links: false,
             show_gs_links: false,
             show_coverage: false,
             coverage_angle: 50.0,
@@ -846,7 +846,7 @@ pub fn description_layout_job(
                     font_id: bold.clone(),
                     color: bold_color,
                     italics: false,
-                    underline: egui::Stroke::new(1.5, bold_color),
+                    underline: egui::Stroke::new(1.5_f32, bold_color),
                     ..Default::default()
                 },
             );
@@ -1266,3 +1266,26 @@ mod shareable {
 
 #[cfg(target_arch = "wasm32")]
 pub use shareable::ShareableConfig;
+
+#[cfg(test)]
+mod tests {
+    use super::{TabConfig, TabSettings};
+
+    #[test]
+    fn new_views_hide_isl_links_by_default() {
+        assert!(!TabSettings::default().show_links);
+        assert!(!TabConfig::new("View 1".into()).settings.show_links);
+        assert!(!TabConfig::new_empty("View 2".into()).settings.show_links);
+    }
+
+    #[test]
+    fn new_views_default_to_fixed_lat_lon() {
+        assert!(TabSettings::default().earth_fixed_camera);
+        assert!(TabConfig::new("View 1".into()).settings.earth_fixed_camera);
+        assert!(
+            TabConfig::new_empty("View 2".into())
+                .settings
+                .earth_fixed_camera
+        );
+    }
+}

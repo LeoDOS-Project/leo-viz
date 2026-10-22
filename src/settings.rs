@@ -318,8 +318,8 @@ impl ViewerState {
                             let lon_changed = ui.add(egui::DragValue::new(&mut lon_deg).speed(0.5).max_decimals(1).suffix("°")).changed();
                             ui.label("Alt:").on_hover_text("Controls the visible range of the plot");
                             let mut alt_km = 10000.0 / s.zoom;
-                            if ui.add(egui::DragValue::new(&mut alt_km).range(0.5..=1000000.0).speed(100.0).suffix(" km")).changed() {
-                                s.zoom = (10000.0 / alt_km).clamp(0.01, 20000.0);
+                            if ui.add(egui::DragValue::new(&mut alt_km).range(0.01..=1000000.0).speed(100.0).suffix(" km")).changed() {
+                                s.zoom = (10000.0 / alt_km).clamp(0.01, crate::math::MAX_CAMERA_ZOOM);
                             }
                             lat_deg = lat_deg.clamp(-90.0, 90.0);
                             while lon_deg > 180.0 { lon_deg -= 360.0; }
@@ -460,6 +460,7 @@ impl ViewerState {
                 if ui.button("Earth Observation…").on_hover_text("Sweep controls, coverage equations and point sampler").clicked() {
                     self.earth_observation.open = true;
                 }
+                s.pushbroom.ui(ui, planets.iter().any(|planet| planet.celestial_body == crate::celestial::CelestialBody::Earth));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_coverage, "Show coverage"))
                     .on_hover_text("Display ground coverage cones");
                 ui.indent("coverage_opts", |ui| {

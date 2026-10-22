@@ -25,7 +25,7 @@ pub(super) fn start(
             let dataset = if settings.uniform() {
                 None
             } else {
-                Some(data::load(&input, matches!(settings, Settings::Gdp(_)))?)
+                Some(data::load(&input, settings.source_kind())?)
             };
             let total = settings.count();
             let mut job = Job::new(settings, dataset)?;
@@ -55,7 +55,7 @@ pub(super) fn start(
             let dataset = if settings.uniform() {
                 None
             } else {
-                Some(data::load(&input, matches!(settings, Settings::Gdp(_))).await?)
+                Some(data::load(&input, settings.source_kind()).await?)
             };
             let total = settings.count();
             let mut job = Job::new(settings, dataset)?;
