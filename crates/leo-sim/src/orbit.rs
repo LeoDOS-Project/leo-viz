@@ -8,7 +8,7 @@ pub enum Propagation {
     Keplerian,
     J2,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Elements {
     pub semi_major_km: f64,
     pub eccentricity: f64,

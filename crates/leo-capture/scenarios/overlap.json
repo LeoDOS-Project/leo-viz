@@ -1,0 +1,15 @@
+{
+  "epoch_unix_s": 946728000,
+  "swath_km": 20,
+  "shells": [{"planes":1,"satellites_per_plane":12,"altitude_km":561.386,"inclination_deg":0,"phasing":0}],
+  "aoi_files": ["overlap-aois.json"],
+  "generator": {
+    "seed":42,
+    "pipeline_weights":[1,0,0],
+    "temporal":[{"name":"Two-hour","weight":1,"cadence_hours":2,"samples":13}],
+    "bounds":{"cadence_min_hours":2,"cadence_max_hours":168,"span_min_hours":24,"span_max_hours":8760},
+    "map_bytes_per_km2":8192,"window_bytes_per_km2":2048,"output_size_range":100,
+    "acquisition":{"mosaic_fraction":0.5,"solar_stddev_hours":0,"solar_tolerance_hours":12,"priority_min":1,"priority_max":5}
+  },
+  "options":{"duration_s":7200,"step_s":5}
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "mean_area_km2": 100.0,
+  "size_ratio": 1000.0,
+  "generation": {
+    "count": 50000,
+    "seed": 42,
+    "tile_edge_km": 0.1,
+    "shape": "oriented_rectangle",
+    "random_rotation": true,
+    "min_aspect": 0.3333333333333333,
+    "max_aspect": 3.0,
+    "hotspot_count": 600,
+    "hotspot_spread_km": 100.0,
+    "hotspot_fraction": 0.4
+  }
+}

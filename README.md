@@ -29,12 +29,15 @@ or connected rectangular mosaics. It supports compact continent-scale geometry, 
 mixtures, masks and adjustable clustering, without application categories.
 In the right **Earth Observation** sidebar, open **AOI Generator → Default Jobs → Load preset** to display the bundled
 50,000 AOIs without Python or external data files. Generation defaults are an
-expected mean area of 1,000 km², a 1,000× max/min area ratio, seed 42, 600 hotspots,
-0.4 clustered fraction and 100 km hotspot spread. The saved dataset uses the
-existing GDP demand field, with one rectangle per AOI (split only at the dateline),
-and retains tile ranges alongside its
-GeoJSON boundaries in [`assets/aois/default-jobs.json.gz`](assets/aois/default-jobs.json.gz).
+expected mean area of 100 km², a 1,000× max/min area ratio, seed 42, 600 hotspots,
+0.4 clustered fraction and 100 km hotspot spread. Rectangles have random bearings
+and log-uniform aspect ratios up to 3:1, defined in a local equal-area projection
+to avoid the old grid's north–south stretching at high latitudes. The frozen
+sample averages 99.4 km² and lives in
+[`assets/aois/default-jobs-oriented.json.gz`](assets/aois/default-jobs-oriented.json.gz).
 The adjacent manifest records provenance, library versions, statistics and hashes.
+The preset menu also retains **Legacy rectangles (1,000 km²)** for existing saved
+workloads. Geometry changes require assigning a new set of jobs.
 
 For new samples, tune the parameters and click **Generate**. See the tool
 documentation for Python setup, dataset ingestion and preset reproduction.
@@ -42,13 +45,17 @@ Job parameters are assigned in the **Jobs** pane described below; acquisition sc
 
 The AOI panel also has independent **Forests**, **Rivers** and **Coasts** pages,
 using ESA WorldCover, HydroRIVERS and OpenStreetMap coastlines. They generate
-bounded patches or connected buffered paths, with source-specific controls and
+connected forest patches with varied elongation, lobes and retained clearings, or
+buffered river/coast paths, with source-specific controls and
 independent overlays. Global source caches live outside Git and are prepared on
 first use if absent. WorldCover uses a coarse 0.025° tree-cover proxy; sensor GSD
 is independent. See the [source assumptions and setup](tools/leo-aoi/README.md#environmental-sources).
 
 AOI rendering uses a spatial visibility hierarchy, zoom-dependent outline detail,
-and grouped distant dots. These display approximations do not alter stored AOIs.
+and grouped distant dots. All layers have a 10% fill by default, adjustable with
+**Fill opacity** independently of their outline opacity. Fills preserve holes and
+are triangulated once during loading. These display approximations do not alter
+stored AOIs. Forest patches and river/coast corridors keep their geographic alignment.
 
 
 ## Job configurations and steady workload totals
@@ -122,6 +129,90 @@ compressed persistence (`src/jobs/storage.rs`), and UI (`src/jobs/mod.rs`). Tota
 are cached until jobs or capture settings change; they are not recomputed each
 animation frame.
 
+
+## Acquisition opportunities and capture baseline
+
+After assigning jobs, open **Earth Observation → Capture simulation** and click
+**Start new capture run from setup**. The run freezes the selected Earth's visible
+constellations, current playback time, AOIs, jobs and Data settings. Keplerian, J2
+and TLE/SGP4 are supported; unsupported propagators fail explicitly. Setup edits
+apply to the next run, so they never invalidate the active session.
+
+The capture map uses the session's own clock and saved constellation, independent
+of the setup preview. It shows AOIs, current satellite ground positions, and
+retained crop outlines from the last 10 simulated minutes (latest 2,000). Zoom to
+inspect AOI boundaries. The complete capture ledger remains in the session even
+when its footprints are no longer displayed.
+
+- **Run/Pause** and a speed control advance capture time. A new run starts running;
+  **Load checkpoint** opens paused. Run horizon defaults to one day (up to 30 days).
+- Live meters show total retained bytes, reuse savings, and constellation/per-satellite
+  bytes captured in the trailing **24 simulated hours**. Storage bars compare
+  cumulative occupancy with each satellite's configured capacity. Each crop is
+  credited at its end time; crop-record counts are strip/atlas pieces, not passes.
+- **Failed acquisition updates** counts cadence deadlines without full AOI coverage,
+  including partial coverage. Completed, partial and zero-coverage counts and the
+  number of distinct affected jobs are separate. Partial independent crops remain
+  usable. These are acquisition shortfalls, not processing failures or job drops.
+- **Fast-forward** advances a specified number of hours using the same capture
+  calculations, while suspending scene rendering and preview physics. Progress and
+  controls remain available. It restores the prior Run/Pause state afterwards;
+  targets round up to a track-step boundary and stop at the run horizon.
+- **Save checkpoint** writes a versioned gzip JSON file atomically at a committed
+  step. It embeds orbit elements/SGP4 constants, epoch, current positions, all AOI
+  polygons, jobs, sensor settings, counters, cropped footprints and shared-job
+  associations, and partial mosaics. Loading requires no AOI files or TLE download
+  and continues from the saved tick without replay. Invalid loads preserve the
+  previous session. No image pixels are generated or stored.
+
+The job generator and individual inspector now include acquisition requirements:
+
+- **Independent crops** become ready incrementally; **complete mosaics** require
+  cumulative coverage of the entire AOI within one cadence interval. Default mix:
+  50% each, independent of Map/Window pipeline and geography.
+- Each interval starts at `run start + phase + n × cadence`; the default phase is
+  zero. Captures do not carry over between intervals. Incomplete final intervals
+  are reported separately from due updates. This is not a maximum-revisit promise.
+- Preferred **local solar time** follows a normal distribution centred at noon,
+  with default σ = 4 hours, truncated to 00:00–24:00. The editable default
+  acceptance window is ±1 hour; the minimum solar elevation is 0°. Time preference
+  is evaluated at the AOI anchor; illumination is checked across cropped geometry.
+  Cadence intervals outside the allowed daylight/time window still count as
+  unfulfilled demand. Clouds are not modeled.
+- Integer priorities default to uniform 1–5; larger values win. The specified
+  future overload policy drops whole jobs strictly from lowest priority, with job
+  identity breaking ties. This unconstrained baseline does **not** drop jobs.
+
+Only newly useful cropped imagery is retained. The same physical crop can satisfy
+multiple overlapping jobs when their timing constraints permit it. The report
+separates physical bytes, logical bytes credited to jobs, bytes saved by reuse,
+and physical bytes serving multiple jobs. Repeated passes do not inflate a job's
+coverage within its current interval. All retained crops remain until the run
+ends; no processing, deletion, downlink or historical-window execution is implied.
+
+Storage defaults to **32 decimal TB per satellite**. The baseline measures retained
+bytes and when each satellite would exceed that capacity, without enforcing it.
+Sensor write throughput, energy and compute capacity are not constraints. The
+existing infrastructure simulation remains a separate experiment.
+
+Coverage uses polygon unions and differences, preserving holes, partial overlap
+and dateline-split geometry. Local equal-area charts partition computation rather
+than replacing areas with point samples. Default track segments are 5 seconds and
+polygon-edge spacing is 1 km; mosaics allow 1 ppm area tolerance for clipping
+roundoff. This is a numerical baseline: halve segment duration and edge spacing
+to check convergence. Solar/time boundaries can conservatively lose sub-step
+slivers. Geometric spherical areas, reported alongside source areas, determine
+captured byte volumes.
+
+Version-2 workload files preserve acquisition fields; loading a version-1 workload
+assigns them deterministically from the saved seed, preserving its original
+pipelines, cadences and byte profiles. Workload files describe demand; checkpoints
+preserve a running capture session. Steady workload totals remain estimates,
+separate from measured capture fulfilment.
+
+The renderer-independent [`leo-capture`](crates/leo-capture/README.md) crate also
+provides a headless CLI and optional streaming JSONL acquisition opportunities for
+the later scheduler. No execution engine or constrained scheduler is introduced.
 
 ## ADAM orbit preset
 

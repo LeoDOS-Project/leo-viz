@@ -1,4 +1,6 @@
 //! Job configuration and steady averages, separate from infrastructure scheduling.
+mod capture_ui;
+mod capture_worker;
 pub(crate) mod model;
 mod storage;
 
@@ -23,10 +25,14 @@ pub(crate) struct Panel {
     report: Option<Result<(Totals, [Totals; 3]), String>>,
     path: String,
     message: Option<String>,
+    revision: u64,
+    baseline: capture_ui::Panel,
 }
 impl Default for Panel {
     fn default() -> Self {
         Self {
+            revision: 0,
+            baseline: capture_ui::Panel::default(),
             config: Generator::default(),
             applied: None,
             jobs: Vec::new(),
@@ -110,6 +116,7 @@ impl Panel {
         {
             return;
         }
+        self.revision += 1;
         self.layers = layers.to_vec();
         self.compatible = self.jobs.is_empty() || layers_match(&self.jobs, layers);
         self.hits
@@ -134,6 +141,7 @@ impl Panel {
         Ok(())
     }
     fn install(&mut self, jobs: Vec<Job>, generator: Generator) {
+        self.revision += 1;
         self.jobs = jobs;
         self.lookup = self
             .jobs
@@ -220,6 +228,7 @@ impl Panel {
                 ui.end_row();
             }
         });
+        capture_ui::generator_controls(ui, &mut self.config.acquisition);
         ui.label("Joint cadence and window profiles");
         for (i, profile) in self.config.temporal.iter_mut().enumerate() {
             ui.push_id(i, |ui| {
@@ -418,6 +427,7 @@ impl Panel {
                 output_control(ui, "Window output", &mut job.window_bytes_per_km2);
             }
         });
+        capture_ui::job_controls(ui, &mut job.acquisition, job.cadence_hours);
         let result = job.estimate(capture).and_then(|e| if bounds.contains(job.cadence_hours, job.samples) { Ok(e) }
             else { Err("This cadence/window combination is outside the applied global bounds. Adjust it to apply the edit.".into()) });
         let estimate = match result {
@@ -429,6 +439,7 @@ impl Panel {
         };
         if *job != old {
             let index = self.lookup[&job.aoi.key()];
+            self.revision += 1;
             self.jobs[index] = job.clone();
             self.report = None;
         }
@@ -473,7 +484,7 @@ impl Panel {
             ui.add(egui::TextEdit::singleline(&mut self.path).desired_width(f32::INFINITY));
             ui.horizontal(|ui| {
                 if ui.add_enabled(!self.jobs.is_empty() && self.compatible, egui::Button::new("Save workload")).clicked() {
-                    let document = storage::Document { schema_version: 1, generator: self.applied.clone().unwrap(), capture: *capture, jobs: self.jobs.clone() };
+                    let document = storage::Document { schema_version: 2, generator: self.applied.clone().unwrap(), capture: *capture, jobs: self.jobs.clone() };
                     self.message = Some(match document.save(std::path::Path::new(&self.path)) {
                         Ok(()) => format!("Saved {} job configurations.", self.jobs.len()), Err(error) => format!("Could not save: {error}"),
                     });
@@ -578,9 +589,11 @@ mod tests {
     fn workload_50k_roundtrip_and_cached_summary() {
         use std::io::Read;
         let mut json = Vec::new();
-        flate2::read::GzDecoder::new(&include_bytes!("../../assets/aois/default-jobs.json.gz")[..])
-            .read_to_end(&mut json)
-            .unwrap();
+        flate2::read::GzDecoder::new(
+            &include_bytes!("../../assets/aois/default-jobs-oriented.json.gz")[..],
+        )
+        .read_to_end(&mut json)
+        .unwrap();
         let preview = Arc::new(Preview::from_json(&json).unwrap());
         let mut panel = Panel::default();
         panel.sync(&[preview.clone()]);
@@ -599,7 +612,7 @@ mod tests {
         }
         let cached_time = start.elapsed();
         let document = storage::Document {
-            schema_version: 1,
+            schema_version: 2,
             generator: panel.applied.clone().unwrap(),
             capture,
             jobs: panel.jobs.clone(),

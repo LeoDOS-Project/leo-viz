@@ -1,8 +1,7 @@
 """Bounded, seeded monitoring footprints guided by real geographic features."""
 from dataclasses import asdict, dataclass
-import heapq
 import json
-from math import ceil, cos, floor, log, pi, radians, sin, sqrt
+from math import ceil, floor, log, pi, radians
 from pathlib import Path
 
 import numpy as np
@@ -28,7 +27,10 @@ class Config:
     inland_km: float = 2.0
     offshore_km: float = 1.0
     min_discharge: float = 10.0
-    compactness: float = 0.7
+    max_elongation: float = 3.0
+    outline_variation: float = 0.7
+    forest_adherence: float = 0.8
+    compactness: float | None = None  # Explicit legacy requests retain old geometry.
     max_latitude: float = 70.0
     tile_edge_km: float = 0.1
     data_dir: str = str(ROOT)
@@ -43,8 +45,11 @@ class Config:
         ranges = {"mean_area_km2": (10, 100000), "size_ratio": (1, 1000),
                   "mean_length_km": (1, 1000), "length_ratio": (1, 100),
                   "buffer_km": (.1, 50), "inland_km": (.1, 50), "offshore_km": (.1, 50),
-                  "min_discharge": (1, 1e6), "compactness": (0, 1),
+                  "min_discharge": (1, 1e6), "max_elongation": (1, 10),
+                  "outline_variation": (0, 1), "forest_adherence": (0, 1),
                   "max_latitude": (1, 85), "tile_edge_km": (.05, 10)}
+        if self.compactness is not None:
+            ranges["compactness"] = (0, 1)
         for name, (lo, hi) in ranges.items():
             value = getattr(self, name)
             if not np.isfinite(value) or not lo <= value <= hi:
@@ -136,26 +141,15 @@ class Forest:
         requested = draw_size(shape_rng, config.mean_area_km2, config.size_ratio)
         if requested > 1_000_000:
             raise ValueError("Forest target exceeds 1 million km²; reduce the size range")
-        radius = max(sqrt(requested / pi), 6371 * radians(self.step))
-        dx = 6371 * radians(self.step) * cos(radians(lat))
-        dy = 6371 * radians(self.step)
-        pending, seen, selected = [(0.0, row, col)], {(row, col)}, []
-        area = 0.0
-        while pending and area < requested:
-            _, y, x = heapq.heappop(pending)
-            selected.append((y, x))
-            area += self.area[y]
-            if len(selected) > 50000:
-                raise ValueError("Forest patch exceeds 50,000 sampling cells; reduce area")
-            for yy, xx in ((y-1, x), (y+1, x), (y, (x-1) % self.cols), (y, (x+1) % self.cols)):
-                if not 0 <= yy < self.rows or (yy, xx) in seen:
-                    continue
-                seen.add((yy, xx))
-                east = ((xx - col + self.cols / 2) % self.cols - self.cols / 2) * dx
-                distance = np.hypot(east, (yy - row) * dy) / radius
-                penalty = (2 + 8 * (1 - config.compactness)) * (not self.mask[yy, xx])
-                priority = distance * (1 + 3 * config.compactness) + penalty + shape_rng.uniform(0, .3)
-                heapq.heappush(pending, (priority, yy, xx))
+        from .forest_growth import grow, grow_legacy
+        if config.compactness is None:
+            # A fixed draw per AOI keeps target areas stable when shape controls change.
+            morphology_rng = np.random.default_rng(int(shape_rng.integers(0, 2**63)))
+            selected, extra = grow(self.mask, self.area, row, col, self.step,
+                                   requested, morphology_rng, config)
+        else:
+            selected, extra = grow_legacy(self.mask, self.area, row, col, self.step,
+                                          requested, shape_rng, config.compactness)
         # Build contiguous row runs before unioning, keeping large patches compact.
         by_row = {}
         for y, x in selected:
@@ -171,13 +165,14 @@ class Forest:
                     start = x
                 previous = x
         polygon = unary_union(pieces)
-        # Fill enclosed small clearings; preserve the connected monitoring region.
-        if polygon.geom_type == "Polygon":
+        # New growth preserves clearings; only legacy replay fills holes.
+        if config.compactness is not None and polygon.geom_type == "Polygon":
             polygon = Polygon(polygon.exterior)
         geographic = transform(lambda x, y, z=None: (np.asarray(x) * self.step - 180,
                                                      90 - np.asarray(y) * self.step), polygon)
         rects = rectangles_from_polygon(grid_polygon(geographic, grid, lon), grid)
-        return lon, lat, requested, rects, {"tree_cover_cell_fraction": float(np.mean([self.mask[y, x % self.cols] for y, x in selected]))}
+        extra["tree_cover_cell_fraction"] = float(np.mean([self.mask[y, x % self.cols] for y, x in selected]))
+        return lon, lat, requested, rects, extra
 
 
 class Network:

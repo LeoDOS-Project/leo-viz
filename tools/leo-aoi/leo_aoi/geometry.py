@@ -111,6 +111,9 @@ class Aoi:
     def tile_count(self):
         return sum(r.tile_count for r in self.rectangles)
 
+    def area_km2(self, grid: Grid):
+        return self.tile_count * grid.cell_area_km2
+
     def as_dict(self, grid: Grid):
         return {"id": self.id, "anchor_lon": self.anchor_lon, "anchor_lat": self.anchor_lat,
                 "requested_area_km2": self.requested_area_km2,

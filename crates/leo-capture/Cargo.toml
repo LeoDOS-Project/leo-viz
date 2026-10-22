@@ -1,0 +1,14 @@
+[package]
+name = "leo-capture"
+version = "0.1.0"
+edition = "2021"
+description = "Polygon acquisition opportunities and unconstrained workload capture baseline"
+
+[dependencies]
+leo-sim = { path = "../leo-sim" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+flate2 = "1"
+geo = { version = "0.33.1", default-features = false, features = ["serde"] }
+
+sgp4 = "=2.3.0"

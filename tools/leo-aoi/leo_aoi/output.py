@@ -22,11 +22,36 @@ class Coverage:
         self.last = np.full(self.counts.shape, -1, dtype="int64")
 
     def add(self, aoi, tile_grid, index):
+        if aoi.tile_count is None:
+            self.add_vector(aoi.geometry, index)
+            return
         for rect in aoi.rectangles:
             rows, cols = rect.demand_slices(tile_grid, self.grid)
             previous = self.last[rows, cols]
             self.counts[rows, cols] += previous != index
             previous[:] = index
+
+    def add_vector(self, geometry, index):
+        from math import ceil, floor
+        from rasterio.features import rasterize
+        from rasterio.transform import Affine
+        from shapely.geometry import shape
+        from shapely.ops import transform
+        grid = self.grid
+        polygon = transform(lambda x, y: ((np.asarray(x)+180)*grid.columns/360,
+                            (1-np.sin(np.radians(y)))*grid.rows/2), shape(geometry))
+        pieces = [polygon] if polygon.geom_type == "Polygon" else polygon.geoms
+        for part in pieces:
+            xmin, ymin, xmax, ymax = part.bounds
+            x0, x1 = max(0, floor(xmin)), min(grid.columns, ceil(xmax))
+            y0, y1 = max(0, floor(ymin)), min(grid.rows, ceil(ymax))
+            if x1 <= x0 or y1 <= y0:
+                continue
+            mask = rasterize([(part, 1)], out_shape=(y1-y0, x1-x0),
+                             transform=Affine.translation(x0, y0), all_touched=True).astype(bool)
+            previous = self.last[y0:y1, x0:x1]
+            self.counts[y0:y1, x0:x1] += mask & (previous != index)
+            previous[mask] = index
 
     def statistics(self):
         touched = self.counts[self.counts > 0]
@@ -63,8 +88,8 @@ def write_workload(demand, config, destination, demand_path, geojson=False):
                             geo.write(",")
                         json.dump(aoi.geojson(grid), geo, separators=(",", ":"), allow_nan=False)
                     coverage.add(aoi, grid, i)
-                    areas.append(aoi.tile_count * grid.cell_area_km2)
-                    total_tiles += aoi.tile_count
+                    areas.append(aoi.area_km2(grid))
+                    total_tiles = total_tiles + aoi.tile_count if total_tiles is not None and aoi.tile_count is not None else None
                     max_rectangles = max(max_rectangles, len(aoi.rectangles))
                 if geo:
                     geo.write("]}\n")
@@ -82,7 +107,7 @@ def write_workload(demand, config, destination, demand_path, geojson=False):
         manifest = {"schema_version": 1, "generator": "leo-aoi", "generator_version": __version__,
                     "config": asdict(config), "grid": grid.as_dict(),
                     "area_distribution": "log_uniform", "aspect_distribution": "log_uniform",
-                    "rng": "NumPy PCG64, independent location/shape/parent streams",
+                    "rng": "NumPy PCG64, independent location/shape/parent/rotation streams",
                     "versions": {"python": platform.python_version(), "numpy": np.__version__,
                                  "rasterio": rasterio.__version__, "gdal": rasterio.__gdal_version__,
                                  "shapely": shapely.__version__},

@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 leo-sim = { path = "crates/leo-sim" }
+leo-capture = { path = "crates/leo-capture" }
 eframe = { version = "0.33", default-features = false, features = [
     "default_fonts",
     "wgpu",
@@ -15,6 +16,7 @@ egui-wgpu = "0.33"
 egui_dock = "0.18"
 egui_extras = { version = "0.33", default-features = false, features = ["file", "http", "image", "svg"] }
 egui_plot = "0.34"
+earcutr = "0.5"
 resvg = { version = "0.45.1", default-features = false, features = ["raster-images"] }
 nalgebra = "0.33"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

@@ -1134,7 +1134,7 @@ pub struct Draw3dInput<'a> {
     pub observation_sampler: bool,
     pub observation_marker: Option<(f64, f64)>,
     pub pushbroom: Option<(&'a crate::pushbroom::History, crate::pushbroom::Settings)>,
-    pub generated_aois: Vec<(&'a Arc<crate::aoi::preview::Preview>, f32)>,
+    pub generated_aois: Vec<(&'a Arc<crate::aoi::preview::Preview>, f32, f32)>,
     pub id: &'a str,
     pub constellations: &'a [DrawConstellationData],
     pub flags: View3DFlags,
@@ -2859,11 +2859,11 @@ pub fn draw_3d_view(
         }
 
         if body_key.0 == CelestialBody::Earth {
-            for (preview, opacity) in &generated_aois {
+            for (preview, opacity, fill_opacity) in &generated_aois {
                 let selected = selected_aoi.filter(|(p, _)| Arc::ptr_eq(p, preview)).map(|(_, i)| i);
                 plot_ui.add(crate::aoi::preview::Overlay::new(
                     Arc::clone(preview), surface_rotation, planet_radius, flattening, *opacity,
-                ).with_selection(selected));
+                ).with_fill(*fill_opacity).with_selection(selected));
             }
         }
 
@@ -5778,7 +5778,7 @@ pub fn draw_3d_view(
             }
             if !handled && body_key.0 == CelestialBody::Earth {
                 let surface = if earth_fixed_camera { rotation } else { rotation * *body_rotation };
-                for (preview, opacity) in &generated_aois {
+                for (preview, opacity, _) in &generated_aois {
                     job_pick.extend(crate::aoi::preview::Overlay::new(
                         Arc::clone(preview), surface, planet_radius, flattening, *opacity,
                     ).pick(pos, &response.transform));

@@ -104,6 +104,9 @@ impl Panel {
                             });
                         ui.separator();
                         aoi.jobs_ui(ui, &mut tab.settings.observation_data);
+                        ui.separator();
+                        aoi.jobs.capture_ui(ui, &tab.planets[self.planet], tab.settings.observation_data,
+                            tab.settings.pushbroom.swath_km, tab.settings.time, epoch);
                     });
             });
         if !self.open {

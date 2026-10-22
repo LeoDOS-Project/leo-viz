@@ -117,6 +117,7 @@ struct Boundary {
     rings: Vec<Detail>,
     polygons: Vec<Vec<Vec<[f64; 2]>>>,
     color: [u8; 3],
+    fill: super::fill::Fill,
 }
 
 pub(crate) struct Preview {
@@ -133,7 +134,7 @@ pub(crate) struct Preview {
     mesh_cache: Mutex<Vec<(Vec<f64>, Arc<Mesh>)>>,
 }
 
-fn unit([lon, lat]: [f64; 2]) -> Vector3<f64> {
+pub(super) fn unit([lon, lat]: [f64; 2]) -> Vector3<f64> {
     let (lon, lat) = (-lon.to_radians(), lat.to_radians());
     Vector3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin())
 }
@@ -166,6 +167,10 @@ fn ring(points: Vec<[f64; 2]>) -> Result<Vec<Vector3<f64>>, String> {
 }
 
 impl Preview {
+    pub(crate) fn capture_regions(&self) -> Vec<leo_capture::geometry::Region> {
+        self.aois.iter().zip(&self.boundaries).map(|(a, b)| leo_capture::geometry::Region { job_key: a.key(), polygons: b.polygons.clone() }).collect()
+    }
+
     pub fn from_json(bytes: &[u8]) -> Result<Self, String> {
         let doc: Document =
             serde_json::from_slice(bytes).map_err(|e| format!("Invalid AOI response: {e}"))?;
@@ -251,6 +256,7 @@ impl Preview {
                 anchor,
                 radius,
                 rings: rings.into_iter().map(Detail::new).collect(),
+                fill: super::fill::Fill::new(&polygons)?,
                 polygons,
                 color: match aoi.source_kind.as_str() {
                     "forest" => [130, 231, 158],
@@ -318,6 +324,7 @@ pub(crate) struct Overlay {
     radius: f64,
     polar_scale: f64,
     opacity: f32,
+    fill_opacity: f32,
     selected: Option<usize>,
 }
 
@@ -336,8 +343,14 @@ impl Overlay {
             radius,
             polar_scale: 1.0 - flattening,
             opacity,
+            fill_opacity: 0.1,
             selected: None,
         }
+    }
+
+    pub fn with_fill(mut self, opacity: f32) -> Self {
+        self.fill_opacity = opacity.clamp(0.0, 1.0);
+        self
     }
 
     pub fn with_selection(mut self, selected: Option<usize>) -> Self {
@@ -437,7 +450,12 @@ impl Overlay {
         ]);
         key.extend(transform.bounds().min());
         key.extend(transform.bounds().max());
-        key.extend([self.radius, self.polar_scale, self.opacity as f64]);
+        key.extend([
+            self.radius,
+            self.polar_scale,
+            self.opacity as f64,
+            self.fill_opacity as f64,
+        ]);
         let scale = transform
             .dpos_dvalue_x()
             .abs()
@@ -540,6 +558,17 @@ impl Overlay {
                     );
                 }
                 continue;
+            }
+            if self.fill_opacity > 0.0 {
+                let fill_color = Color32::from_rgba_unmultiplied(
+                    boundary.color[0],
+                    boundary.color[1],
+                    boundary.color[2],
+                    (self.fill_opacity * 255.0).round() as u8,
+                );
+                boundary
+                    .fill
+                    .paint(&mut mesh, fill_color, *frame, |p| self.project(p), &screen);
             }
             for detail in &boundary.rings {
                 let ring = detail.at_scale(scale);
@@ -652,6 +681,38 @@ impl PlotItem for Overlay {
 mod tests {
     use super::*;
     use egui::Pos2;
+    #[test]
+    fn fill_opacity_is_independent_cached_and_clipped_at_the_horizon() {
+        let preview = Arc::new(Preview::from_json(br#"{"schema_version":1,"config":{"seed":42,"count":1},"aois":[{"area_km2":100,"anchor_lon":-90,"anchor_lat":0,"geometry":{"type":"Polygon","coordinates":[[[-91,-1],[-89,-1],[-89,1],[-91,1],[-91,-1]]]}}]}"#).unwrap());
+        let transform = PlotTransform::new(
+            Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 800.)),
+            PlotBounds::new_symmetrical(1000.),
+            [false, false],
+        );
+        let overlay = Overlay::new(preview.clone(), Matrix3::identity(), 6371., 0., 0.8);
+        let mesh = overlay.cached_mesh(&transform);
+        assert!(mesh.is_valid());
+        assert!(mesh.vertices.iter().any(|v| v.color.a() == 26)); // 10% fill
+        assert!(mesh.vertices.iter().any(|v| v.color.a() == 204)); // 80% outline
+        let unfilled = overlay.with_fill(0.).cached_mesh(&transform);
+        assert!(!Arc::ptr_eq(&mesh, &unfilled));
+        assert!(!unfilled.vertices.iter().any(|v| v.color.a() == 26));
+        assert!(mesh.indices.len() > unfilled.indices.len());
+        let turn = crate::math::rotation_from_drag(std::f64::consts::PI, 0.);
+        assert!(Overlay::new(preview.clone(), turn, 6371., 0., 0.8)
+            .mesh(&transform)
+            .vertices
+            .is_empty());
+        let limb = crate::math::rotation_from_drag(std::f64::consts::FRAC_PI_2, 0.);
+        let globe = PlotTransform::new(
+            Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 800.)),
+            PlotBounds::new_symmetrical(7000.),
+            [false, false],
+        );
+        let clipped = Overlay::new(preview, limb, 6371., 0., 0.8).mesh(&globe);
+        assert!(clipped.is_valid() && !clipped.vertices.is_empty());
+    }
+
     #[test]
     fn picks_interiors_holes_overlaps_and_dateline_without_backside_hits() {
         let geometry = serde_json::json!({"type":"Polygon", "coordinates":[

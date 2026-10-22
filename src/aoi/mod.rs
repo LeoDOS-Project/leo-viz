@@ -2,6 +2,7 @@
 //! the circular routing-demo targets and do not acquire application semantics.
 
 mod environment;
+mod fill;
 mod presets;
 pub(crate) mod preview;
 mod spatial;
@@ -15,6 +16,11 @@ pub(crate) struct AoiGenerator {
     pub jobs: crate::jobs::Panel,
     pub visible: bool,
     pub opacity: f32,
+    fill_opacity: f32,
+    legacy_preset: bool,
+    shape: String,
+    random_rotation: bool,
+    max_aspect: f64,
     pub preview: Option<Arc<preview::Preview>>,
     page: usize,
     sources: [environment::Source; 3],
@@ -50,6 +56,11 @@ impl Default for AoiGenerator {
             jobs: crate::jobs::Panel::default(),
             visible: true,
             opacity: 0.8,
+            fill_opacity: 0.1,
+            legacy_preset: false,
+            shape: defaults.generation.shape.clone(),
+            random_rotation: defaults.generation.random_rotation,
+            max_aspect: defaults.generation.max_aspect,
             preview: None,
             page: 0,
             sources: [
@@ -93,11 +104,11 @@ impl AoiGenerator {
         self.jobs.ui(ui, layers, capture);
     }
 
-    pub fn overlay(&self) -> Option<(&Arc<preview::Preview>, f32)> {
+    pub fn overlay(&self) -> Option<(&Arc<preview::Preview>, f32, f32)> {
         self.preview
             .as_ref()
             .filter(|_| self.visible)
-            .map(|p| (p, self.opacity))
+            .map(|p| (p, self.opacity, self.fill_opacity))
     }
 
     fn bounds(&self) -> (f64, f64) {
@@ -109,12 +120,12 @@ impl AoiGenerator {
         (minimum, minimum * self.size_ratio)
     }
 
-    pub fn overlays(&self) -> Vec<(&Arc<preview::Preview>, f32)> {
+    pub fn overlays(&self) -> Vec<(&Arc<preview::Preview>, f32, f32)> {
         let mut layers: Vec<_> = self.overlay().into_iter().collect();
         for source in &self.sources {
             if source.visible {
                 if let Some(preview) = &source.preview {
-                    layers.push((preview, source.opacity));
+                    layers.push((preview, source.opacity, self.fill_opacity));
                 }
             }
         }
@@ -178,6 +189,7 @@ impl AoiGenerator {
                 );
             }
         });
+        ui.add(egui::Slider::new(&mut self.fill_opacity, 0.0..=0.3).text("Fill opacity").custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
         ui.small("Off-screen regions are skipped. Distant AOIs use simpler outlines or grouped dots; zoom in for detail.");
     }
 
@@ -193,12 +205,17 @@ impl AoiGenerator {
 
         ui.push_id("aoi-generator", |ui| {
                 ui.add_enabled_ui(!busy, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label("AOI preset:");
-                        ui.strong(presets::DEFAULT_JOBS);
+                        egui::ComboBox::from_id_salt("aoi-preset-choice")
+                            .selected_text(if self.legacy_preset { presets::LEGACY_JOBS } else { presets::DEFAULT_JOBS })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.legacy_preset, false, presets::DEFAULT_JOBS);
+                                ui.selectable_value(&mut self.legacy_preset, true, presets::LEGACY_JOBS);
+                            });
                         if ui.button("Load preset").clicked() { self.load_default_jobs(ctx); }
                     });
-                    ui.small("50,000 saved GDP-weighted rectangles. Loads without Python.");
+                    ui.small(if self.legacy_preset { "50,000 original grid rectangles · 1,000 km² average." } else { "50,000 rotated ground rectangles · 100 km² average. Loads without Python." });
                 });
                 ui.separator();
                 ui.label("Generate rectangular AOIs on Earth. Overlaps are allowed.");
@@ -210,7 +227,7 @@ impl AoiGenerator {
                             ui.end_row();
                             ui.label("Average area");
                             ui.add(egui::DragValue::new(&mut self.mean_area).range(1.0..=1_000_000.0)
-                                .speed(100.0).suffix(" km²"));
+                                .speed(1.0).suffix(" km²"));
                             ui.end_row();
                             ui.label("Size range (max/min)");
                             ui.add(egui::DragValue::new(&mut self.size_ratio).range(1.0..=10_000.0)
@@ -227,7 +244,21 @@ impl AoiGenerator {
                         });
                     let (minimum, maximum) = self.bounds();
                     ui.small(format!("Requested size range: {minimum:.2}–{maximum:.2} km²"));
-                    ui.small("Log-uniform sizes; rectangle dimensions are rounded to the grid.");
+                    ui.small(if self.shape == "oriented_rectangle" { "Log-uniform areas and aspect ratios. Dimensions use local ground distances." } else { "Legacy grid dimensions vary in ground aspect ratio with latitude." });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Geometry");
+                        egui::ComboBox::from_id_salt("aoi-rectangle-shape")
+                            .selected_text(if self.shape == "oriented_rectangle" { "Ground rectangles" } else { "Grid rectangles (legacy)" })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.shape, "oriented_rectangle".into(), "Ground rectangles");
+                                ui.selectable_value(&mut self.shape, "rectangle".into(), "Grid rectangles (legacy)");
+                            });
+                    });
+                    ui.add_enabled(self.shape == "oriented_rectangle", egui::Checkbox::new(&mut self.random_rotation, "Random rotation (0–180°)"));
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Maximum elongation");
+                        ui.add(egui::DragValue::new(&mut self.max_aspect).range(1.0..=10.0).speed(0.1).suffix(":1"));
+                    });
                     ui.collapsing("Clustering and reproducibility", |ui| {
                         ui.horizontal(|ui| { ui.label("Seed"); ui.add(egui::DragValue::new(&mut self.seed)); });
                         ui.horizontal(|ui| {
@@ -252,8 +283,8 @@ impl AoiGenerator {
                         ui.add(egui::TextEdit::singleline(&mut self.python).desired_width(f32::INFINITY));
                         ui.small("Setup instructions: tools/leo-aoi/README.md");
                     });
-                    // Keep the batch generator's 100 m projected tile grid.
-                    let valid_size = minimum >= 0.01;
+                    // Only legacy grid rectangles require at least one tile.
+                    let valid_size = self.shape == "oriented_rectangle" || minimum >= 0.01;
                     if !valid_size {
                         ui.colored_label(egui::Color32::YELLOW,
                             "Increase average area or reduce the size range: smallest AOI is below one tile (0.01 km²).");
@@ -272,7 +303,7 @@ impl AoiGenerator {
                     ui.label(format!("{} AOIs · actual average {:.1} km²", preview.count, preview.mean_area));
                     ui.small(format!("Area {:.2}–{:.2} km² · seed {}", preview.min_area, preview.max_area, preview.seed));
                     ui.checkbox(&mut self.visible, "Show AOIs on Earth globes");
-                    ui.add(egui::Slider::new(&mut self.opacity, 0.05..=1.0).text("Opacity"));
+                    ui.add(egui::Slider::new(&mut self.opacity, 0.05..=1.0).text("Outline opacity"));
                     ui.small("Zoom in for outlines. Subpixel AOIs appear as dots.");
                     if ui.add_enabled(!busy, egui::Button::new("Clear overlay")).clicked() { self.preview = None; }
                 }
@@ -280,7 +311,10 @@ impl AoiGenerator {
     }
 
     fn load_default_jobs(&mut self, _ctx: &egui::Context) {
-        let defaults = presets::default_settings();
+        let defaults = presets::settings(self.legacy_preset);
+        self.shape = defaults.generation.shape.clone();
+        self.random_rotation = defaults.generation.random_rotation;
+        self.max_aspect = defaults.generation.max_aspect;
         self.count = defaults.generation.count;
         self.mean_area = defaults.mean_area_km2;
         self.size_ratio = defaults.size_ratio;
@@ -295,17 +329,17 @@ impl AoiGenerator {
             .into_owned();
         self.error = None;
         self.pending_source = None;
-        self.progress = "Loading Default Jobs…".into();
-        self.pending_name = presets::DEFAULT_JOBS;
+        self.pending_name = if self.legacy_preset { presets::LEGACY_JOBS } else { presets::DEFAULT_JOBS };
+        self.progress = format!("Loading {}…", self.pending_name);
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.pending = Some(worker::load_default_jobs(_ctx.clone()));
+            self.pending = Some(worker::load_preset(_ctx.clone(), self.legacy_preset));
         }
         #[cfg(target_arch = "wasm32")]
-        match presets::load_default_jobs() {
+        match presets::load(self.legacy_preset) {
             Ok(preview) => {
                 self.preview = Some(Arc::new(preview));
-                self.preview_name = presets::DEFAULT_JOBS;
+                self.preview_name = self.pending_name;
                 self.visible = true;
             }
             Err(error) => self.error = Some(error),
@@ -319,7 +353,8 @@ impl AoiGenerator {
             "demand_path": if self.uniform { None } else { Some(&self.demand_path) },
             "mean_area_km2": self.mean_area, "size_ratio": self.size_ratio,
             "generation": {"count": self.count, "seed": self.seed, "tile_edge_km": 0.1,
-                "shape": presets::default_settings().generation.shape,
+                "shape": self.shape, "random_rotation": self.random_rotation,
+                "min_aspect": 1.0 / self.max_aspect, "max_aspect": self.max_aspect,
                 "hotspot_count": self.hotspot_count, "hotspot_spread_km": self.hotspot_spread,
                 "hotspot_fraction": self.hotspot_fraction}
         });
@@ -426,7 +461,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut panel = AoiGenerator::default();
         assert_eq!(panel.count, 50_000);
-        assert_eq!(panel.mean_area, 1000.0);
+        assert_eq!(panel.mean_area, 100.0);
         assert_eq!(panel.size_ratio, 1000.0);
         assert_eq!(panel.seed, 42);
         assert_eq!(panel.hotspot_count, 600);
@@ -481,13 +516,11 @@ mod tests {
         assert_eq!(panel.preview_name, "Default Jobs");
         assert_eq!(panel.count, 50_000);
         assert!(panel.overlay().is_some());
-        // Rounding one rectangle's dimensions can change its area by half
-        // a tile column (aspect >= 0.5, projected tile edge 0.1 km).
         let (lo, hi) = panel.bounds();
-        let tolerance = 0.1 * hi.sqrt() + 0.01;
-        assert!(preview.min_area > 0.0 && preview.min_area >= lo - tolerance);
-        assert!(preview.max_area <= hi + tolerance);
-        assert_eq!(presets::default_settings().generation.shape, "rectangle");
+        assert!(preview.min_area >= lo && preview.max_area <= hi);
+        assert!(panel.random_rotation);
+        assert_eq!(panel.fill_opacity, 0.1);
+        assert_eq!(presets::default_settings().generation.shape, "oriented_rectangle");
     }
 
     #[cfg(not(target_arch = "wasm32"))]

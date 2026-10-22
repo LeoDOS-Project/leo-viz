@@ -718,6 +718,11 @@ impl eframe::App for App {
     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.viewer.aoi_generator.jobs.poll_capture(ctx);
+        // Fast-forward owns a frozen capture session and needs no orbital scene,
+        // overlays, renderer callbacks or preview physics until it completes.
+        if self.viewer.aoi_generator.jobs.capture_fast_forward_ui(ctx) { return; }
+
         #[cfg(not(target_arch = "wasm32"))]
         {
             let interactive = ctx.input(|i| {
@@ -2907,7 +2912,9 @@ impl eframe::App for App {
         dock_style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
         dock_style.tab_bar.show_scroll_bar_on_overflow = false;
         let dock = DockArea::new(&mut self.dock_state).style(dock_style);
-        dock.show(ctx, &mut self.viewer);
+        if !self.viewer.aoi_generator.jobs.capture_scene(ctx) {
+            dock.show(ctx, &mut self.viewer);
+        }
         mark_frame!("dock");
 
         #[allow(deprecated)]

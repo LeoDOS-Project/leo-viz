@@ -59,7 +59,8 @@ visibility checkbox or Clear overlay to hide or remove it.
 The arithmetic expectation of a log-uniform distribution is the requested average:
 for size ratio `r > 1`, `min = mean × ln(r)/(r−1)` and `max = min × r`.
 At `r = 1` every requested area equals the mean. The panel reports the actual
-sample mean after rounding to the shared 100 m projected tile grid. Seed and
+sample mean. Ground rectangles have independent random rotation and a maximum
+elongation control; legacy grid rectangles retain tile rounding. Seed and
 clustering controls are under **Clustering and reproducibility**.
 
 Complete the Python setup and GDP ingestion above before using the default
@@ -74,7 +75,8 @@ geographic sources on first generation.
 Mosaic outlines are attached to Earth in every 3D globe view and clipped at the
 horizon. Subpixel AOIs use dots until zoomed in; outlines use a cached spherical
 approximation with at most 0.5° between vertices. Generated AOIs are separate from
-the circular routing-demo targets and are not assigned jobs or acquisition actions.
+the circular routing-demo targets. Assign jobs separately in the **Jobs** pane;
+acquisition actions remain a later stage.
 The overlay is kept for this app session; native generation is not available in
 the browser build. Interactive generation is limited to 50,000 AOIs per source.
 
@@ -89,7 +91,7 @@ generation run in a worker, with progress shown in the panel.
 
 | Source | Sampling and footprint | Main controls |
 | --- | --- | --- |
-| [ESA WorldCover 2021 v200](https://doi.org/10.5281/zenodo.7254221) | Tree-cover cells sampled by spherical ground area; connected growth favours forest and stops at a sampled target area. Enclosed clearings are filled. | Count, seed, mean area, area ratio, compactness |
+| [ESA WorldCover 2021 v200](https://doi.org/10.5281/zenodo.7254221) | Tree-cover cells sampled by spherical ground area; connected growth favours forest with varied elongation and coherent lobes, stopping at a sampled target area. Clearings remain as holes. | Count, seed, mean area, area ratio, elongation, outline variation, forest adherence |
 | [HydroRIVERS v1.0](https://www.hydrosheds.org/products/hydrorivers) | Sample a location by eligible river length; follow `NEXT_DOWN` and buffer both banks in a local metric projection. | Count, seed, mean path length, length ratio, bank buffer, minimum discharge |
 | [OpenStreetMap coastlines](https://osmdata.openstreetmap.de/data/coastlines.html) | Sample a location by eligible coastline length; join directed source chunks and follow the shore. Land is on the left of the directed coastline. | Count, seed, mean path length, length ratio, inland and offshore buffers |
 
@@ -102,11 +104,35 @@ Record IDs include the source kind, so layers can be combined without collisions
 
 Each environmental source defaults to 1,000 AOIs, seed 42, anchor latitude ±70°,
 and a 100 m projected output tile edge. Forests default to 1,000 km² mean area,
-100× area range, and compactness 0.7. River and coastal paths default to a 100 km
+100× area range, maximum elongation 3:1, outline variation 0.7 and forest adherence
+0.8. River and coastal paths default to a 100 km
 mean and 20× length range. River buffers extend 2 km on each bank, with minimum
 discharge 10 m³/s. Coastal buffers extend 2 km inland and 1 km offshore.
 Footprints may extend outside the anchor latitude band. Counts are limited to
 50,000 per source; very large footprints also have explicit geometry memory limits.
+
+Forest growth adds only edge-adjacent cells, so each footprint remains connected.
+Each AOI samples a log-uniform growth aspect ratio from 1 to **Elongation**, a
+uniform direction over 0–180°, and a smooth preference field producing broad
+lobes and indentations. **Outline variation** sets its strength; **Forest
+adherence** makes nonforest frontier cells less attractive. At zero adherence,
+only the anchor is selected from forest cover. At one, crossing clearings remains
+possible to fulfil the area target: the footprint is a monitoring region, not a
+claim that every enclosed pixel is forest. The final aspect ratio also depends
+on the preference field and source geography.
+
+Growth stops at the requested area with at most one source-cell overshoot, before
+the existing all-touched output tiling adds boundary cells. No holes are filled.
+A four-radius ellipse bounds growth; generation reports an error if that bound
+or the existing cell/memory limits prevent fulfilling the request. Coarse cells
+limit the variety of very small AOIs. Shape controls do not change sampled anchors
+or requested areas. Each record includes the realized growth direction, elongation,
+variation and coarse tree-cover area fraction. These are synthetic monitoring
+footprints, not fire-spread or ecological boundary models.
+
+Explicit old `compactness` configurations select the original growth and hole-
+filling behaviour for replay. New requests omit it (or set it to null); the UI
+uses only the three new controls. River/coast geometry is unchanged.
 
 WorldCover's categorical COG overviews are read by HTTP range requests into a
 global **0.025° sampling grid** (about 2.8 km north–south). Class 10 is a coarse
@@ -165,11 +191,14 @@ footprints, rather than only anchors, so large AOIs and horizon crossings surviv
 Rings have precomputed levels of detail selected for a maximum 0.7-pixel
 simplification tolerance. Small footprints become dots; overlapping dots share a
 3-pixel screen bin. Camera changes below a conservative 0.25-pixel displacement
-reuse a cached mesh. Full tile geometry, AOI counts and simulated resource demand
+reuse a cached mesh. Polygon fills default to 10% opacity, independently adjustable
+from outlines. They are triangulated once on the loading worker, preserve holes,
+follow the globe surface and use the same visibility culling. Full geometry,
+AOI counts and simulated resource demand
 are unchanged by these display approximations.
 
-The moving-camera benchmark compares the old and current render paths on the
-same bundled 50,000 AOIs. Run from the repository root:
+The moving-camera benchmark measures the current filled render path on the
+bundled 50,000 AOIs, alongside the original brute-force outline-only path. Run from the repository root:
 
 ```sh
 cargo test --release --offline --locked benchmark_default_jobs_render -- --ignored --nocapture
@@ -183,40 +212,43 @@ source sampling, corridor connectivity and deterministic replay.
 ## Frozen Default Jobs preset
 
 The visualizer's **AOI Generator → Default Jobs → Load preset** reads the bundled
-`assets/aois/default-jobs.json.gz`. Loading works without the Python environment
-or local GDP raster. The preset restores the generator controls to 50,000 AOIs,
-1,000 km² expected mean area, 1,000× size ratio, seed 42, 600 hotspots, clustered
-fraction 0.4 and 100 km hotspot spread. Both the panel defaults and the reproducible
-build use `assets/aois/default-jobs.settings.json` as their source of parameters.
+`assets/aois/default-jobs-oriented.json.gz`. Loading works without Python or a
+local GDP raster. The preset restores 50,000 AOIs, 100 km² expected mean area,
+1,000× size ratio, seed 42, 600 hotspots, clustered fraction 0.4 and 100 km hotspot
+spread. Bearings are uniform over 0–180° and aspect ratios log-uniform over 1/3–3.
+Both the panel and reproducible build use `assets/aois/default-jobs-oriented.settings.json`.
 
-These settings imply requested log-uniform areas of approximately 6.915–6,914.670 km².
-Each AOI is a single rectangle, split only at the dateline. The recorded actual
-mean differs through sampling and rounding rectangle dimensions to the tile grid. This frozen
-sample is spatial input only; the name “Default Jobs” does not assign applications,
-DAGs, temporal requirements or resource profiles.
+Requested areas are approximately 0.691–691.467 km²; this frozen sample's actual
+mean is 99.434 km². Each footprint is a rectangle in a local equal-area projection,
+with sampled geographic edges and dateline splitting. This preset provides spatial
+input only: use the **Jobs** pane to assign pipelines and temporal parameters.
 
-From the repository root, after the GDP setup above, reproduce it into a new file:
+The menu also offers **Legacy rectangles (1,000 km²)**, backed by the unchanged
+`assets/aois/default-jobs.json.gz` and original settings/manifest. Load it when
+using a workload saved against that geometry; job identities include geometry.
+
+From the repository root, after the GDP setup above, reproduce the new preset:
 
 ```sh
 tools/leo-aoi/.venv/bin/python -m leo_aoi.preset \
-  assets/aois/default-jobs.settings.json \
-  tools/leo-aoi/data/gdp-demand.npz /tmp/default-jobs.json.gz --name "Default Jobs"
+  assets/aois/default-jobs-oriented.settings.json \
+  tools/leo-aoi/data/gdp-demand.npz /tmp/default-jobs-oriented.json.gz --name "Default Jobs"
 ```
 
 Use a destination that does not already exist. The archive is deterministic gzip
-(timestamp zero, no embedded filename) of the existing versioned viewer JSON.
-It contains the grid, resolved generation config, demand provenance, and every AOI's
-stable ID, anchor, hotspot ID, requested/actual areas, tile count, compact rectangle
-ranges and Polygon/MultiPolygon geometry. It can be consumed by the future workload
-simulator without reconstructing tile ranges from outlines. Loading for display
-uses the existing Rust preview parser and renderer in a background thread on desktop.
+(timestamp zero, no embedded filename) of the versioned viewer JSON. It records
+resolved generation settings, demand provenance, stable AOI IDs, anchors, hotspot
+IDs, areas, local width/height, rotation and Polygon/MultiPolygon geometry.
+Oriented rectangles have `tile_count: null`: they have no global-grid tile
+assignment. Observation-unit tiling is a separate future stage. Loading and fill
+triangulation run in the background on desktop.
 
-The adjacent `default-jobs.json.manifest.json` records source and archive SHA-256,
-library versions and realized size statistics. Reproduction requires the recorded
-input field and compatible library versions. The source is the GDP example's
+The adjacent `default-jobs-oriented.json.manifest.json` records source and archive
+SHA-256, library versions and realized statistics. Reproduction requires the
+recorded input and compatible library versions. The source is the GDP example's
 Kummu et al. v4 2024 PPP GDP field, with 60% direct demand-field sampling and 40%
-displaced hotspot sampling. The frozen geometry and its manifest are repository
-assets; downloaded rasters and intermediate demand fields remain git-ignored.
+displaced hotspot sampling. Frozen geometry and its manifest are repository assets;
+downloaded rasters and intermediate demand fields remain git-ignored.
 
 ## Ingestion and composition
 
@@ -257,7 +289,16 @@ can be reused with many shape and seed configurations.
 
 ## Geometry and size
 
-The common tile grid uses spherical cylindrical equal-area coordinates:
+The GUI and current Default Jobs use `shape: "oriented_rectangle"`. Dimensions
+and rotation are defined in a Lambert azimuthal equal-area plane centred on each
+sampled anchor, using the simulator's 6371 km Earth radius. This avoids systematic
+north–south stretching at high latitudes. Aspect and area are sampled independently;
+`random_rotation` defaults to true and uses its own seeded stream. GeoJSON edges
+are sampled at no more than 5 km intervals, refined near the poles and split at
+the dateline. Projection area equals the requested area; sampled boundaries
+approximate it. These rectangles store vector geometry, not grid memberships.
+
+Legacy rectangles and mosaics use spherical cylindrical equal-area coordinates:
 `x = R longitude`, `y = R sin(latitude)`, with the same 6371 km Earth radius as
 `leo-sim::geometry`. Columns wrap at the dateline; rows do not wrap at the poles.
 Cells have equal ground area in this spherical model. Rectangles are aligned in
@@ -271,7 +312,7 @@ rounds to the nearest number of tiles. Actual area differs by at most half a til
 Aspect ratios are also log-uniform; both ranges are configurable. These broad
 synthetic distributions are intended for experiments, not commercial calibration.
 
-The GUI and Default Jobs preset explicitly use `shape: "rectangle"`: one rectangle
+The legacy preset uses `shape: "rectangle"`: one rectangle
 centered on the sampled anchor, shifted away from a pole when needed. Height is
 rounded from the requested area/aspect ratio, then width is rounded to match area.
 No remainder strips are added. Actual area can therefore differ by more than half
@@ -304,7 +345,8 @@ Hotspot displacements must land in an eligible demand cell. An impossible jitter
 configuration errors after bounded retries. Smaller spreads and fewer hotspots
 increase local clustering. No cities or regions are hard-coded.
 
-Locations and shapes use separate PCG64 streams derived from `seed`. Changing
+Locations, hotspot parents, shapes and rotations use separate PCG64 streams
+derived from `seed`. Changing
 shape parameters does not change anchors, and increasing `count` preserves the
 existing output prefix. Retain the recorded library versions for exact replay.
 Overlap is geometry supplied to the later job generator, not a prescribed sharing
@@ -317,11 +359,12 @@ Each run writes a new directory:
 - `manifest.json`: schema version, resolved generation configuration, tile grid,
   RNG/library versions, demand/source provenance and output hashes.
 - `aois.jsonl`: one AOI per line, with stable ID, anchor, hotspot ID (or null),
-  requested and actual area, tile count, and rectangular tile ranges.
+  requested and actual area, plus rectangular tile ranges/counts for grid shapes or
+  vector geometry, dimensions, bearing and `tile_count: null` for ground rectangles.
 - `aois.geojson` (optional): one dissolved Polygon/MultiPolygon per AOI in lon/lat.
   Dateline-crossing AOIs are split at ±180°, not drawn across the map.
 - `coverage.npz`: number of distinct AOIs intersecting each coarse demand cell.
-- `summary.json`: area quantiles, total tile memberships and coarse coverage/overlap.
+- `summary.json`: area quantiles, total tile memberships (null for vector AOIs) and coarse coverage/overlap.
 
 A rectangle `{col, row, width, height}` denotes half-open integer column/row
 ranges, with origin at the north-west of the grid. Tile identity is the grid

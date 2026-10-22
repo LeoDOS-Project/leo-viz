@@ -27,10 +27,10 @@ pub(super) fn start(
     rx
 }
 
-pub(super) fn load_default_jobs(ctx: egui::Context) -> mpsc::Receiver<Event> {
+pub(super) fn load_preset(ctx: egui::Context, legacy: bool) -> mpsc::Receiver<Event> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(Event::Finished(super::presets::load_default_jobs()));
+        let _ = tx.send(Event::Finished(super::presets::load(legacy)));
         ctx.request_repaint();
     });
     rx

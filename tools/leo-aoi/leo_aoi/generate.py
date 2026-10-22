@@ -24,10 +24,13 @@ class GenerationConfig:
     hotspot_spread_km: float = 10.0
     hotspot_fraction: float = 1.0
     shape: str = "mosaic"
+    random_rotation: bool = True
 
     def __post_init__(self):
-        if self.shape not in ("rectangle", "mosaic"):
-            raise ValueError("shape must be rectangle or mosaic")
+        if self.shape not in ("rectangle", "mosaic", "oriented_rectangle"):
+            raise ValueError("shape must be rectangle, oriented_rectangle or mosaic")
+        if type(self.random_rotation) is not bool:
+            raise ValueError("random_rotation must be a boolean")
         if self.schema_version != 1:
             raise ValueError("unsupported generation schema")
         for name in ("count", "seed", "max_bands", "hotspot_count"):
@@ -46,7 +49,7 @@ class GenerationConfig:
         if not isfinite(self.hotspot_fraction) or not 0 <= self.hotspot_fraction <= 1:
             raise ValueError("hotspot_fraction must be in [0, 1]")
         grid = self.grid
-        if self.min_area_km2 < grid.cell_area_km2:
+        if self.shape != "oriented_rectangle" and self.min_area_km2 < grid.cell_area_km2:
             raise ValueError("minimum AOI area is smaller than one tile; reduce tile_edge_km")
         if self.max_area_km2 > grid.cell_area_km2 * grid.columns * grid.rows / 4:
             raise ValueError("this mosaic generator supports AOIs up to one quarter of Earth's area")
@@ -146,14 +149,19 @@ def mosaic(grid: Grid, lon: float, lat: float, tiles: int, aspect: float, max_ba
 def generate(demand: DemandField, config: GenerationConfig):
     if demand.grid.radius_km != config.grid.radius_km:
         raise ValueError("demand and tile grids must use the same Earth radius")
-    seeds = np.random.SeedSequence(config.seed).spawn(3)
-    location_rng, shape_rng, parent_rng = [np.random.Generator(np.random.PCG64(s)) for s in seeds]
+    seeds = np.random.SeedSequence(config.seed).spawn(4)
+    location_rng, shape_rng, parent_rng, rotation_rng = [np.random.Generator(np.random.PCG64(s)) for s in seeds]
     sampler = LocationSampler(demand, config, location_rng, parent_rng)
     grid = config.grid
     for i in range(config.count):
         lon, lat, hotspot = sampler.sample()
         area = float(np.exp(shape_rng.uniform(log(config.min_area_km2), log(config.max_area_km2))))
         aspect = float(np.exp(shape_rng.uniform(log(config.min_aspect), log(config.max_aspect))))
+        if config.shape == "oriented_rectangle":
+            from .oriented import oriented_rectangle
+            angle = float(rotation_rng.uniform(0, 180)) if config.random_rotation else 0.0
+            yield oriented_rectangle(f"aoi-{i:08d}", lon, lat, area, hotspot, aspect, angle)
+            continue
         tiles = max(1, round(area / grid.cell_area_km2))
         if config.shape == "rectangle":
             rects = rectangle(grid, lon, lat, tiles, aspect)

@@ -19,7 +19,9 @@ pub(super) struct Source {
     inland: f64,
     offshore: f64,
     flow: f64,
-    compactness: f64,
+    max_elongation: f64,
+    outline_variation: f64,
+    forest_adherence: f64,
     latitude: f64,
     tile_edge: f64,
     data_dir: String,
@@ -43,7 +45,9 @@ impl Source {
             inland: 2.0,
             offshore: 1.0,
             flow: 10.0,
-            compactness: 0.7,
+            max_elongation: 3.0,
+            outline_variation: 0.7,
+            forest_adherence: 0.8,
             latitude: 70.0,
             tile_edge: 0.1,
             data_dir: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -59,7 +63,8 @@ impl Source {
             "mean_area_km2":self.mean_area, "size_ratio":self.size_ratio,
             "mean_length_km":self.mean_length, "length_ratio":self.length_ratio,
             "buffer_km":self.buffer, "inland_km":self.inland, "offshore_km":self.offshore,
-            "min_discharge":self.flow, "compactness":self.compactness,
+            "min_discharge":self.flow, "max_elongation":self.max_elongation,
+            "outline_variation":self.outline_variation, "forest_adherence":self.forest_adherence,
             "max_latitude":self.latitude, "tile_edge_km":self.tile_edge,
             "data_dir":self.data_dir}})
     }
@@ -71,7 +76,7 @@ impl Source {
             match self.kind {
                 "forest" => {
                     ui.hyperlink_to("ESA WorldCover 2021", "https://esa-worldcover.org/en/data-access");
-                    ui.label("Area-weighted tree-cover locations. Connected patches grow to a sampled area, preferring forested cells.");
+                    ui.label("Area-weighted tree-cover locations. Connected patches grow to a sampled area with varied directions, lobes and clearings.");
                     ui.small("Coarse tree-cover proxy: 0.025° cells (about 2.8 km north–south). This does not set imagery resolution.");
                 }
                 "river" => {
@@ -93,7 +98,15 @@ impl Source {
                     if self.kind == "forest" {
                         ui.label("Average area"); ui.add(egui::DragValue::new(&mut self.mean_area).range(10.0..=100_000.0).speed(100.0).suffix(" km²")); ui.end_row();
                         ui.label("Area range (max/min)"); ui.add(egui::DragValue::new(&mut self.size_ratio).range(1.0..=1000.0).suffix("×")); ui.end_row();
-                        ui.label("Compactness"); ui.add(egui::Slider::new(&mut self.compactness, 0.0..=1.0)); ui.end_row();
+                        ui.label("Elongation");
+                        ui.add(egui::Slider::new(&mut self.max_elongation, 1.0..=10.0).suffix(":1"))
+                            .on_hover_text("Maximum growth aspect ratio. Each AOI samples a ratio from 1 to this limit and a random direction; the final boundary also follows forest cover."); ui.end_row();
+                        ui.label("Outline variation");
+                        ui.add(egui::Slider::new(&mut self.outline_variation, 0.0..=1.0))
+                            .on_hover_text("Broad, coherent variation creates lobes and indentations. Zero gives regular growth before forest cover influences it."); ui.end_row();
+                        ui.label("Forest adherence");
+                        ui.add(egui::Slider::new(&mut self.forest_adherence, 0.0..=1.0))
+                            .on_hover_text("Higher values favour growing through forest and around clearings. Nonforest cells can still connect a monitoring region."); ui.end_row();
                     } else {
                         ui.label("Average path length"); ui.add(egui::DragValue::new(&mut self.mean_length).range(1.0..=1000.0).speed(5.0).suffix(" km")); ui.end_row();
                         ui.label("Length range (max/min)"); ui.add(egui::DragValue::new(&mut self.length_ratio).range(1.0..=100.0).suffix("×")); ui.end_row();
@@ -130,7 +143,7 @@ impl Source {
                     ui.small(format!("Actual average path {length:.1} km · {} paths ended early at outlets, gaps or closed coastlines", preview.truncated_paths));
                 }
                 ui.checkbox(&mut self.visible, "Show on Earth globes");
-                ui.add(egui::Slider::new(&mut self.opacity, 0.05..=1.0).text("Opacity"));
+                ui.add(egui::Slider::new(&mut self.opacity, 0.05..=1.0).text("Outline opacity"));
                 if ui.button("Clear this overlay").clicked() { self.preview = None; }
             }
         });
@@ -177,6 +190,12 @@ mod tests {
             let _ = frame(&mut panel, vec![]);
             let _ = frame(&mut panel, vec![]);
             let out = frame(&mut panel, vec![]);
+            if index == 0 {
+                for label in ["Elongation", "Outline variation", "Forest adherence"] {
+                    assert!(out.shapes.iter().any(|s| text(&s.shape, label).is_some()), "{label} is visible");
+                }
+                assert!(!out.shapes.iter().any(|s| text(&s.shape, "Compactness").is_some()));
+            }
             let label = format!("Generate {}", panel.sources[index].name.to_lowercase());
             let pos = out
                 .shapes

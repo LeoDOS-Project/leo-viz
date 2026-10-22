@@ -1,0 +1,20 @@
+{
+  "epoch_unix_s": 1792540800,
+  "swath_km": 20,
+  "shells": [
+    {
+      "planes": 13,
+      "satellites_per_plane": 13,
+      "altitude_km": 561.3856170563513,
+      "inclination_deg": 70,
+      "phasing": 0
+    }
+  ],
+  "aoi_files": [
+    "../../../assets/aois/default-jobs-oriented.json.gz"
+  ],
+  "options": {
+    "duration_s": 86400,
+    "step_s": 5
+  }
+}

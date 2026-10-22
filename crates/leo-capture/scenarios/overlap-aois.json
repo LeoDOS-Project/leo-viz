@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "config": {"count": 3},
+  "aois": [
+    {"id":"west","anchor_lon":0.15,"anchor_lat":0.035,"area_km2":61.82,
+     "geometry":{"type":"Polygon","coordinates":[[[0.1,0.01],[0.2,0.01],[0.2,0.06],[0.1,0.06],[0.1,0.01]]]}},
+    {"id":"east","anchor_lon":0.2,"anchor_lat":0.035,"area_km2":61.82,
+     "geometry":{"type":"Polygon","coordinates":[[[0.15,0.01],[0.25,0.01],[0.25,0.06],[0.15,0.06],[0.15,0.01]]]}},
+    {"id":"duplicate-west","anchor_lon":0.15,"anchor_lat":0.035,"area_km2":61.82,
+     "geometry":{"type":"Polygon","coordinates":[[[0.1,0.01],[0.2,0.01],[0.2,0.06],[0.1,0.06],[0.1,0.01]]]}}
+  ]
+}
