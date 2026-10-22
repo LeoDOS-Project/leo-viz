@@ -234,6 +234,127 @@ fn gpu_pixels_match_cpu_projection_and_clip_the_horizon() {
 }
 
 #[test]
+#[ignore = "Requires a native GPU"]
+fn projected_aois_match_cpu_at_world_and_submetre_scales() {
+    use crate::projection::ProjectionKind::*;
+    let mut harness = Harness::new();
+    let frame = Rect::from_min_size(Pos2::ZERO, egui::vec2(SIZE as f32, SIZE as f32));
+    for extent in [4.0, 0.000005] {
+        let preview = preview(25.5, 48.7, extent);
+        for projection in [
+            Equirectangular,
+            Mercator,
+            Mollweide,
+            Sinusoidal,
+            AzimuthalEquidistant,
+            Hammer,
+            HEALPix,
+            Cassini,
+            TransverseMercator,
+            LambertAzimuthalEqualArea,
+            GallPeters,
+            PeirceQuincuncial,
+        ] {
+            let (x, y) = projection.instance().project(48.7, 25.5).unwrap();
+            let radius = if extent > 1.0 { 200.0 } else { 0.00002 };
+            for shift in [0.0, radius * 0.01] {
+                let transform = PlotTransform::new(
+                    frame,
+                    PlotBounds::from_min_max(
+                        [x - radius, y - radius + shift],
+                        [x + radius, y + radius + shift],
+                    ),
+                    [false, false],
+                );
+                let overlay = Overlay::projected(Arc::clone(&preview), projection, 0.8);
+                let cpu = overlay.projected_mesh(&transform, projection);
+                let expected =
+                    Rect::from_points(&cpu.vertices.iter().map(|v| v.pos).collect::<Vec<_>>());
+                let geometry = preview.projected_geometry(projection);
+                harness.render(
+                    &[PaintCallback::projected(
+                        egui::Id::new("projected"),
+                        Arc::clone(&geometry),
+                        0.8,
+                        &transform,
+                    )],
+                    &[0],
+                    frame,
+                    1.0,
+                );
+                let actual =
+                    lit_bounds(&harness.pixels()).expect("Projected AOIs must not be blank");
+                assert!(
+                    (actual.min - expected.min).length() < 3.0
+                        && (actual.max - expected.max).length() < 3.0,
+                    "{} extent {extent}: {actual:?} vs {expected:?}",
+                    projection.label()
+                );
+                assert!(Arc::ptr_eq(
+                    &geometry,
+                    &preview.projected_geometry(projection)
+                ));
+                assert!(harness.resources.get::<Resources>().unwrap().geometry.len() <= 4);
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "Requires a native GPU; benchmarks 50k projected AOIs"]
+fn fifty_thousand_projected_aois_reuse_uploaded_geometry_when_panning() {
+    use crate::projection::ProjectionKind;
+    let preview = Arc::new(crate::aoi::presets::load_default_jobs().unwrap());
+    let mut harness = Harness::new();
+    let frame = Rect::from_min_size(Pos2::ZERO, egui::vec2(SIZE as f32, SIZE as f32));
+    for projection in [
+        ProjectionKind::Equirectangular,
+        ProjectionKind::Mercator,
+        ProjectionKind::HEALPix,
+    ] {
+        let started = std::time::Instant::now();
+        let geometry = preview.projected_geometry(projection);
+        let construction_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let mut prepare_ms = 0.0;
+        for index in 0..30 {
+            let shift = index as f64 * 0.01;
+            let transform = PlotTransform::new(
+                frame,
+                PlotBounds::from_min_max([-180.0 + shift, -90.0], [180.0 + shift, 90.0]),
+                [false, false],
+            );
+            let started = std::time::Instant::now();
+            let callback = PaintCallback::projected(
+                egui::Id::new("50k projected"),
+                preview.projected_geometry(projection),
+                0.8,
+                &transform,
+            );
+            harness.resources.get_mut::<Resources>().unwrap().prepare(
+                &harness.device,
+                &harness.queue,
+                &callback,
+                1.0,
+            );
+            if index > 0 {
+                prepare_ms += started.elapsed().as_secs_f64() * 1000.0;
+            }
+            if index == 0 || index == 29 {
+                harness.render(&[callback], &[0], frame, 1.0);
+                assert!(lit_bounds(&harness.pixels()).is_some());
+            }
+        }
+        assert!(Arc::ptr_eq(
+            &geometry,
+            &preview.projected_geometry(projection)
+        ));
+        eprintln!("50k {}: one-time projection {construction_ms:.1} ms; cached preparation {:.3} ms/frame; {} segments",
+            projection.label(), prepare_ms / 29.0, geometry.segments.len());
+        assert!(prepare_ms / 29.0 < 10.0);
+    }
+}
+
+#[test]
 #[ignore = "Requires a native GPU; benchmarks the bundled 50k AOIs"]
 fn benchmark_fifty_thousand_aois_and_reuse_uploaded_geometry() {
     let preview = Arc::new(crate::aoi::presets::load_default_jobs().unwrap());

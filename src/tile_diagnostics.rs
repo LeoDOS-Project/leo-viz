@@ -104,6 +104,8 @@ struct Step {
     altitude_km: f64,
     lat: f64,
     lon: f64,
+    #[serde(skip)]
+    projection: Option<crate::projection::ProjectionKind>,
 }
 
 pub struct Replay {
@@ -119,6 +121,7 @@ pub struct Replay {
     pushbroom: bool,
     pushbroom_started: Option<Instant>,
     pushbroom_hold: Option<f64>,
+    aois: bool,
 }
 
 impl Replay {
@@ -160,6 +163,7 @@ impl Replay {
             altitude_km,
             lat,
             lon,
+            projection: None,
         })
         .collect();
         if std::env::var("LEO_VIZ_TILE_DIAGNOSTICS_CLOSEUP").is_ok_and(|value| value == "1") {
@@ -173,6 +177,7 @@ impl Replay {
                     altitude_km: 0.5,
                     lat: lat + offset,
                     lon,
+                    projection: None,
                 });
             }
         }
@@ -193,6 +198,36 @@ impl Replay {
                 altitude_km,
                 lat,
                 lon,
+                projection: None,
+            })
+            .collect();
+        }
+        let projections =
+            std::env::var("LEO_VIZ_TILE_DIAGNOSTICS_PROJECTIONS").is_ok_and(|value| value == "1");
+        let aois = std::env::var("LEO_VIZ_TILE_DIAGNOSTICS_AOIS").is_ok_and(|value| value == "1");
+        if projections {
+            use crate::projection::ProjectionKind::*;
+            steps = [
+                Equirectangular,
+                Mercator,
+                Mollweide,
+                Sinusoidal,
+                AzimuthalEquidistant,
+                Hammer,
+                HEALPix,
+                Cassini,
+                TransverseMercator,
+                LambertAzimuthalEqualArea,
+                GallPeters,
+                PeirceQuincuncial,
+            ]
+            .into_iter()
+            .map(|projection| Step {
+                label: projection.label(),
+                altitude_km: 3000.0,
+                lat,
+                lon,
+                projection: Some(projection),
             })
             .collect();
         }
@@ -204,7 +239,11 @@ impl Replay {
             quiet_since: None,
             screenshot_requested: None,
             results: Vec::new(),
-            report: if pushbroom {
+            report: if aois {
+                "target/aoi-projections-diagnostics.json"
+            } else if projections {
+                "target/esri-projections-diagnostics.json"
+            } else if pushbroom {
                 "target/pushbroom-diagnostics.json"
             } else if high_resolution {
                 "target/esri-high-resolution-diagnostics.json"
@@ -216,6 +255,7 @@ impl Replay {
             pushbroom,
             pushbroom_started: None,
             pushbroom_hold: None,
+            aois,
         })
     }
 
@@ -223,7 +263,28 @@ impl Replay {
         ctx.request_repaint();
         // Let the panels establish the viewport before selecting the first tiles.
         if self.warmup_frames < 3 {
+            if self.warmup_frames == 0 && self.aois {
+                viewer.aoi_generator.load_default_jobs(ctx);
+                viewer.tabs[0].planets[0]
+                    .areas_of_interest
+                    .push(crate::config::AreaOfInterest {
+                        name: "Manual AOI".into(),
+                        lat: 48.7,
+                        lon: 25.5,
+                        radius_km: 1000.0,
+                        color: egui::Color32::from_rgba_unmultiplied(255, 205, 40, 140),
+                        ground_station_idx: None,
+                        job_mode: crate::config::AoiJobMode::Route,
+                        job_n: 3,
+                        reducer_placement: crate::config::SpaceCompReducerPlacement::NearMappers,
+                        show_spacecomp_flow: false,
+                        selected: false,
+                    });
+            }
             self.warmup_frames += 1;
+            return;
+        }
+        if self.aois && viewer.aoi_generator.preview.is_none() {
             return;
         }
         if self.pushbroom && self.screenshot_requested.is_none() {
@@ -267,6 +328,10 @@ impl Replay {
             return;
         }
         let step = self.steps[self.index];
+        if let Some(projection) = step.projection {
+            viewer.tabs[0].settings.planet_projection = projection;
+            viewer.tabs[0].planets[0].projection_override = Some(projection);
+        }
         let settings = &mut viewer.tabs[0].settings;
         settings.animate = false;
         settings.auto_zoom = false;
@@ -364,7 +429,18 @@ impl Replay {
                 "outstanding": self.trace.outstanding.load(Ordering::Relaxed),
             }),
         );
-        let quiet = self.trace.outstanding.load(Ordering::Relaxed) == 0
+        let aois_ready = !self.aois
+            || viewer
+                .aoi_generator
+                .preview
+                .as_ref()
+                .is_some_and(|preview| {
+                    self.steps[self.index]
+                        .projection
+                        .is_none_or(|projection| preview.projected_geometry_ready(projection))
+                });
+        let quiet = aois_ready
+            && self.trace.outstanding.load(Ordering::Relaxed) == 0
             && !overlay.dirty
             && !fading
             && !overlay.needed_tiles.is_empty()

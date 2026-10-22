@@ -9,6 +9,312 @@ use nalgebra::Vector3;
 const SIZE: u32 = 1024;
 const SCALE: f32 = 0.85;
 
+const MAP_PROJECTIONS: [crate::projection::ProjectionKind; 12] = {
+    use crate::projection::ProjectionKind::*;
+    [
+        Equirectangular,
+        Mercator,
+        Mollweide,
+        Sinusoidal,
+        AzimuthalEquidistant,
+        Hammer,
+        HEALPix,
+        Cassini,
+        TransverseMercator,
+        LambertAzimuthalEqualArea,
+        GallPeters,
+        PeirceQuincuncial,
+    ]
+};
+
+fn map_callback(
+    projection: crate::projection::ProjectionKind,
+    bounds: [f64; 4],
+    detail: Option<DetailLayer>,
+) -> MapPaintCallback {
+    MapPaintCallback::new(
+        egui::Id::new(("map-test", projection.shader_id())),
+        projection,
+        bounds,
+        detail,
+    )
+}
+
+fn pixel(frame: &[u8], x: u32, y: u32) -> [u8; 4] {
+    frame[((y * SIZE + x) * 4) as usize..((y * SIZE + x) * 4 + 4) as usize]
+        .try_into()
+        .unwrap()
+}
+
+#[test]
+#[ignore = "requires a native GPU adapter"]
+fn gpu_maps_align_esri_imagery_on_every_projection() {
+    let mut harness = Harness::new();
+    harness
+        .resources
+        .get_mut::<GpuResources>()
+        .unwrap()
+        .map_texture_view = Some(upload_rgb_texture(
+        &harness.device,
+        &harness.queue,
+        1,
+        1,
+        &[20, 40, 180],
+    ));
+    for point in [[25.5, 48.7], [-179.0, 45.0]] {
+        let atlas = if point[0] < -170.0 {
+            DetailBounds {
+                min_lon: 170.0,
+                max_lon: 190.0,
+                min_lat: 35_f64.to_radians(),
+                max_lat: 55_f64.to_radians(),
+            }
+        } else {
+            bounds(2, 0, 0, 4, 4)
+        };
+        harness.upload(&atlas, point, false);
+        for projection in MAP_PROJECTIONS {
+            let proj = projection.instance();
+            let (x, y) = proj.project(point[1], point[0]).unwrap();
+            let (lat, lon) = proj.inverse(x, y).unwrap();
+            assert!(
+                (lat - point[1]).abs() < 1e-5 && (lon - point[0]).abs() < 1e-5,
+                "{} inverse at {point:?}: {lat},{lon}",
+                projection.label()
+            );
+            let (xmin, xmax) = proj.x_range();
+            let (ymin, ymax) = proj.y_range();
+            for viewport in [
+                [xmin, xmax, ymin, ymax],
+                [x - 3.0, x + 3.0, y - 3.0, y + 3.0],
+            ] {
+                let cb = map_callback(
+                    projection,
+                    viewport,
+                    Some(DetailLayer {
+                        bounds: atlas.mercator_bounds(),
+                        blend: 1.0,
+                        ..Default::default()
+                    }),
+                );
+                let frame = harness.render(&[cb], &[0]);
+                let px = (((x - viewport[0]) / (viewport[1] - viewport[0]) * SIZE as f64) as u32)
+                    .min(SIZE - 1);
+                let py = (((viewport[3] - y) / (viewport[3] - viewport[2]) * SIZE as f64) as u32)
+                    .min(SIZE - 1);
+                let color = pixel(&frame, px, py);
+                assert!(
+                    color[0] > 180 && color[1] < 60 && color[2] < 60,
+                    "{} at {point:?}: {color:?}",
+                    projection.label()
+                );
+                if point[0] > 0.0 && viewport[0] == xmin {
+                    if let Some(output) = std::env::var_os("LEO_VIZ_TILE_TEST_OUTPUT") {
+                        image::save_buffer(
+                            std::path::PathBuf::from(output)
+                                .join(format!("esri-map-{}.png", projection.shader_id())),
+                            &frame,
+                            SIZE,
+                            SIZE,
+                            image::ColorType::Rgba8,
+                        )
+                        .unwrap();
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a native GPU adapter"]
+fn clipped_map_views_never_use_another_maps_camera() {
+    use crate::projection::ProjectionKind;
+    let mut harness = Harness::new();
+    let atlas = bounds(2, 0, 0, 4, 4);
+    harness.upload(&atlas, [25.5, 48.7], false);
+    let detail = Some(DetailLayer {
+        bounds: atlas.mercator_bounds(),
+        blend: 1.0,
+        ..Default::default()
+    });
+    let projection = ProjectionKind::Mercator;
+    let (x, y) = projection.instance().project(48.7, 25.5).unwrap();
+    for _ in 0..3 {
+        let visible = map_callback(projection, [x - 0.1, x + 0.1, y - 0.1, y + 0.1], detail);
+        let clipped = map_callback(
+            ProjectionKind::Equirectangular,
+            [-160.0, -150.0, 0.0, 10.0],
+            detail,
+        );
+        let frame = harness.render(&[clipped, visible], &[1]);
+        assert_eq!(
+            pixel(&frame, SIZE / 2, SIZE / 2),
+            [255, 0, 0, 255],
+            "Clipped maps must not displace the visible map's imagery"
+        );
+    }
+    let mut visible = map_callback(projection, [x - 0.1, x + 0.1, y - 0.1, y + 0.1], detail);
+    visible.view_id = egui::Id::new("visible-map");
+    let mut other = map_callback(projection, [-160.0, -150.0, 0.0, 10.0], detail);
+    other.view_id = egui::Id::new("other-map");
+    let callbacks = [other, visible];
+    for order in [vec![1], vec![0, 1], vec![1, 0], vec![1]] {
+        let frame = harness.render(&callbacks, &order);
+        let expected = if order.last() == Some(&1) {
+            [255, 0, 0, 255]
+        } else {
+            [0, 110, 30, 255]
+        };
+        assert_eq!(
+            pixel(&frame, SIZE / 2, SIZE / 2),
+            expected,
+            "Map views with the same projection must retain their own cameras"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a native GPU adapter"]
+fn gpu_maps_preserve_fading_fallbacks_and_disabled_imagery() {
+    let mut harness = Harness::new();
+    let gpu = harness.resources.get_mut::<GpuResources>().unwrap();
+    gpu.map_texture_view = Some(upload_rgb_texture(
+        &harness.device,
+        &harness.queue,
+        1,
+        1,
+        &[20, 40, 180],
+    ));
+    gpu.detail_previous_view = Some(upload_rgb_texture(
+        &harness.device,
+        &harness.queue,
+        1,
+        1,
+        &[0, 200, 0],
+    ));
+    let atlas = bounds(2, 0, 0, 4, 4);
+    harness.upload(&atlas, [25.5, 48.7], false);
+    for projection in MAP_PROJECTIONS {
+        let (x, y) = projection.instance().project(48.7, 25.5).unwrap();
+        let viewport = [x - 0.1, x + 0.1, y - 0.1, y + 0.1];
+        let detail = DetailLayer {
+            bounds: atlas.mercator_bounds(),
+            previous_bounds: atlas.mercator_bounds(),
+            blend: 0.5,
+        };
+        let frame = harness.render(&[map_callback(projection, viewport, Some(detail))], &[0]);
+        let color = pixel(&frame, SIZE / 2, SIZE / 2);
+        assert!(
+            (color[0] as i32 - 128).abs() <= 1
+                && (color[1] as i32 - 100).abs() <= 1
+                && color[2] == 0,
+            "{} fade: {color:?}",
+            projection.label()
+        );
+        let frame = harness.render(&[map_callback(projection, viewport, None)], &[0]);
+        assert_eq!(pixel(&frame, SIZE / 2, SIZE / 2), [20, 40, 180, 255]);
+    }
+    harness.upload(&atlas, [25.5, 48.7], true);
+    for projection in MAP_PROJECTIONS {
+        let (x, y) = projection.instance().project(48.7, 25.5).unwrap();
+        let cb = map_callback(
+            projection,
+            [x - 0.1, x + 0.1, y - 0.1, y + 0.1],
+            Some(DetailLayer {
+                bounds: atlas.mercator_bounds(),
+                blend: 1.0,
+                ..Default::default()
+            }),
+        );
+        let frame = harness.render(&[cb], &[0]);
+        assert_eq!(pixel(&frame, SIZE / 2, SIZE / 2), [20, 40, 180, 255]);
+    }
+    for projection in MAP_PROJECTIONS {
+        let (xmin, xmax) = projection.instance().x_range();
+        let (_, ymax) = projection.instance().y_range();
+        let frame = harness.render(
+            &[map_callback(
+                projection,
+                [xmin, xmax, ymax + 1.0, ymax + 2.0],
+                None,
+            )],
+            &[0],
+        );
+        assert!(
+            frame.chunks_exact(4).all(|color| color[..3] == [0, 0, 0]),
+            "{} must not repeat beyond its boundary",
+            projection.label()
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a native GPU adapter"]
+fn gpu_maps_keep_submetre_imagery_stable_at_level_23() {
+    let mut harness = Harness::new();
+    let tile = crate::tile::lon_lat_to_tile(25.5, 48.7, 23);
+    let atlas = bounds(tile.z, tile.x - 2, tile.y - 2, 5, 5);
+    let mut gradient = Vec::new();
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            gradient.extend([
+                (x * 255 / (SIZE - 1)) as u8,
+                (y * 255 / (SIZE - 1)) as u8,
+                0,
+                255,
+            ]);
+        }
+    }
+    harness
+        .resources
+        .get_mut::<GpuResources>()
+        .unwrap()
+        .upload_detail_texture(&harness.device, &harness.queue, SIZE, SIZE, &gradient);
+    for projection in MAP_PROJECTIONS {
+        let proj = projection.instance();
+        let (x, y) = proj.project(48.7, 25.5).unwrap();
+        for shift in [0.0, 0.0000001, -0.0000001] {
+            let viewport = [
+                x - 0.00001,
+                x + 0.00001,
+                y - 0.00001 + shift,
+                y + 0.00001 + shift,
+            ];
+            let detail = DetailLayer {
+                bounds: atlas.mercator_bounds(),
+                blend: 1.0,
+                ..Default::default()
+            };
+            let uniforms = MapUniforms::new(projection, viewport, Some(detail));
+            assert_eq!(uniforms.origin[2], 1.0, "{}", projection.label());
+            let frame = harness.render(&[map_callback(projection, viewport, Some(detail))], &[0]);
+            for row in [128, 384, 640, 896] {
+                for col in [128, 384, 640, 896] {
+                    let px = viewport[0]
+                        + (viewport[1] - viewport[0]) * (col as f64 + 0.5) / SIZE as f64;
+                    let py = viewport[3]
+                        - (viewport[3] - viewport[2]) * (row as f64 + 0.5) / SIZE as f64;
+                    let (lat, lon) = proj.inverse(px, py).unwrap();
+                    let b = atlas.mercator_bounds();
+                    let expected = [
+                        (lon - b[0]) / (b[1] - b[0]),
+                        (b[3] - lat.to_radians().sin().atanh()) / (b[3] - b[2]),
+                    ];
+                    let color = pixel(&frame, col, row);
+                    for channel in 0..2 {
+                        assert!(
+                            (color[channel] as f64 - expected[channel] * 255.0).abs() < 2.0,
+                            "{} shift {shift}, {col},{row}: {color:?} expected {expected:?}",
+                            projection.label()
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct Harness {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -147,7 +453,7 @@ impl Harness {
             .unwrap()
             .upload_detail_texture(&self.device, &self.queue, SIZE, SIZE, &pixels);
     }
-    fn render(&mut self, callbacks: &[PlanetPaintCallback], paint: &[usize]) -> Vec<u8> {
+    fn render<T: CallbackTrait>(&mut self, callbacks: &[T], paint: &[usize]) -> Vec<u8> {
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let screen = ScreenDescriptor {
             size_in_pixels: [SIZE, SIZE],

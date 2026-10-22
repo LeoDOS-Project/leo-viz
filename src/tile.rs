@@ -25,6 +25,85 @@ impl TileCoord {
 }
 
 pub const MAX_TILE_ZOOM: u8 = 23;
+
+#[derive(Clone)]
+pub struct MapTileView {
+    pub projection: crate::projection::ProjectionKind,
+    pub bounds: [f64; 4],
+    pub pixels: [u32; 2],
+    pub samples: Vec<(f64, f64)>,
+    pub camera_zoom: f64,
+}
+
+impl MapTileView {
+    pub fn new(
+        projection: crate::projection::ProjectionKind,
+        bounds: [f64; 4],
+        pixels: [u32; 2],
+    ) -> Self {
+        let proj = projection.instance();
+        let [west, east, south, north] = bounds;
+        let (xmin, xmax) = proj.x_range();
+        let (ymin, ymax) = proj.y_range();
+        let dx = (east - west) / f64::from(pixels[0].max(1));
+        let dy = (north - south) / f64::from(pixels[1].max(1));
+        let mut samples = Vec::new();
+        let mut resolutions = Vec::new();
+        for row in 0..=32 {
+            for col in 0..=32 {
+                let x = west + (east - west) * col as f64 / 32.0;
+                let y = south + (north - south) * row as f64 / 32.0;
+                if x < xmin || x > xmax || y < ymin || y > ymax {
+                    continue;
+                }
+                let Some((lat, lon)) = proj.inverse(x, y) else {
+                    continue;
+                };
+                if !lat.is_finite() || !lon.is_finite() {
+                    continue;
+                }
+                samples.push((lon, lat));
+                if lat.abs() > 85.05112878 {
+                    continue;
+                }
+                for (nx, ny) in [(x + dx, y), (x, y + dy)] {
+                    if let Some((nlat, nlon)) = proj.inverse(nx, ny) {
+                        let dlon = (nlon - lon + 180.0).rem_euclid(360.0) - 180.0;
+                        let dmerc =
+                            nlat.to_radians().sin().atanh() - lat.to_radians().sin().atanh();
+                        let distance = dlon.to_radians().hypot(dmerc);
+                        if distance.is_finite() && distance > 0.0 {
+                            resolutions.push(distance);
+                        }
+                    }
+                }
+            }
+        }
+        // Match source texels to display pixels; the atlas size budget limits
+        // pathological distortion near projection cuts and singularities.
+        resolutions.sort_unstable_by(f64::total_cmp);
+        // Ignore isolated singularities rather than requesting maximum detail
+        // for the entire world because a few samples are highly distorted.
+        let resolution = resolutions
+            .get(resolutions.len() / 10)
+            .copied()
+            .unwrap_or(f64::INFINITY);
+        let level = (std::f64::consts::TAU / (TILE_SIZE as f64 * resolution)).log2();
+        let camera_zoom = if level.is_finite() {
+            2.0_f64.powf((level - 4.0).clamp(-4.0, MAX_TILE_ZOOM as f64 - 4.0))
+        } else {
+            1.0
+        };
+        Self {
+            projection,
+            bounds,
+            pixels,
+            samples,
+            camera_zoom,
+        }
+    }
+}
+
 const MISSING_TILE_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 const MISSING_TILE_CACHE_LIMIT: usize = 16_384;
 
@@ -720,6 +799,76 @@ pub fn stable_tile_zoom(camera_zoom: f64, previous: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn projected_map_tiles_follow_the_viewport_and_pixel_density() {
+        use crate::projection::ProjectionKind::*;
+        for projection in [
+            Equirectangular,
+            Mercator,
+            Mollweide,
+            Sinusoidal,
+            AzimuthalEquidistant,
+            Hammer,
+            HEALPix,
+            Cassini,
+            TransverseMercator,
+            LambertAzimuthalEqualArea,
+            GallPeters,
+            PeirceQuincuncial,
+        ] {
+            let proj = projection.instance();
+            let (xmin, xmax) = proj.x_range();
+            let (ymin, ymax) = proj.y_range();
+            let world = MapTileView::new(projection, [xmin, xmax, ymin, ymax], [1024, 768]);
+            assert!(world.samples.len() > 100, "{}", projection.label());
+            assert!(world.samples.iter().any(|&(_, lat)| lat > 40.0));
+            assert!(world.samples.iter().any(|&(_, lat)| lat < -40.0));
+            let (x, y) = proj.project(48.7, 25.5).unwrap();
+            let bounds = [x - 0.01, x + 0.01, y - 0.01, y + 0.01];
+            let close = MapTileView::new(projection, bounds, [1024, 768]);
+            assert!(!close.samples.is_empty(), "{}", projection.label());
+            assert!(
+                close
+                    .samples
+                    .iter()
+                    .all(|&(lon, lat)| { (lon - 25.5).abs() < 0.1 && (lat - 48.7).abs() < 0.1 }),
+                "{}",
+                projection.label()
+            );
+            assert!(
+                close.camera_zoom > world.camera_zoom * 100.0,
+                "{}: world {} close {}",
+                projection.label(),
+                world.camera_zoom,
+                close.camera_zoom
+            );
+            let retina = MapTileView::new(projection, bounds, [2048, 1536]);
+            assert!((retina.camera_zoom / close.camera_zoom - 2.0).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn projected_map_tiles_handle_empty_space_and_dateline_edges() {
+        use crate::projection::ProjectionKind;
+        let empty = MapTileView::new(
+            ProjectionKind::Equirectangular,
+            [200.0, 210.0, 0.0, 10.0],
+            [800, 600],
+        );
+        assert!(empty.samples.is_empty());
+        assert!(empty.camera_zoom.is_finite());
+        let edge = MapTileView::new(
+            ProjectionKind::Equirectangular,
+            [179.0, 181.0, -1.0, 1.0],
+            [800, 600],
+        );
+        assert!(edge
+            .samples
+            .iter()
+            .all(|&(lon, _)| lon >= 179.0 && lon <= 180.0));
+        assert!(!edge.samples.is_empty());
+    }
 
     fn overlay() -> (TileOverlayState, mpsc::Receiver<TileFetchRequest>) {
         let (fetch_tx, fetch_rx) = mpsc::channel();

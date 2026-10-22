@@ -1070,18 +1070,49 @@ impl eframe::App for App {
                 .unwrap_or(false);
 
             if has_earth {
-                let (tile_rotation, tile_time, tile_zoom, tile_earth_fixed) = v
+                let (tile_rotation, tile_time, tile_zoom, tile_earth_fixed, map_view) = v
                     .tabs
                     .get(active_tab_idx)
                     .map(|t| {
+                        let map_view = t
+                            .planets
+                            .iter()
+                            .find(|p| p.celestial_body == CelestialBody::Earth)
+                            .and_then(|p| {
+                                let projection = p
+                                    .projection_override
+                                    .unwrap_or(t.settings.planet_projection);
+                                if projection == crate::projection::ProjectionKind::Orthographic {
+                                    return None;
+                                }
+                                Some(
+                                    p.map_tile_view
+                                        .as_ref()
+                                        .filter(|view| view.projection == projection)
+                                        .cloned()
+                                        .unwrap_or_else(|| {
+                                            let proj = projection.instance();
+                                            let (xmin, xmax) = proj.x_range();
+                                            let (ymin, ymax) = proj.y_range();
+                                            crate::tile::MapTileView::new(
+                                                projection,
+                                                [xmin, xmax, ymin, ymax],
+                                                [v.view_width, v.view_height].map(|size| {
+                                                    (size * ctx.pixels_per_point()).max(1.0) as u32
+                                                }),
+                                            )
+                                        }),
+                                )
+                            });
                         (
                             t.settings.rotation,
                             t.settings.time,
                             t.settings.zoom,
                             t.settings.earth_fixed_camera,
+                            map_view,
                         )
                     })
-                    .unwrap_or((Matrix3::identity(), 0.0, 1.0, false));
+                    .unwrap_or((Matrix3::identity(), 0.0, 1.0, false, None));
                 let surface_rotation = if tile_earth_fixed {
                     tile_rotation
                 } else {
@@ -1143,6 +1174,9 @@ impl eframe::App for App {
                     .iter()
                     .filter_map(|&(sx, sy)| screen_to_lonlat(sx, sy))
                     .collect();
+                let (sample_pts, tile_zoom) = map_view
+                    .map(|view| (view.samples, view.camera_zoom))
+                    .unwrap_or((sample_pts, tile_zoom));
                 if !sample_pts.is_empty() {
                     let (sin_sum, cos_sum) =
                         sample_pts.iter().fold((0.0, 0.0), |(s, c), &(lon, _)| {
@@ -1201,16 +1235,12 @@ impl eframe::App for App {
                         let br = lon_lat_to_tile(max_lon, min_lat, tile_zoom);
                         let tile_width_deg = 360.0 / n as f64;
                         let full_lon = lon_span >= 360.0 - tile_width_deg;
-                        let (x_count, x_range_v, x_org) = if full_lon {
-                            (n, (0..n).collect::<Vec<u32>>(), 0u32)
+                        let (x_count, x_org) = if full_lon {
+                            (n, 0u32)
                         } else if tl.x <= br.x {
-                            (br.x - tl.x + 1, (tl.x..=br.x).collect(), tl.x)
+                            (br.x - tl.x + 1, tl.x)
                         } else {
-                            (
-                                (n - tl.x) + br.x + 1,
-                                (tl.x..n).chain(0..=br.x).collect(),
-                                tl.x,
-                            )
+                            ((n - tl.x) + br.x + 1, tl.x)
                         };
                         let y_min = tl.y.min(br.y);
                         let y_max = tl.y.max(br.y);
@@ -1221,6 +1251,8 @@ impl eframe::App for App {
                             && y_count * crate::tile::TILE_SIZE <= max_dimension)
                             || tile_zoom <= 2
                         {
+                            let x_range_v: Vec<u32> =
+                                (0..x_count).map(|offset| (x_org + offset) % n).collect();
                             let mut tiles = Vec::with_capacity(total);
                             for &tx in &x_range_v {
                                 for ty in y_min..=y_max {

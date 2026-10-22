@@ -10,7 +10,9 @@ use crate::config::{
     SatelliteCamera, View3DFlags,
 };
 use crate::geo::CityLabel;
-use crate::math::{camera_pan_sensitivity, rotate_point_matrix, rotation_from_drag};
+use crate::math::{
+    camera_pan_sensitivity, rotate_point_matrix, rotation_for_zoom, rotation_from_drag,
+};
 use crate::renderer::{
     mat3_to_padded_cols, DetailLayer, HeatmapPaintCallback, HeatmapUniforms, MapPaintCallback,
     PlanetPaintCallback, PlanetUniforms, SunPaintCallback, SunUniforms,
@@ -18,7 +20,6 @@ use crate::renderer::{
 use crate::texture::EarthTexture;
 use crate::walker::{SatelliteState, WalkerConstellation, WalkerType};
 use eframe::egui;
-use egui::mutex::Mutex;
 use egui_plot::{Line, Plot, PlotImage, PlotPoint, PlotPoints, Points, Polygon, Text};
 use nalgebra::{Matrix3, Vector3};
 use std::collections::{HashMap, HashSet};
@@ -163,6 +164,49 @@ mod camera_gesture_tests {
         let (_, zoom, rotation) = frame(&ctx, 0.3, vec![egui::Event::Rotate(0.05)]);
         assert_eq!(zoom, 1.0);
         assert!((rotation - 0.05).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pinch_anchoring_ignores_simultaneous_and_trailing_twist_events() {
+        let clean = egui::Context::default();
+        let noisy = egui::Context::default();
+        let initial = Matrix3::identity();
+        let mut expected = initial;
+        let mut actual = initial;
+        let mut zoom = 4.0;
+        for (index, delta) in [1.1, 1.0002, 1.0, 0.95].into_iter().enumerate() {
+            let time = index as f64 / 60.0;
+            let clean_input = frame(&clean, time, vec![egui::Event::Zoom(delta)]);
+            let noisy_input = frame(
+                &noisy,
+                time,
+                vec![pan(), egui::Event::Rotate(0.1), egui::Event::Zoom(delta)],
+            );
+            assert_eq!(noisy_input, clean_input);
+            let next_zoom = zoom * f64::from(clean_input.1);
+            let point = [0.3 / zoom, 0.2 / zoom];
+            expected = rotation_for_zoom(expected, point, 1.0, zoom, next_zoom, false);
+            actual = rotation_for_zoom(actual, point, 1.0, zoom, next_zoom, false);
+            assert!((actual - expected).norm() < 1e-12);
+            zoom = next_zoom;
+        }
+        assert!(
+            (actual - initial).norm() > 1e-6,
+            "Pinching must still move the globe toward the pointer"
+        );
+        let trailing = frame(&noisy, 0.08, vec![pan(), egui::Event::Rotate(0.2)]);
+        assert_eq!(trailing, (egui::Vec2::ZERO, 1.0, 0.0));
+        assert_eq!(
+            rotation_for_zoom(
+                actual,
+                [0.3 / zoom, 0.2 / zoom],
+                1.0,
+                zoom,
+                zoom * f64::from(trailing.1),
+                false
+            ),
+            actual
+        );
     }
 }
 
@@ -6091,6 +6135,7 @@ pub fn draw_3d_view(
 
     if let Some((scroll_delta, zd, rot_delta)) = gesture {
         let north_up = north_up && (10000.0 / zoom) <= 30000.0;
+        let old_zoom = zoom;
         if !zooming && rot_delta.abs() > 0.001 {
             let cr = rot_delta.cos();
             let sr = rot_delta.sin();
@@ -6136,6 +6181,19 @@ pub fn draw_3d_view(
         }
         if is_pinching {
             zoom = (zoom * zd as f64).clamp(0.01, crate::math::MAX_CAMERA_ZOOM);
+        }
+        if zoom != old_zoom && (is_pinching || 10000.0 / zoom <= 30000.0) {
+            if let Some(pointer) = response.response.hover_pos() {
+                let point = response.transform.value_from_position(pointer);
+                rotation = rotation_for_zoom(
+                    rotation,
+                    [point.x, point.y],
+                    planet_radius,
+                    old_zoom,
+                    zoom,
+                    north_up,
+                );
+            }
         }
     }
 
@@ -6204,23 +6262,19 @@ pub fn draw_map_view(
     body_rotation: &Matrix3<f64>,
     time: f64,
     gpu_available: bool,
-    proj_shader_id: i32,
-) {
+    projection_kind: crate::projection::ProjectionKind,
+    detail: Option<DetailLayer>,
+    generated_aois: &[(&Arc<crate::aoi::preview::Preview>, f32)],
+    selected_aoi: Option<(&Arc<crate::aoi::preview::Preview>, usize)>,
+    areas_of_interest: &[AreaOfInterest],
+    job_pick: &mut Vec<crate::aoi::preview::Hit>,
+) -> [f64; 4] {
     let (xmin, xmax) = proj.x_range();
     let (ymin, ymax) = proj.y_range();
 
     let use_gpu = gpu_available;
 
-    let shared_bounds = Arc::new(Mutex::new([xmin, xmax, ymin, ymax]));
-
-    if use_gpu {
-        let rect = egui::Rect::from_min_size(ui.cursor().min, egui::Vec2::new(width, height));
-        let callback = egui_wgpu::Callback::new_paint_callback(
-            rect,
-            MapPaintCallback::new(proj_shader_id, shared_bounds.clone()),
-        );
-        ui.painter().add(callback);
-    }
+    let background = use_gpu.then(|| ui.painter().add(egui::Shape::Noop));
 
     let plot = Plot::new(id)
         .width(width)
@@ -6237,9 +6291,60 @@ pub fn draw_map_view(
         .show_background(!use_gpu);
 
     let mut crosshair_tooltip: Option<(egui::Pos2, f64, f64)> = None;
-    plot.show(ui, |plot_ui| {
-        let pb = plot_ui.plot_bounds();
-        *shared_bounds.lock() = [pb.min()[0], pb.max()[0], pb.min()[1], pb.max()[1]];
+    let response = plot.show(ui, |plot_ui| {
+        for (preview, opacity) in generated_aois {
+            let selected = selected_aoi
+                .filter(|(p, _)| Arc::ptr_eq(p, preview))
+                .map(|(_, i)| i);
+            plot_ui.add(
+                crate::aoi::preview::Overlay::projected(
+                    Arc::clone(preview),
+                    projection_kind,
+                    *opacity,
+                )
+                .with_selection(selected)
+                .with_gpu(use_gpu),
+            );
+        }
+
+        for aoi in areas_of_interest {
+            let lat = aoi.lat.to_radians();
+            let lon = aoi.lon.to_radians();
+            let radius = aoi.radius_km / planet_radius;
+            let mut circle: Vec<_> = (0..96)
+                .map(|index| {
+                    let angle = std::f64::consts::TAU * index as f64 / 96.0;
+                    let latitude = (lat.sin() * radius.cos()
+                        + lat.cos() * radius.sin() * angle.cos())
+                    .clamp(-1.0, 1.0)
+                    .asin();
+                    let longitude = lon
+                        + (radius.sin() * angle.sin()).atan2(
+                            lat.cos() * radius.cos() - lat.sin() * radius.sin() * angle.cos(),
+                        );
+                    [
+                        (longitude.to_degrees() + 180.0).rem_euclid(360.0) - 180.0,
+                        latitude.to_degrees(),
+                    ]
+                })
+                .collect();
+            circle.push(circle[0]);
+            for path in crate::projection::project_path(proj, &circle) {
+                if path.len() >= 4 && path.first() == path.last() {
+                    plot_ui.polygon(
+                        Polygon::new("", PlotPoints::new(path))
+                            .fill_color(aoi.color)
+                            .stroke(egui::Stroke::new(2.0_f32, aoi.color)),
+                    );
+                } else {
+                    plot_ui.line(
+                        Line::new("", PlotPoints::new(path))
+                            .color(aoi.color)
+                            .width(2.0_f32),
+                    );
+                }
+            }
+        }
 
         if show_graticule {
             let grid_color = egui::Color32::from_rgba_unmultiplied(120, 120, 120, 120);
@@ -6583,6 +6688,65 @@ pub fn draw_map_view(
         }
     });
 
+    // Plot applies this frame's gestures after the build closure. Use its
+    // final camera and frame, exactly as the satellite and AOI plot items do.
+    let plot_bounds = response.transform.bounds();
+    let bounds = [
+        plot_bounds.min()[0],
+        plot_bounds.max()[0],
+        plot_bounds.min()[1],
+        plot_bounds.max()[1],
+    ];
+    if let Some(background) = background {
+        ui.painter().set(
+            background,
+            egui_wgpu::Callback::new_paint_callback(
+                *response.transform.frame(),
+                MapPaintCallback::new(ui.id().with((id, "map")), projection_kind, bounds, detail),
+            ),
+        );
+    }
+
+    if response.response.clicked() {
+        if let Some(pos) = response.response.interact_pointer_pos() {
+            for (preview, opacity) in generated_aois {
+                if *opacity > 0.0 {
+                    job_pick.extend(
+                        crate::aoi::preview::Overlay::projected(
+                            Arc::clone(preview),
+                            projection_kind,
+                            *opacity,
+                        )
+                        .pick(pos, &response.transform),
+                    );
+                }
+            }
+        }
+    }
+    let painter = ui.painter().with_clip_rect(*response.transform.frame());
+    for aoi in areas_of_interest {
+        if let Some((x, y)) = proj.project(aoi.lat, aoi.lon) {
+            let pos = response
+                .transform
+                .position_from_point(&PlotPoint::new(x, y));
+            if !response.transform.frame().contains(pos) {
+                continue;
+            }
+            let galley = painter.layout_no_wrap(
+                aoi.name.clone(),
+                egui::FontId::proportional(12.0),
+                aoi.color,
+            );
+            let text_pos = pos - egui::vec2(galley.size().x / 2.0, galley.size().y + 4.0);
+            painter.rect_filled(
+                egui::Rect::from_min_size(text_pos, galley.size()).expand(3.0),
+                3.0,
+                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180),
+            );
+            painter.galley(text_pos, galley, aoi.color);
+        }
+    }
+
     if let Some((screen_pos, lat, lon)) = crosshair_tooltip {
         let text = format!("{:.1}° {:.1}°", lat, lon);
         let font = egui::FontId::proportional(12.0);
@@ -6605,6 +6769,137 @@ pub fn draw_map_view(
             galley,
             egui::Color32::WHITE,
         );
+    }
+    bounds
+}
+
+#[cfg(test)]
+mod map_camera_tests {
+    use super::*;
+
+    fn frame(
+        ctx: &egui::Context,
+        time: f64,
+        events: Vec<egui::Event>,
+        size: [f32; 2],
+    ) -> ([f64; 4], egui_plot::PlotTransform) {
+        let mut result = None;
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                let id = "map-camera-sync";
+                let plot_id = ui.make_persistent_id(egui::Id::new(id));
+                let projection = crate::projection::ProjectionKind::Equirectangular;
+                let bounds = draw_map_view(
+                    ui,
+                    id,
+                    &[],
+                    projection.instance(),
+                    size[0],
+                    size[1],
+                    3.0,
+                    false,
+                    1.0,
+                    false,
+                    false,
+                    false,
+                    45.0,
+                    false,
+                    false,
+                    false,
+                    false,
+                    1.0,
+                    false,
+                    false,
+                    &[],
+                    6371.0,
+                    &[],
+                    &[],
+                    &[],
+                    None,
+                    &Matrix3::identity(),
+                    0.0,
+                    true,
+                    projection,
+                    None,
+                    &[],
+                    None,
+                    &[],
+                    &mut Vec::new(),
+                );
+                let transform = egui_plot::PlotMemory::load(ctx, plot_id)
+                    .unwrap()
+                    .transform();
+                result = Some((bounds, transform));
+            },
+        );
+        result.unwrap()
+    }
+
+    #[test]
+    fn map_background_uses_the_same_frame_as_overlays_during_drag_zoom_and_resize() {
+        let ctx = egui::Context::default();
+        let start = egui::pos2(250.0, 180.0);
+        for index in 0..3 {
+            frame(
+                &ctx,
+                index as f64 / 60.0,
+                vec![egui::Event::PointerMoved(start)],
+                [500.0, 360.0],
+            );
+        }
+        let button = |pressed| egui::Event::PointerButton {
+            pos: start,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let events = [
+            vec![button(true)],
+            vec![egui::Event::PointerMoved(start + egui::vec2(30.0, 15.0))],
+            vec![egui::Event::PointerMoved(start + egui::vec2(-20.0, -10.0))],
+            vec![button(false)],
+            vec![egui::Event::Zoom(1.2)],
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(15.0, 20.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            vec![],
+        ];
+        let mut moved = false;
+        let mut previous = None;
+        for (index, events) in events.into_iter().enumerate() {
+            let size = if index == 6 {
+                [560.0, 400.0]
+            } else {
+                [500.0, 360.0]
+            };
+            let (background, overlays) = frame(&ctx, (index + 3) as f64 / 60.0, events, size);
+            let bounds = overlays.bounds();
+            let expected = [
+                bounds.min()[0],
+                bounds.max()[0],
+                bounds.min()[1],
+                bounds.max()[1],
+            ];
+            assert_eq!(
+                background, expected,
+                "Camera mismatch in gesture frame {index}"
+            );
+            moved |= previous.is_some_and(|before| before != background);
+            previous = Some(background);
+        }
+        assert!(moved, "The test must actually move the map");
     }
 }
 

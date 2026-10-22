@@ -258,7 +258,7 @@ impl AoiGenerator {
             });
     }
 
-    fn load_default_jobs(&mut self, _ctx: &egui::Context) {
+    pub(crate) fn load_default_jobs(&mut self, _ctx: &egui::Context) {
         let defaults = presets::default_settings();
         self.count = defaults.generation.count;
         self.mean_area = defaults.mean_area_km2;

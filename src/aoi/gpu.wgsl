@@ -3,6 +3,7 @@ struct Uniforms {
     screen: vec4<f32>,
     viewport: vec4<f32>,
     params: vec4<f32>,
+    map_origin: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
@@ -18,7 +19,14 @@ const CORNERS = array<vec2<f32>, 6>(
     vec2(1.0, -1.0), vec2(0.0, 1.0), vec2(1.0, 1.0),
 );
 
-fn project(p: vec3<f32>) -> vec3<f32> {
+fn project(p: vec4<f32>) -> vec3<f32> {
+    if u.params.w > 0.5 {
+        // Keep split-coordinate subtractions separate under GPU fast math.
+        let high = fma(vec2(1.0), p.xy, -u.map_origin.xy);
+        let low = fma(vec2(1.0), p.zw, -u.map_origin.zw);
+        let relative = high + low;
+        return vec3(u.screen.xy + relative * u.screen.zw, 1.0);
+    }
     let surface = vec3(p.x, p.y * u.params.x, p.z);
     let normal = vec3(p.x, p.y / u.params.x, p.z);
     return vec3(
@@ -45,7 +53,7 @@ fn output_vertex(position: vec2<f32>, local: vec2<f32>, color: vec4<f32>, half_w
     return output;
 }
 
-fn visible(anchor: vec3<f32>, radius: f32) -> bool {
+fn visible(anchor: vec4<f32>, radius: f32) -> bool {
     let center = project(anchor);
     let extent = radius * u.params.y + 3.0;
     return center.z >= -radius / u.params.x &&
@@ -55,13 +63,14 @@ fn visible(anchor: vec3<f32>, radius: f32) -> bool {
 @vertex
 fn line_vertex(
     @builtin(vertex_index) vertex: u32,
-    @location(0) start: vec3<f32>,
-    @location(1) end: vec3<f32>,
+    @location(0) start: vec4<f32>,
+    @location(1) end: vec4<f32>,
     @location(2) bound: vec4<f32>,
-    @location(3) color: vec4<f32>,
-    @location(4) scales: vec2<f32>,
+    @location(3) radius: f32,
+    @location(4) color: vec4<f32>,
+    @location(5) scales: vec2<f32>,
 ) -> VertexOutput {
-    if bound.w * u.params.y < 3.0 || u.params.y <= scales.x || u.params.y > scales.y || !visible(bound.xyz, bound.w) {
+    if radius * u.params.y < 3.0 || u.params.y <= scales.x || u.params.y > scales.y || !visible(bound, radius) {
         return clipped();
     }
     let pa = project(start);
@@ -87,7 +96,7 @@ fn line_vertex(
 @vertex
 fn dot_vertex(
     @builtin(vertex_index) vertex: u32,
-    @location(0) anchor: vec3<f32>,
+    @location(0) anchor: vec4<f32>,
     @location(1) radius: f32,
     @location(2) color: vec4<f32>,
 ) -> VertexOutput {

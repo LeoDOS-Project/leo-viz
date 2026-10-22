@@ -458,6 +458,8 @@ pub struct PlanetConfig {
     /// Optional per-planet projection override. When `None`, the tab's
     /// `TabSettings.planet_projection` is used.
     pub projection_override: Option<crate::projection::ProjectionKind>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub map_tile_view: Option<crate::tile::MapTileView>,
 }
 
 impl PlanetConfig {
@@ -522,6 +524,8 @@ impl PlanetConfig {
             ground_track_history: HashMap::new(),
             pushbroom_history: crate::pushbroom::History::default(),
             projection_override: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            map_tile_view: None,
         }
     }
 

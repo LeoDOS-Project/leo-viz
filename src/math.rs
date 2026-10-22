@@ -63,9 +63,152 @@ pub fn camera_pan_sensitivity(zoom: f64) -> f64 {
     0.001 / zoom.max(1.0)
 }
 
+pub fn rotation_for_zoom(
+    mut rotation: Matrix3<f64>,
+    point: [f64; 2],
+    planet_radius: f64,
+    old_zoom: f64,
+    zoom: f64,
+    north_up: bool,
+) -> Matrix3<f64> {
+    if old_zoom == zoom {
+        return rotation;
+    }
+    let [cx, cy] = point;
+    let r_sq = planet_radius * planet_radius;
+    if cx * cx + cy * cy > r_sq {
+        return rotation;
+    }
+    let ratio = old_zoom / zoom;
+    let tx = cx * ratio;
+    let ty = cy * ratio;
+    if tx * tx + ty * ty <= r_sq {
+        // Preserve the ground point under the pointer as magnification changes.
+        let a = Vector3::new(cx, cy, (r_sq - cx * cx - cy * cy).sqrt()).normalize();
+        let b = Vector3::new(tx, ty, (r_sq - tx * tx - ty * ty).sqrt()).normalize();
+        let cross = a.cross(&b);
+        let cross_len = cross.norm();
+        if cross_len > 1e-12 {
+            let axis = cross / cross_len;
+            let angle = cross_len.atan2(a.dot(&b));
+            let ca = angle.cos();
+            let sa = angle.sin();
+            let t = 1.0 - ca;
+            let (x, y, z) = (axis.x, axis.y, axis.z);
+            let rot = Matrix3::new(
+                t * x * x + ca,
+                t * x * y - sa * z,
+                t * x * z + sa * y,
+                t * x * y + sa * z,
+                t * y * y + ca,
+                t * y * z - sa * x,
+                t * x * z - sa * y,
+                t * y * z + sa * x,
+                t * z * z + ca,
+            );
+            rotation = rot * rotation;
+        }
+    }
+
+    let center = rotation.transpose() * Vector3::new(0.0, 0.0, 1.0);
+    let lat_limit = 85.0_f64.to_radians().sin();
+    let clamped_y = center.y.clamp(-lat_limit, lat_limit);
+    if (center.y - clamped_y).abs() > 1e-8 {
+        let horiz = (center.x * center.x + center.z * center.z).sqrt();
+        let new_horiz = (1.0 - clamped_y * clamped_y).sqrt();
+        let scale = if horiz > 1e-10 {
+            new_horiz / horiz
+        } else {
+            1.0
+        };
+        let clamped = Vector3::new(center.x * scale, clamped_y, center.z * scale).normalize();
+        let right_raw = Vector3::new(clamped.z, 0.0, -clamped.x);
+        let right_len = right_raw.norm();
+        if right_len > 0.01 {
+            let right = right_raw / right_len;
+            let up = clamped.cross(&right);
+            let r0 = Matrix3::new(
+                right.x, right.y, right.z, up.x, up.y, up.z, clamped.x, clamped.y, clamped.z,
+            );
+            let up_screen = rotation * Vector3::new(0.0, 1.0, 0.0);
+            let bearing = up_screen.x.atan2(up_screen.y);
+            let cb = bearing.cos();
+            let sb = bearing.sin();
+            rotation = Matrix3::new(cb, sb, 0.0, -sb, cb, 0.0, 0.0, 0.0, 1.0) * r0;
+        }
+    }
+    if north_up {
+        let north_blend = (zoom.log2() / 4.0).clamp(0.0, 1.0);
+        if north_blend > 0.0 {
+            let up_screen = rotation * Vector3::new(0.0, 1.0, 0.0);
+            let bearing = up_screen.x.atan2(up_screen.y);
+            let zoom_octaves = (zoom / old_zoom).ln().abs() / 2.0_f64.ln();
+            let decay = (-north_blend * zoom_octaves * 1.5).exp();
+            let correction = bearing * (decay - 1.0);
+            let ca = correction.cos();
+            let sa = correction.sin();
+            rotation = Matrix3::new(ca, sa, 0.0, -sa, ca, 0.0, 0.0, 0.0, 1.0) * rotation;
+        }
+    }
+    rotation
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zoom_keeps_the_point_under_the_pointer_at_every_altitude() {
+        let rotation = lat_lon_to_matrix(30_f64.to_radians(), 25_f64.to_radians());
+        let radius = 6371.0;
+        for old_zoom in [0.5_f64, 3.0, 100.0, 20_000.0, 500_000.0] {
+            let point = [
+                radius * 0.3 / old_zoom.max(1.0),
+                radius * 0.2 / old_zoom.max(1.0),
+            ];
+            let surface = Vector3::new(
+                point[0],
+                point[1],
+                (radius * radius - point[0] * point[0] - point[1] * point[1]).sqrt(),
+            );
+            let world = rotation.transpose() * surface;
+            for factor in [0.9, 1.1, 1.0002] {
+                let zoom = old_zoom * factor;
+                let updated = rotation_for_zoom(rotation, point, radius, old_zoom, zoom, false);
+                let projected = updated * world;
+                assert!((projected.x * zoom - point[0] * old_zoom).abs() < 1e-5);
+                assert!((projected.y * zoom - point[1] * old_zoom).abs() < 1e-5);
+                assert!((updated.transpose() * updated - Matrix3::identity()).norm() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn centered_clamped_and_off_globe_zooms_do_not_move_the_camera() {
+        let rotation = lat_lon_to_matrix(30_f64.to_radians(), 25_f64.to_radians());
+        for (point, zoom) in [([0.0, 0.0], 12.0), ([2.0, 0.0], 12.0), ([0.3, 0.2], 10.0)] {
+            assert_eq!(
+                rotation_for_zoom(rotation, point, 1.0, 10.0, zoom, false),
+                rotation
+            );
+        }
+    }
+
+    #[test]
+    fn zoom_preserves_the_existing_north_up_and_polar_limits() {
+        let bearing = |rotation: Matrix3<f64>| {
+            let up = rotation * Vector3::new(0.0, 1.0, 0.0);
+            up.x.atan2(up.y).abs()
+        };
+        let rotation = rotation_from_drag(0.1, 0.2)
+            * lat_lon_to_matrix(30_f64.to_radians(), 25_f64.to_radians());
+        let updated = rotation_for_zoom(rotation, [0.0, 0.0], 1.0, 8.0, 16.0, true);
+        assert!(bearing(updated) < bearing(rotation));
+        let polar = lat_lon_to_matrix(89_f64.to_radians(), 25_f64.to_radians());
+        let updated = rotation_for_zoom(polar, [0.0, 0.0], 1.0, 8.0, 16.0, false);
+        let center = updated.transpose() * Vector3::new(0.0, 0.0, 1.0);
+        assert!(center.y.abs() <= 85_f64.to_radians().sin() + 1e-12);
+    }
 
     #[test]
     fn camera_panning_does_not_accelerate_above_the_overview_altitude() {

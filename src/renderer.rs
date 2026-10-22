@@ -119,8 +119,119 @@ pub struct HeatmapUniforms {
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MapUniforms {
     pub bounds: [f32; 4],
+    pub domain: [f32; 4],
     pub peirce: [f32; 4],
     pub proj_invscale: [f32; 4],
+    pub origin: [f32; 4],
+    pub detail_bounds: [f32; 4],
+    pub detail_previous_bounds: [f32; 4],
+    pub detail_current_uv: [f32; 4],
+    pub detail_previous_uv: [f32; 4],
+    pub detail_derivatives: [f32; 4],
+}
+
+impl MapUniforms {
+    fn new(
+        projection: crate::projection::ProjectionKind,
+        bounds: [f64; 4],
+        detail: Option<DetailLayer>,
+    ) -> Self {
+        let [west, east, south, north] = bounds;
+        let (cx, cy) = ((west + east) / 2.0, (south + north) / 2.0);
+        let mut uniforms: Self = bytemuck::Zeroable::zeroed();
+        let proj = projection.instance();
+        let (xmin, xmax) = proj.x_range();
+        let (ymin, ymax) = proj.y_range();
+        uniforms.domain = [xmin, xmax, ymin, ymax].map(|v| v as f32);
+        uniforms.bounds = [west - cx, east - cx, south - cy, north - cy].map(|v| v as f32);
+        uniforms.origin = [cx as f32, cy as f32, 0.0, 0.0];
+        uniforms.proj_invscale = [projection.shader_id() as f32, 1.0, 1.0, 0.0];
+        if projection == crate::projection::ProjectionKind::PeirceQuincuncial {
+            let c = crate::projection::peirce_const();
+            uniforms.peirce = [c.m as f32, c.k_ as f32, c.big_k as f32, c.dx as f32];
+            uniforms.proj_invscale[1] = c.inv_scale as f32;
+        }
+        let Some(detail) = detail else {
+            return uniforms;
+        };
+        uniforms.proj_invscale[2] = detail.blend;
+        uniforms.proj_invscale[3] = 1.0;
+        uniforms.detail_bounds = detail.bounds.map(|v| v as f32);
+        uniforms.detail_previous_bounds = detail.previous_bounds.map(|v| v as f32);
+
+        // At close zoom, inverse-project around a double-precision reference.
+        // Absolute f32 map coordinates otherwise lose sub-metre tile motion.
+        let Some((lat, lon)) = proj.inverse(cx, cy) else {
+            return uniforms;
+        };
+        if lat.abs() >= 85.05112878 || (east - west).max(north - south) > 0.001 {
+            return uniforms;
+        }
+        let mercator = lat.to_radians().sin().atanh();
+        let relative = |x, y| -> Option<[f64; 2]> {
+            let (lat, longitude) = proj.inverse(x, y)?;
+            let delta = (longitude - lon + 180.0).rem_euclid(360.0) - 180.0;
+            Some([
+                delta.to_radians(),
+                lat.to_radians().sin().atanh() - mercator,
+            ])
+        };
+        let step = 1e-5;
+        let derivatives = (|| {
+            let xp = relative(cx + step, cy)?;
+            let xm = relative(cx - step, cy)?;
+            let yp = relative(cx, cy + step)?;
+            let ym = relative(cx, cy - step)?;
+            Some([
+                (xp[0] - xm[0]) / (2.0 * step),
+                (xp[1] - xm[1]) / (2.0 * step),
+                (yp[0] - ym[0]) / (2.0 * step),
+                (yp[1] - ym[1]) / (2.0 * step),
+            ])
+        })();
+        let Some(d) = derivatives else {
+            return uniforms;
+        };
+        for x in [west, cx, east] {
+            for y in [south, cy, north] {
+                let Some(exact) = relative(x, y) else {
+                    return uniforms;
+                };
+                let estimate = [
+                    d[0] * (x - cx) + d[2] * (y - cy),
+                    d[1] * (x - cx) + d[3] * (y - cy),
+                ];
+                if !exact.iter().all(|v| v.is_finite())
+                    || (exact[0] - estimate[0])
+                        .abs()
+                        .max((exact[1] - estimate[1]).abs())
+                        > 1e-9
+                {
+                    return uniforms;
+                }
+            }
+        }
+        let coordinates = |b: [f64; 4]| {
+            let width = (b[1] - b[0]).to_radians();
+            let height = b[3] - b[2];
+            if width <= 0.0 || height <= 0.0 {
+                return [0.0; 4];
+            }
+            let delta = (lon - (b[0] + b[1]) / 2.0 + 180.0).rem_euclid(360.0) - 180.0;
+            [
+                0.5 + delta.to_radians() / width,
+                (b[3] - mercator) / height,
+                1.0 / width,
+                1.0 / height,
+            ]
+            .map(|v| v as f32)
+        };
+        uniforms.origin[2] = 1.0;
+        uniforms.detail_current_uv = coordinates(detail.bounds);
+        uniforms.detail_previous_uv = coordinates(detail.previous_bounds);
+        uniforms.detail_derivatives = d.map(|v| v as f32);
+        uniforms
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -138,6 +249,12 @@ pub struct PlanetBindGroupSlot {
     pub texture_key: (CelestialBody, Skin, TextureResolution),
     pub show_milky_way: bool,
     pub has_detail: bool,
+    pub texture_gen: u64,
+}
+
+pub struct MapBindGroupSlot {
+    pub ub: wgpu::Buffer,
+    pub bg: wgpu::BindGroup,
     pub texture_gen: u64,
 }
 
@@ -504,8 +621,7 @@ pub struct GpuResources {
     pub planet_bind_groups: HashMap<egui::Id, PlanetBindGroupSlot>,
     pub heatmap_bg_queue: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     pub heatmap_bg_paint_idx: std::sync::atomic::AtomicUsize,
-    pub map_bg_queue: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
-    pub map_bg_paint_idx: std::sync::atomic::AtomicUsize,
+    pub map_bind_groups: HashMap<egui::Id, MapBindGroupSlot>,
     pub sun_bg: Option<wgpu::BindGroup>,
     pub texture_gen: u64,
 
@@ -723,7 +839,14 @@ impl GpuResources {
         });
         let map_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("map_bgl"),
-            entries: &[bgl_uniform(0), bgl_sampler(1), bgl_texture(2)],
+            entries: &[
+                bgl_uniform(0),
+                bgl_sampler(1),
+                bgl_texture(2),
+                bgl_sampler(3),
+                bgl_texture(4),
+                bgl_texture(5),
+            ],
         });
 
         let planet_pipeline = create_pipeline(
@@ -1073,8 +1196,7 @@ impl GpuResources {
             planet_bind_groups: HashMap::new(),
             heatmap_bg_queue: Vec::new(),
             heatmap_bg_paint_idx: std::sync::atomic::AtomicUsize::new(0),
-            map_bg_queue: Vec::new(),
-            map_bg_paint_idx: std::sync::atomic::AtomicUsize::new(0),
+            map_bind_groups: HashMap::new(),
             sun_bg,
             texture_gen: 0,
             rad_trace_pipeline,
@@ -2265,18 +2387,24 @@ impl CallbackTrait for HeatmapPaintCallback {
 }
 
 pub struct MapPaintCallback {
-    pub proj_shader_id: i32,
-    pub shared_bounds: std::sync::Arc<egui::mutex::Mutex<[f64; 4]>>,
+    pub view_id: egui::Id,
+    pub projection: crate::projection::ProjectionKind,
+    pub bounds: [f64; 4],
+    pub detail: Option<DetailLayer>,
 }
 
 impl MapPaintCallback {
     pub fn new(
-        proj_shader_id: i32,
-        shared_bounds: std::sync::Arc<egui::mutex::Mutex<[f64; 4]>>,
+        view_id: egui::Id,
+        projection: crate::projection::ProjectionKind,
+        bounds: [f64; 4],
+        detail: Option<DetailLayer>,
     ) -> Self {
         Self {
-            proj_shader_id,
-            shared_bounds,
+            view_id,
+            projection,
+            bounds,
+            detail,
         }
     }
 }
@@ -2292,33 +2420,17 @@ impl CallbackTrait for MapPaintCallback {
     ) -> Vec<wgpu::CommandBuffer> {
         let start = web_time::Instant::now();
         let gpu = res.get_mut::<GpuResources>().unwrap();
-        // Reset the queue when the paint index has caught up (start of a new
-        // frame). Otherwise multiple map views in the same frame would share
-        // a single uniform buffer and all end up rendering with the last
-        // projection that got prepared.
-        let paint_idx = gpu
-            .map_bg_paint_idx
-            .load(std::sync::atomic::Ordering::Relaxed);
-        if paint_idx >= gpu.map_bg_queue.len() {
-            gpu.map_bg_queue.clear();
-            gpu.map_bg_paint_idx
-                .store(0, std::sync::atomic::Ordering::Relaxed);
+        // Prepared callbacks may be clipped without painting. Keep camera
+        // buffers identified by view, never by the order of painted callbacks.
+        let generation = gpu.texture_gen;
+        gpu.map_bind_groups
+            .retain(|_, slot| slot.texture_gen == generation);
+        let uniforms = MapUniforms::new(self.projection, self.bounds, self.detail);
+        if let Some(slot) = gpu.map_bind_groups.get(&self.view_id) {
+            queue.write_buffer(&slot.ub, 0, bytemuck::bytes_of(&uniforms));
+            profile_render_section("map.prepare", start);
+            return Vec::new();
         }
-        let [bx0, bx1, by0, by1] = *self.shared_bounds.lock();
-        let (peirce, inv_scale) = if self.proj_shader_id == 10 {
-            let c = crate::projection::peirce_const();
-            (
-                [c.m as f32, c.k_ as f32, c.big_k as f32, c.dx as f32],
-                c.inv_scale as f32,
-            )
-        } else {
-            ([0.0; 4], 1.0)
-        };
-        let uniforms = MapUniforms {
-            bounds: [bx0 as f32, bx1 as f32, by0 as f32, by1 as f32],
-            peirce,
-            proj_invscale: [self.proj_shader_id as f32, inv_scale, 0.0, 0.0],
-        };
         let ub = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("map_ub_inst"),
             size: std::mem::size_of::<MapUniforms>() as u64,
@@ -2343,9 +2455,30 @@ impl CallbackTrait for MapPaintCallback {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(earth_v),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&gpu.sampler_clamp),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(gpu.detail_view_or_dummy()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(
+                        gpu.detail_previous_view.as_ref().unwrap_or(&gpu.dummy_view),
+                    ),
+                },
             ],
         });
-        gpu.map_bg_queue.push((ub, bg));
+        gpu.map_bind_groups.insert(
+            self.view_id,
+            MapBindGroupSlot {
+                ub,
+                bg,
+                texture_gen: generation,
+            },
+        );
         profile_render_section("map.prepare", start);
         Vec::new()
     }
@@ -2358,12 +2491,9 @@ impl CallbackTrait for MapPaintCallback {
     ) {
         let start = web_time::Instant::now();
         let gpu = res.get::<GpuResources>().unwrap();
-        let idx = gpu
-            .map_bg_paint_idx
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if let Some((_, ref bg)) = gpu.map_bg_queue.get(idx) {
+        if let Some(slot) = gpu.map_bind_groups.get(&self.view_id) {
             render_pass.set_pipeline(&gpu.map_pipeline);
-            render_pass.set_bind_group(0, bg, &[]);
+            render_pass.set_bind_group(0, &slot.bg, &[]);
             render_pass.draw(0..4, 0..1);
         }
         profile_render_section("map.paint", start);
@@ -2937,12 +3067,22 @@ const MAP_WGSL: &str = concat!(
 "
 struct Uniforms {
     bounds: vec4f,
+    domain: vec4f,
     peirce: vec4f,
     proj_invscale: vec4f,
+    origin: vec4f,
+    detail_bounds: vec4f,
+    detail_previous_bounds: vec4f,
+    detail_current_uv: vec4f,
+    detail_previous_uv: vec4f,
+    detail_derivatives: vec4f,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var samp: sampler;
 @group(0) @binding(2) var t_earth: texture_2d<f32>;
+@group(0) @binding(3) var samp_c: sampler;
+@group(0) @binding(4) var t_detail: texture_2d<f32>;
+@group(0) @binding(5) var t_detail_previous: texture_2d<f32>;
 ",
 "
 struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, };
@@ -2984,14 +3124,15 @@ fn ej(uu: f32, m: f32) -> vec3f {
         twon *= 2.0;
     }
     var phi = twon * aa[i] * uu;
+    var bp = phi;
     for (var iter: i32 = 0; iter < 9; iter++) {
+        bp = phi;
         let t2 = cc[i] * sin(phi) / aa[i];
         phi = (asin(clamp(t2, -1.0, 1.0)) + phi) / 2.0;
         i--;
         if i == 0 { break; }
     }
     let cn = cos(phi);
-    let bp = phi;
     let dc = cos(phi - bp);
     var dn: f32;
     if abs(dc) > 1e-30 { dn = cn / dc; } else { dn = 1.0; }
@@ -3162,7 +3303,7 @@ fn inv_proj(p: i32, x: f32, y: f32) -> vec2f {
         let gy2 = (x1-y1)*s12;
         let ll = guyou_inv(gx2, gy2, pk, pm, pbk);
         var lo: f32;
-        if gx2>0.0 { lo = degrees(ll.x) + 180.0; } else { lo = degrees(ll.x) - 180.0; }
+        if gx2>0.0 { lo = degrees(ll.x) - 180.0; } else { lo = degrees(ll.x) + 180.0; }
         let la = degrees(ll.y);
         if abs(la)<=90.0 && abs(lo)<=180.0 { return vec2f(la, lo); }
         return vec2f(-999.0);
@@ -3170,15 +3311,57 @@ fn inv_proj(p: i32, x: f32, y: f32) -> vec2f {
     return vec2f(-999.0);
 }
 
+fn sample_map_detail(image: texture_2d<f32>, bounds: vec4f, ll: vec2f) -> vec4f {
+    if bounds.y <= bounds.x || bounds.w <= bounds.z || abs(ll.x) > 85.05112878 {
+        return vec4f(0.0);
+    }
+    let midpoint = (bounds.x + bounds.y) * 0.5;
+    let delta = ll.y - midpoint;
+    let longitude = delta - 360.0 * floor((delta + 180.0) / 360.0);
+    let mercator = asinh(tan(radians(ll.x)));
+    let uv = vec2f(0.5 + longitude / (bounds.y - bounds.x), (bounds.w - mercator) / (bounds.w - bounds.z));
+    if any(uv < vec2f(0.0)) || any(uv > vec2f(1.0)) { return vec4f(0.0); }
+    return textureSampleLevel(image, samp_c, uv, 0.0);
+}
+
+fn sample_map_relative(image: texture_2d<f32>, coordinates: vec4f, delta: vec2f) -> vec4f {
+    let uv = coordinates.xy + vec2f(delta.x * coordinates.z, -delta.y * coordinates.w);
+    if coordinates.z <= 0.0 || coordinates.w <= 0.0 || any(uv < vec2f(0.0)) || any(uv > vec2f(1.0)) {
+        return vec4f(0.0);
+    }
+    return textureSampleLevel(image, samp_c, uv, 0.0);
+}
+
 @fragment fn fs(in: VsOut) -> @location(0) vec4f {
     let proj = i32(u.proj_invscale.x);
     let x = mix(u.bounds.x, u.bounds.y, in.uv.x);
     let y = mix(u.bounds.z, u.bounds.w, in.uv.y);
-    let ll = inv_proj(proj, x, y);
+    let absolute = u.origin.xy + vec2f(x, y);
+    if absolute.x < u.domain.x || absolute.x > u.domain.y || absolute.y < u.domain.z || absolute.y > u.domain.w {
+        return vec4f(0.0);
+    }
+    let ll = inv_proj(proj, absolute.x, absolute.y);
     if ll.x < -900.0 { return vec4f(0.0); }
     let tu = (ll.y + 180.0) / 360.0;
     let tv = (90.0 - ll.x) / 180.0;
-    return textureSampleLevel(t_earth, samp, vec2f(tu, tv), 0.0);
+    let base = textureSampleLevel(t_earth, samp, vec2f(tu, tv), 0.0);
+    if u.proj_invscale.w < 0.5 { return base; }
+    var detail: vec4f;
+    var previous = vec4f(0.0);
+    if u.origin.z > 0.5 {
+        let delta = u.detail_derivatives.xy * x + u.detail_derivatives.zw * y;
+        detail = sample_map_relative(t_detail, u.detail_current_uv, delta);
+        if u.proj_invscale.z < 1.0 {
+            previous = sample_map_relative(t_detail_previous, u.detail_previous_uv, delta);
+        }
+    } else {
+        detail = sample_map_detail(t_detail, u.detail_bounds, ll);
+        if u.proj_invscale.z < 1.0 {
+            previous = sample_map_detail(t_detail_previous, u.detail_previous_bounds, ll);
+        }
+    }
+    detail = mix(previous, detail, u.proj_invscale.z);
+    return base * (1.0 - detail.a) + detail;
 }
 ");
 

@@ -48,8 +48,13 @@ struct Detail {
 
 impl Detail {
     fn new(points: Vec<Vector3<f64>>) -> Self {
+        Self::with_unit(points, 1.0)
+    }
+
+    fn with_unit(points: Vec<Vector3<f64>>, unit: f64) -> Self {
         let mut levels = vec![];
         for tolerance in [1e-6, 1e-5, 1e-4, 1e-3] {
+            let tolerance = tolerance * unit;
             let simplified = simplify(&points, tolerance);
             let previous = levels
                 .last()
@@ -132,6 +137,9 @@ pub(crate) struct Preview {
     spatial: super::spatial::Index,
     mesh_cache: Mutex<Vec<(Vec<f64>, Arc<Mesh>)>>,
     gpu_geometry: OnceLock<Arc<super::gpu::Geometry>>,
+    projected_geometry: Mutex<Vec<(i32, Arc<super::gpu::Geometry>)>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_projections: Mutex<std::collections::HashSet<i32>>,
 }
 
 fn unit([lon, lat]: [f64; 2]) -> Vector3<f64> {
@@ -202,6 +210,9 @@ impl Preview {
             spatial: super::spatial::Index::default(),
             mesh_cache: Mutex::new(Vec::new()),
             gpu_geometry: OnceLock::new(),
+            projected_geometry: Mutex::new(Vec::new()),
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_projections: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -308,7 +319,8 @@ impl Preview {
             let mut segments = Vec::new();
             let mut dots = Vec::with_capacity(self.boundaries.len());
             for boundary in &self.boundaries {
-                let anchor = boundary.anchor.map(|v| v as f32).into();
+                let pack = |p: Vector3<f64>| [p.x as f32, p.y as f32, p.z as f32, 0.0];
+                let anchor = pack(boundary.anchor);
                 let color = [boundary.color[0], boundary.color[1], boundary.color[2], 255];
                 dots.push(super::gpu::Dot {
                     anchor,
@@ -328,8 +340,8 @@ impl Preview {
                         };
                         for edge in points.windows(2) {
                             segments.push(super::gpu::Segment {
-                                start: edge[0].map(|v| v as f32).into(),
-                                end: edge[1].map(|v| v as f32).into(),
+                                start: pack(edge[0]),
+                                end: pack(edge[1]),
                                 anchor,
                                 radius: boundary.radius as f32,
                                 color,
@@ -342,6 +354,146 @@ impl Preview {
             Arc::new(super::gpu::Geometry::new(segments, dots))
         }))
     }
+
+    pub(super) fn projected_geometry(
+        &self,
+        projection: crate::projection::ProjectionKind,
+    ) -> Arc<super::gpu::Geometry> {
+        let key = projection.shader_id();
+        if let Some(geometry) = self.cached_projected_geometry(projection) {
+            return geometry;
+        }
+        let mut segments = Vec::new();
+        let mut dots = Vec::new();
+        for boundary in &self.boundaries {
+            let paths = projected_boundary(boundary, projection);
+            let Some(first) = paths.first().and_then(|path| path.first()) else {
+                continue;
+            };
+            let lon = (-boundary.anchor.z).atan2(boundary.anchor.x).to_degrees();
+            let lat = boundary.anchor.y.clamp(-1.0, 1.0).asin().to_degrees();
+            let anchor = projection
+                .instance()
+                .project(lat, lon)
+                .map_or([first.x, first.y], |(x, y)| [x, y]);
+            let radius = paths
+                .iter()
+                .flatten()
+                .map(|p| (p.x - anchor[0]).hypot(p.y - anchor[1]))
+                .fold(0.0_f64, f64::max)
+                .max(1e-9) as f32;
+            let anchor = super::gpu::split_point(anchor);
+            let color = [boundary.color[0], boundary.color[1], boundary.color[2], 255];
+            dots.push(super::gpu::Dot {
+                anchor,
+                radius,
+                color,
+            });
+            for path in paths {
+                let detail = Detail::with_unit(path, 180.0 / std::f64::consts::PI);
+                for (level, (error, points)) in detail.levels.iter().enumerate() {
+                    let min_scale = detail
+                        .levels
+                        .get(level + 1)
+                        .map_or(0.0, |(next_error, _)| (0.7 / next_error) as f32);
+                    let max_scale = if *error > 0.0 {
+                        (0.7 / error) as f32
+                    } else {
+                        f32::MAX
+                    };
+                    for edge in points.windows(2) {
+                        segments.push(super::gpu::Segment {
+                            start: super::gpu::split_point([edge[0].x, edge[0].y]),
+                            end: super::gpu::split_point([edge[1].x, edge[1].y]),
+                            anchor,
+                            radius,
+                            color,
+                            scales: [min_scale, max_scale],
+                        });
+                    }
+                }
+            }
+        }
+        let geometry = Arc::new(super::gpu::Geometry::new(segments, dots));
+        let mut cache = self.projected_geometry.lock().unwrap();
+        if cache.len() >= 4 {
+            cache.remove(0);
+        }
+        cache.push((key, Arc::clone(&geometry)));
+        geometry
+    }
+
+    fn cached_projected_geometry(
+        &self,
+        projection: crate::projection::ProjectionKind,
+    ) -> Option<Arc<super::gpu::Geometry>> {
+        let mut cache = self.projected_geometry.lock().unwrap();
+        let index = cache
+            .iter()
+            .position(|(id, _)| *id == projection.shader_id())?;
+        let entry = cache.remove(index);
+        let geometry = Arc::clone(&entry.1);
+        cache.push(entry);
+        Some(geometry)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn projected_geometry_ready(
+        &self,
+        projection: crate::projection::ProjectionKind,
+    ) -> bool {
+        self.projected_geometry
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(id, _)| *id == projection.shader_id())
+    }
+
+    fn projected_geometry_for_view(
+        self: &Arc<Self>,
+        projection: crate::projection::ProjectionKind,
+        _ctx: &egui::Context,
+    ) -> Option<Arc<super::gpu::Geometry>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(geometry) = self.cached_projected_geometry(projection) {
+                return Some(geometry);
+            }
+            let key = projection.shader_id();
+            let mut pending = self.pending_projections.lock().unwrap();
+            if pending.len() < 2 && pending.insert(key) {
+                let preview = Arc::clone(self);
+                let ctx = _ctx.clone();
+                std::thread::spawn(move || {
+                    preview.projected_geometry(projection);
+                    preview.pending_projections.lock().unwrap().remove(&key);
+                    ctx.request_repaint();
+                });
+            }
+            None
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Some(self.projected_geometry(projection))
+        }
+    }
+}
+
+fn projected_boundary(
+    boundary: &Boundary,
+    projection: crate::projection::ProjectionKind,
+) -> Vec<Vec<Vector3<f64>>> {
+    boundary
+        .polygons
+        .iter()
+        .flat_map(|polygon| polygon.iter())
+        .flat_map(|ring| crate::projection::project_path(projection.instance(), ring))
+        .map(|path| {
+            path.into_iter()
+                .map(|[x, y]| Vector3::new(x, y, 0.0))
+                .collect()
+        })
+        .collect()
 }
 
 #[derive(Clone)]
@@ -380,6 +532,7 @@ pub(crate) struct Overlay {
     opacity: f32,
     selected: Option<usize>,
     use_gpu: bool,
+    projection: Option<crate::projection::ProjectionKind>,
 }
 
 impl Overlay {
@@ -399,7 +552,18 @@ impl Overlay {
             opacity,
             selected: None,
             use_gpu: false,
+            projection: None,
         }
+    }
+
+    pub fn projected(
+        preview: Arc<Preview>,
+        projection: crate::projection::ProjectionKind,
+        opacity: f32,
+    ) -> Self {
+        let mut overlay = Self::new(preview, Matrix3::identity(), 1.0, 0.0, opacity);
+        overlay.projection = Some(projection);
+        overlay
     }
 
     pub fn with_selection(mut self, selected: Option<usize>) -> Self {
@@ -415,6 +579,9 @@ impl Overlay {
     /// Exact polygon picking (including holes), with a small screen-space
     /// fallback for AOIs represented by dots. Uses the existing spatial index.
     pub fn pick(&self, pos: egui::Pos2, transform: &PlotTransform) -> Vec<Hit> {
+        if let Some(projection) = self.projection {
+            return self.pick_projected(pos, transform, projection);
+        }
         let point = transform.value_from_position(pos);
         let Some((lat, lon)) = crate::globe_overlay::pick_surface(
             point.x,
@@ -466,6 +633,21 @@ impl Overlay {
             return mesh;
         };
         let color = Color32::YELLOW;
+        if let Some(projection) = self.projection {
+            for path in projected_boundary(boundary, projection) {
+                for edge in path.windows(2) {
+                    let a = transform.position_from_point(&PlotPoint::new(edge[0].x, edge[0].y));
+                    let b = transform.position_from_point(&PlotPoint::new(edge[1].x, edge[1].y));
+                    if transform
+                        .frame()
+                        .intersects(Rect::from_two_pos(a, b).expand(2.0))
+                    {
+                        line_quad(&mut mesh, a, b, color, 2.5);
+                    }
+                }
+            }
+            return mesh;
+        }
         for detail in &boundary.rings {
             let ring = &detail.levels[0].1;
             for edge in ring.windows(2) {
@@ -493,7 +675,122 @@ impl Overlay {
         project_surface(p, &self.rotation, self.radius, self.polar_scale)
     }
 
+    fn pick_projected(
+        &self,
+        pos: egui::Pos2,
+        transform: &PlotTransform,
+        projection: crate::projection::ProjectionKind,
+    ) -> Vec<Hit> {
+        let proj = projection.instance();
+        let cursor = transform.value_from_position(pos);
+        let Some((lat, lon)) = proj.inverse(cursor.x, cursor.y) else {
+            return Vec::new();
+        };
+        let point = unit([lon, lat]);
+        let mut margin = 0.0_f64;
+        for offset in [
+            egui::vec2(6.0, 0.0),
+            egui::vec2(-6.0, 0.0),
+            egui::vec2(0.0, 6.0),
+            egui::vec2(0.0, -6.0),
+        ] {
+            let nearby = transform.value_from_position(pos + offset);
+            if let Some((lat, lon)) = proj.inverse(nearby.x, nearby.y) {
+                margin = margin.max((unit([lon, lat]) - point).norm());
+            }
+        }
+        let scale = transform
+            .dpos_dvalue_x()
+            .abs()
+            .max(transform.dpos_dvalue_y().abs())
+            * 180.0
+            / std::f64::consts::PI;
+        let mut found = Vec::new();
+        for index in self
+            .preview
+            .spatial
+            .query(|sphere| (sphere.center - point).norm() <= sphere.radius + margin + 1e-5)
+        {
+            let boundary = &self.preview.boundaries[index];
+            let exact = contains(&boundary.polygons, lon, lat);
+            let anchor_lon = (-boundary.anchor.z).atan2(boundary.anchor.x).to_degrees();
+            let anchor_lat = boundary.anchor.y.clamp(-1.0, 1.0).asin().to_degrees();
+            let dot = boundary.radius * scale < 3.0
+                && proj.project(anchor_lat, anchor_lon).is_some_and(|(x, y)| {
+                    transform
+                        .position_from_point(&PlotPoint::new(x, y))
+                        .distance(pos)
+                        <= 6.0
+                });
+            if exact || dot {
+                found.push(Hit {
+                    preview: Arc::clone(&self.preview),
+                    index,
+                });
+            }
+        }
+        found.sort_by(|a, b| {
+            self.preview.aois[a.index]
+                .area_km2
+                .total_cmp(&self.preview.aois[b.index].area_km2)
+        });
+        found
+    }
+
+    pub(super) fn projected_mesh(
+        &self,
+        transform: &PlotTransform,
+        projection: crate::projection::ProjectionKind,
+    ) -> Mesh {
+        let geometry = self.preview.projected_geometry(projection);
+        let scale = transform
+            .dpos_dvalue_x()
+            .abs()
+            .max(transform.dpos_dvalue_y().abs());
+        let screen = |p| {
+            let [x, y] = super::gpu::join_point(p);
+            transform.position_from_point(&PlotPoint::new(x, y))
+        };
+        let color = |c: [u8; 4]| {
+            Color32::from_rgba_unmultiplied(
+                c[0],
+                c[1],
+                c[2],
+                (c[3] as f32 * self.opacity).round() as u8,
+            )
+        };
+        let mut mesh = Mesh::default();
+        for edge in &geometry.segments {
+            if f64::from(edge.radius) * scale < 3.0
+                || scale <= f64::from(edge.scales[0])
+                || scale > f64::from(edge.scales[1])
+            {
+                continue;
+            }
+            let (a, b) = (screen(edge.start), screen(edge.end));
+            if transform
+                .frame()
+                .intersects(Rect::from_two_pos(a, b).expand(1.0))
+            {
+                line_quad(&mut mesh, a, b, color(edge.color), 1.2);
+            }
+        }
+        for dot in &geometry.dots {
+            let anchor = screen(dot.anchor);
+            if f64::from(dot.radius) * scale < 3.0 && transform.frame().contains(anchor) {
+                mesh.add_colored_rect(
+                    Rect::from_center_size(anchor, egui::vec2(2.5, 2.5)),
+                    color(dot.color),
+                );
+            }
+        }
+        mesh
+    }
+
     fn cached_mesh(&self, transform: &PlotTransform) -> Arc<Mesh> {
+        if let Some(projection) = self.projection {
+            return Arc::new(self.projected_mesh(transform, projection));
+        }
         let mut key = self.rotation.as_slice().to_vec();
         let frame = transform.frame();
         key.extend([
@@ -690,15 +987,25 @@ impl Overlay {
 impl PlotItem for Overlay {
     fn shapes(&self, ui: &egui::Ui, transform: &PlotTransform, shapes: &mut Vec<Shape>) {
         if self.use_gpu {
-            let callback = super::gpu::PaintCallback::new(
-                ui.id(),
-                self.preview.gpu_geometry(),
-                &self.rotation,
-                self.radius,
-                self.polar_scale,
-                self.opacity,
-                transform,
-            );
+            let callback = if let Some(projection) = self.projection {
+                let Some(geometry) = self
+                    .preview
+                    .projected_geometry_for_view(projection, ui.ctx())
+                else {
+                    return;
+                };
+                super::gpu::PaintCallback::projected(ui.id(), geometry, self.opacity, transform)
+            } else {
+                super::gpu::PaintCallback::new(
+                    ui.id(),
+                    self.preview.gpu_geometry(),
+                    &self.rotation,
+                    self.radius,
+                    self.polar_scale,
+                    self.opacity,
+                    transform,
+                )
+            };
             shapes
                 .push(egui_wgpu::Callback::new_paint_callback(*transform.frame(), callback).into());
         } else {
@@ -843,6 +1150,76 @@ mod tests {
         assert!(points.iter().all(|p| p.x < -0.8));
         assert!((points[1].y - 0.5).abs() < 1e-12);
         assert!((points[1].norm() - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn projected_overlays_render_pick_holes_and_reuse_geometry() {
+        use crate::projection::ProjectionKind::*;
+        let preview = Arc::new(
+            Preview::from_json(
+                &serde_json::to_vec(&serde_json::json!({
+                    "schema_version": 1, "config": {"count": 1, "seed": 42},
+                    "aois": [{"area_km2": 1000, "anchor_lon": 25.5, "anchor_lat": 48.7,
+                        "geometry": {"type": "Polygon", "coordinates": [
+                            [[22,45],[29,45],[29,52],[22,52],[22,45]],
+                            [[25,48],[26,48],[26,49],[25,49],[25,48]]
+                        ]}}]
+                }))
+                .unwrap(),
+            )
+            .unwrap(),
+        );
+        for projection in [
+            Equirectangular,
+            Mercator,
+            Mollweide,
+            Sinusoidal,
+            AzimuthalEquidistant,
+            Hammer,
+            HEALPix,
+            Cassini,
+            TransverseMercator,
+            LambertAzimuthalEqualArea,
+            GallPeters,
+            PeirceQuincuncial,
+        ] {
+            let proj = projection.instance();
+            let (x, y) = proj.project(48.7, 25.5).unwrap();
+            let transform = PlotTransform::new(
+                Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
+                PlotBounds::from_min_max([x - 10.0, y - 10.0], [x + 10.0, y + 10.0]),
+                [false, false],
+            );
+            let overlay = Overlay::projected(Arc::clone(&preview), projection, 0.3);
+            let geometry = preview.projected_geometry(projection);
+            assert!(Arc::ptr_eq(
+                &geometry,
+                &preview.projected_geometry(projection)
+            ));
+            let mesh = overlay.projected_mesh(&transform, projection);
+            assert!(!mesh.vertices.is_empty(), "{}", projection.label());
+            assert!(mesh.is_valid());
+            assert!(mesh.vertices.iter().all(|v| v.color.a() <= 77));
+            let screen = |lat, lon| {
+                let (x, y) = proj.project(lat, lon).unwrap();
+                transform.position_from_point(&PlotPoint::new(x, y))
+            };
+            assert!(
+                overlay.pick(screen(48.7, 25.5), &transform).is_empty(),
+                "{} must preserve holes",
+                projection.label()
+            );
+            assert_eq!(
+                overlay.pick(screen(48.0, 24.0), &transform).len(),
+                1,
+                "{}",
+                projection.label()
+            );
+            let selection = overlay.with_selection(Some(0)).selection_mesh(&transform);
+            assert!(!selection.vertices.is_empty());
+            assert!(selection.is_valid());
+        }
+        assert!(preview.projected_geometry.lock().unwrap().len() <= 4);
     }
     #[test]
     fn invalid_response_and_open_rings_are_rejected() {

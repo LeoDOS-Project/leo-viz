@@ -4700,6 +4700,7 @@ impl ViewerState {
                     });
                 } else if render_planet && is_2d_projection {
                     ui.vertical(|ui| {
+                        let mut job_pick = Vec::new();
                         let planet = &self.tabs[tab_idx].planets[planet_idx];
                         let proj = planet_projection.instance();
                         let rad_ref = if show_radiation_belts || planet.show_radiation_window {
@@ -4707,9 +4708,9 @@ impl ViewerState {
                         } else {
                             None
                         };
-                        draw_map_view(
+                        let map_bounds = draw_map_view(
                             ui,
-                            &format!("ground_{}", view_name),
+                            &format!("ground_{}_{}", view_name, planet_projection.shader_id()),
                             &constellations_data,
                             proj,
                             view_width,
@@ -4765,8 +4766,41 @@ impl ViewerState {
                             &body_y_rotation,
                             time,
                             gpu_available,
-                            planet_projection.shader_id(),
+                            planet_projection,
+                            detail_bounds,
+                            &if celestial_body == CelestialBody::Earth {
+                                self.aoi_generator.overlays()
+                            } else {
+                                Vec::new()
+                            },
+                            self.aoi_generator.jobs.selected(),
+                            &planet.areas_of_interest,
+                            &mut job_pick,
                         );
+                        if !job_pick.is_empty() {
+                            self.aoi_generator.jobs.pick(job_pick);
+                            self.earth_observation.open = true;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if celestial_body == CelestialBody::Earth {
+                            let pixels = [view_width, view_height]
+                                .map(|size| (size * ui.ctx().pixels_per_point()).max(1.0) as u32);
+                            let planet = &mut self.tabs[tab_idx].planets[planet_idx];
+                            if !planet.map_tile_view.as_ref().is_some_and(|view| {
+                                view.projection == planet_projection
+                                    && view.bounds == map_bounds
+                                    && view.pixels == pixels
+                            }) {
+                                planet.map_tile_view = Some(crate::tile::MapTileView::new(
+                                    planet_projection,
+                                    map_bounds,
+                                    pixels,
+                                ));
+                                ui.ctx().request_repaint();
+                            }
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        let _ = map_bounds;
                     });
                 }
 

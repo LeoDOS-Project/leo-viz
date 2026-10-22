@@ -373,7 +373,10 @@ cargo build --release
 
 ### ESRI Diagnostics
 
-Desktop ESRI imagery supports levels up to 23 where coverage exists. The globe
+Desktop ESRI imagery is supported in every Earth projection, with detail selected
+from the visible map area and display resolution. All projections share the same
+tile cache, parent fallbacks, and fades. Imagery supports levels up to 23 where
+coverage exists. The globe
 can zoom down to a displayed altitude of 0.01 km. Missing tiles fall back to the
 nearest available parent without replacing imagery with a placeholder. Missing
 tile responses are cached for 24 hours, including across app restarts. Existing
@@ -391,6 +394,18 @@ and moves to a nearby location. It saves `target/esri-diagnostics.json` and
 The existing disk cache is not cleared. Optional
 `LEO_VIZ_TILE_DIAGNOSTICS_LAT` and `LEO_VIZ_TILE_DIAGNOSTICS_LON` override the
 default location of 48.7 N, 25.5 E.
+
+Set `LEO_VIZ_TILE_DIAGNOSTICS_PROJECTIONS=1` along with
+`LEO_VIZ_TILE_DIAGNOSTICS=1` to automatically render all twelve flat projections
+with Esri imagery. This writes `target/esri-projections-diagnostics.json` and
+matching screenshots.
+
+AOI overlays also render in every projection. Generated layers retain their colors,
+opacity, holes, and selection; manual AOI circles retain their fills and labels.
+Projected geometry is cached and drawn on the GPU, with preparation off the desktop
+UI thread. Add `LEO_VIZ_TILE_DIAGNOSTICS_AOIS=1` to the projection replay to include
+the bundled 50,000 AOIs and a manual circle. Results and screenshots are written
+to `target/aoi-projections-diagnostics*`.
 
 The report separates RAM reuse, disk hits, actual HTTP requests, cancellations,
 queue delays, RAM/GPU evictions, GPU tile reuse, and atlas upload frames. The native

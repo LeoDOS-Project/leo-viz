@@ -13,9 +13,9 @@ use wgpu::util::DeviceExt;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct Segment {
-    pub start: [f32; 3],
-    pub end: [f32; 3],
-    pub anchor: [f32; 3],
+    pub start: [f32; 4],
+    pub end: [f32; 4],
+    pub anchor: [f32; 4],
     pub radius: f32,
     pub color: [u8; 4],
     pub scales: [f32; 2],
@@ -24,15 +24,15 @@ pub(super) struct Segment {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct Dot {
-    pub anchor: [f32; 3],
+    pub anchor: [f32; 4],
     pub radius: f32,
     pub color: [u8; 4],
 }
 
 pub(super) struct Geometry {
     id: usize,
-    segments: Vec<Segment>,
-    dots: Vec<Dot>,
+    pub(super) segments: Vec<Segment>,
+    pub(super) dots: Vec<Dot>,
 }
 
 impl Geometry {
@@ -56,6 +56,7 @@ struct Uniforms {
     screen: [f32; 4],
     viewport: [f32; 4],
     params: [f32; 4],
+    map_origin: [f32; 4],
 }
 
 struct UploadedGeometry {
@@ -141,14 +142,15 @@ impl Resources {
             "line_vertex",
             std::mem::size_of::<Segment>(),
             &wgpu::vertex_attr_array![
-                0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Unorm8x4, 4 => Float32x2,
+                0 => Float32x4, 1 => Float32x4, 2 => Float32x4,
+                3 => Float32, 4 => Unorm8x4, 5 => Float32x2,
             ],
         );
         let dots = pipeline(
             "dot_vertex",
             std::mem::size_of::<Dot>(),
             &wgpu::vertex_attr_array![
-                0 => Float32x3, 1 => Float32, 2 => Unorm8x4,
+                0 => Float32x4, 1 => Float32, 2 => Unorm8x4,
             ],
         );
         Self {
@@ -288,9 +290,64 @@ impl PaintCallback {
                     opacity,
                 ],
                 params: [polar_scale as f32, scale as f32, 0.0, 0.0],
+                map_origin: [0.0; 4],
             },
         }
     }
+
+    pub fn projected(
+        view_id: egui::Id,
+        geometry: Arc<Geometry>,
+        opacity: f32,
+        transform: &PlotTransform,
+    ) -> Self {
+        let center = transform.bounds().center();
+        let origin = split_point([center.x, center.y]);
+        let screen = transform.position_from_point(&center) - transform.frame().min;
+        Self {
+            view_id,
+            geometry,
+            uniforms: Uniforms {
+                rotation: [[0.0; 4]; 3],
+                screen: [
+                    screen.x,
+                    screen.y,
+                    transform.dpos_dvalue_x() as f32,
+                    transform.dpos_dvalue_y() as f32,
+                ],
+                viewport: [
+                    transform.frame().width(),
+                    transform.frame().height(),
+                    1.0,
+                    opacity,
+                ],
+                params: [
+                    1.0,
+                    transform
+                        .dpos_dvalue_x()
+                        .abs()
+                        .max(transform.dpos_dvalue_y().abs()) as f32,
+                    0.0,
+                    1.0,
+                ],
+                map_origin: origin,
+            },
+        }
+    }
+}
+
+pub(super) fn split_point([x, y]: [f64; 2]) -> [f32; 4] {
+    let high = [x as f32, y as f32];
+    [
+        high[0],
+        high[1],
+        (x - high[0] as f64) as f32,
+        (y - high[1] as f64) as f32,
+    ]
+}
+
+pub(super) fn join_point(p: [f32; 4]) -> [f64; 2] {
+    [p[0] as f64 + p[2] as f64, p[1] as f64 + p[3] as f64]
 }
 
 impl CallbackTrait for PaintCallback {
