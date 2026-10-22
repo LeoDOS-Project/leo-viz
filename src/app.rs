@@ -72,6 +72,7 @@ pub(crate) struct App {
     pub(crate) dock_state: DockState<usize>,
     pub(crate) viewer: ViewerState,
     first_frame: bool,
+    simulation_ui: crate::simulation_ui::SimulationUi,
     frame_profiler_enabled: bool,
     frame_profiler_threshold_ms: f64,
     last_update_instant: Option<web_time::Instant>,
@@ -269,6 +270,9 @@ impl App {
         let mut app = Self {
             dock_state: DockState::new(vec![0]),
             viewer: ViewerState {
+                revisit: crate::revisit::Panel::default(),
+                earth_observation: crate::earth_observation::Panel::default(),
+                aoi_generator: crate::aoi::AoiGenerator::default(),
                 tabs: vec![TabConfig::new("View 1".to_string())],
                 camera_id_counter: 0,
                 tab_counter: 1,
@@ -528,6 +532,7 @@ impl App {
                 editing_tab: None,
             },
             first_frame: true,
+            simulation_ui: crate::simulation_ui::SimulationUi::default(),
             frame_profiler_enabled: std::env::var_os("LEO_VIZ_FRAME_PROF").is_some(),
             frame_profiler_threshold_ms: std::env::var("LEO_VIZ_FRAME_PROF_THRESHOLD_MS")
                 .ok()
@@ -713,6 +718,11 @@ impl eframe::App for App {
     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.viewer.aoi_generator.jobs.poll_capture(ctx);
+        // Fast-forward owns a frozen capture session and needs no orbital scene,
+        // overlays, renderer callbacks or preview physics until it completes.
+        if self.viewer.aoi_generator.jobs.capture_fast_forward_ui(ctx) { return; }
+
         #[cfg(not(target_arch = "wasm32"))]
         {
             let interactive = ctx.input(|i| {
@@ -751,6 +761,10 @@ impl eframe::App for App {
             };
         }
 
+        self.simulation_ui.show(ctx, &self.viewer);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.viewer.aoi_generator.poll(ctx);
+        self.viewer.revisit.show(ctx, &self.viewer.tabs[self.viewer.active_tab_idx], self.viewer.start_timestamp);
         let v = &mut self.viewer;
 
         let effective_dark_mode = v
@@ -2611,12 +2625,21 @@ impl eframe::App for App {
                 )
                 .show(ctx, |ui| {
                     ui.add_space(4.0);
+                    ui.toggle_value(&mut self.viewer.earth_observation.open, "Earth Observation")
+                        .on_hover_text("Show the right sidebar: AOIs, observation model and data collection");
                     ui.horizontal(|ui| {
                         ui.add_space(4.0);
                         ui.strong("LeoDOS Visualiser")
                             .on_hover_text(env!("GIT_HASH"));
                         if ui.button("[?]").clicked() {
                             self.viewer.show_info = !self.viewer.show_info;
+                        }
+                        if ui
+                            .button("Sim")
+                            .on_hover_text("Open infrastructure experiment controls")
+                            .clicked()
+                        {
+                            self.simulation_ui.open = true;
                         }
                         {
                             let active = self.viewer.active_tab_idx;
@@ -2866,6 +2889,13 @@ impl eframe::App for App {
                     }
                 });
         }
+        let active = self.viewer.active_tab_idx;
+        if let Some(request) = self.viewer.earth_observation.sidebar(
+            ctx, &mut self.viewer.aoi_generator, &mut self.viewer.tabs[active],
+            active, self.viewer.start_timestamp,
+        ) {
+            self.viewer.revisit.open_for(request.planet, request.cycle_s);
+        }
         mark_frame!("side-panel");
 
         let mut dock_style = egui_dock::Style::from_egui(ctx.global_style().as_ref());
@@ -2882,7 +2912,9 @@ impl eframe::App for App {
         dock_style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
         dock_style.tab_bar.show_scroll_bar_on_overflow = false;
         let dock = DockArea::new(&mut self.dock_state).style(dock_style);
-        dock.show(ctx, &mut self.viewer);
+        if !self.viewer.aoi_generator.jobs.capture_scene(ctx) {
+            dock.show(ctx, &mut self.viewer);
+        }
         mark_frame!("dock");
 
         #[allow(deprecated)]

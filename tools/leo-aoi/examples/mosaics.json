@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "count": 10000,
+  "seed": 42,
+  "tile_edge_km": 0.1,
+  "min_area_km2": 1.0,
+  "max_area_km2": 5000000.0,
+  "min_aspect": 0.5,
+  "max_aspect": 2.0,
+  "max_bands": 6,
+  "hotspot_count": 256,
+  "hotspot_spread_km": 10.0,
+  "hotspot_fraction": 0.8
+}

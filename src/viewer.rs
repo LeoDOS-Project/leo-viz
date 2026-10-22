@@ -273,6 +273,9 @@ pub(crate) struct TleIslCache {
 const ISL_CACHE_RECOMPUTE_INTERVAL_S: f64 = 300.0;
 
 pub(crate) struct ViewerState {
+    pub(crate) revisit: crate::revisit::Panel,
+    pub(crate) earth_observation: crate::earth_observation::Panel,
+    pub(crate) aoi_generator: crate::aoi::AoiGenerator,
     pub(crate) tabs: Vec<TabConfig>,
     pub(crate) camera_id_counter: usize,
     pub(crate) tab_counter: usize,
@@ -417,6 +420,7 @@ impl TabViewer for ViewerState {
                 }
                 for planet in &mut tab_mut.planets {
                     planet.ground_track_history.clear();
+                    planet.pushbroom_history.clear();
                     planet.conjunction_prev_positions.clear();
                     planet.kessler.collided_pairs.clear();
                     planet.kessler.debris.clear();
@@ -2054,6 +2058,7 @@ impl ViewerState {
         if show_config && !self.show_tab_info {
             ui.separator();
 
+            let mut adam_applied = false;
             let mut const_to_remove: Option<usize> = None;
             let mut cameras_to_clean: Vec<usize> = Vec::new();
             let planet = &mut self.tabs[tab_idx].planets[planet_idx];
@@ -2391,7 +2396,7 @@ impl ViewerState {
                         let mut sats = cons.sats_per_plane as i32;
                         let mut planes = cons.num_planes as i32;
                         ui.label("Sats:");
-                        let sats_resp = ui.add_enabled(editable, egui::DragValue::new(&mut sats).range(1..=100)).on_hover_text("Satellites per orbital plane");
+                        let sats_resp = ui.add_enabled(editable, egui::DragValue::new(&mut sats).range(1..=10_000)).on_hover_text("Satellites per orbital plane");
                         ui.label("Orbits:");
                         let planes_resp = ui.add_enabled(editable, egui::DragValue::new(&mut planes).range(1..=100)).on_hover_text("Number of orbital planes");
                         if sats > 0 && planes > 0 {
@@ -2560,6 +2565,14 @@ impl ViewerState {
                         egui::ComboBox::from_id_salt(format!("preset_{}_{}_{}", tab_idx, planet_idx, cidx))
                             .selected_text(cons.preset_name())
                             .show_ui(ui, |ui| {
+                                if ui.add_enabled(planet.celestial_body == CelestialBody::Earth,
+                                    egui::Button::selectable(cons.preset == Preset::Adam, "ADAM"))
+                                    .on_hover_text("169 satellites: 13 × 13, 70°, daily repeat, +Grid. Sets the Earth Observation swath to 20 km (shared by this view). Coverage is recomputed for this width.")
+                                    .clicked() {
+                                    crate::orbit_presets::apply_adam(cons);
+                                    adam_applied = true;
+                                    cameras_to_clean.push(cidx);
+                                }
                                 if ui.selectable_label(cons.preset == Preset::Starlink, "Starlink").clicked() {
                                     cons.sats_per_plane = 22; cons.num_planes = 72;
                                     cons.altitude_km = 550.0; cons.inclination = 53.0;
@@ -2878,6 +2891,12 @@ impl ViewerState {
             }
         }); });
 
+                if adam_applied {
+                    self.tabs[tab_idx].settings.pushbroom.swath_km = crate::orbit_presets::ADAM_SWATH_KM;
+                    let planet = &mut self.tabs[tab_idx].planets[planet_idx];
+                    planet.ground_track_history.clear();
+                    planet.pushbroom_history.clear();
+                }
                 if let Some(cidx) = const_to_remove {
                     if cidx == usize::MAX {
                         self.tabs[tab_idx].planets[planet_idx].add_constellation();
@@ -4137,6 +4156,7 @@ impl ViewerState {
         let altitude_line_width = settings.altitude_line_width;
         let show_inclination_bounds = settings.show_inclination_bounds;
         let show_ground_tracks = settings.show_ground_tracks;
+        let pushbroom_settings = settings.pushbroom;
         let tex_res = self.texture_resolution;
         let planet_handle = self
             .planet_image_handles
@@ -4198,6 +4218,12 @@ impl ViewerState {
                 if render_planet && !is_2d_projection {
                     ui.vertical(|ui| {
                         let planet = &mut self.tabs[tab_idx].planets[planet_idx];
+                        if celestial_body == CelestialBody::Earth && pushbroom_settings.enabled {
+                            planet.pushbroom_history.update(time, &body_y_rotation, planet_radius,
+                                &constellations_data, pushbroom_settings);
+                        } else {
+                            planet.pushbroom_history.clear();
+                        }
                         // Accumulate ground-track samples for any camera-tracked satellite.
                         // We record (geographic_lat, geographic_lon, sim_time) points as the
                         // sub-satellite point moves over the Earth-fixed frame. Points
@@ -4497,9 +4523,18 @@ impl ViewerState {
                             .map(|_| std::collections::HashMap::new())
                             .collect();
                         let gs_locked_for_draw = planet.has_running_cfs();
+                        let mut observation_pick = None;
+                        let mut job_pick = Vec::new();
                         let (rot, new_zoom) = draw_3d_view(
                             ui,
                             Draw3dInput {
+                                observation_sampler: self.earth_observation.armed_for(tab_idx, planet_idx),
+                                observation_marker: self.earth_observation.marker_for(tab_idx, planet_idx),
+                                generated_aois: self.aoi_generator.overlays(),
+                                selected_aoi: self.aoi_generator.jobs.selected(),
+                                pushbroom: if celestial_body == CelestialBody::Earth && pushbroom_settings.enabled {
+                                    Some((&planet.pushbroom_history, pushbroom_settings))
+                                } else { None },
                                 id: &view_name,
                                 constellations: &constellations_data,
                                 flags: view_flags,
@@ -4578,6 +4613,8 @@ impl ViewerState {
                                 flash_intensities: &flash_intensities,
                             },
                             Draw3dState {
+                                observation_pick: &mut observation_pick,
+                                job_pick: &mut job_pick,
                                 pending_cameras: &mut planet.pending_cameras,
                                 camera_id_counter: &mut self.camera_id_counter,
                                 satellite_cameras: &mut planet.satellite_cameras,
@@ -4606,6 +4643,13 @@ impl ViewerState {
                             }
                         }
                         self.tabs[tab_idx].settings.zoom = new_zoom;
+                        if !job_pick.is_empty() {
+                            self.aoi_generator.jobs.pick(job_pick);
+                            self.earth_observation.open = true;
+                        }
+                        if let Some((lat, lon)) = observation_pick {
+                            self.earth_observation.pick(tab_idx, planet_idx, lat, lon);
+                        }
                         if let Some((screen_pos, lat, lon)) = ctx_menu_req {
                             self.context_menu = Some(crate::viewer::ContextMenuState {
                                 screen_pos,

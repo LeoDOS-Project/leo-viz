@@ -457,6 +457,9 @@ impl ViewerState {
             ui.indent("constellation_opts", |ui| {
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_orbits, "Show orbits"))
                     .on_hover_text("Draw orbital paths for each satellite");
+                if ui.button("Earth Observation…").on_hover_text("Sweep controls, coverage equations and point sampler").clicked() {
+                    self.earth_observation.open = true;
+                }
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_coverage, "Show coverage"))
                     .on_hover_text("Display ground coverage cones");
                 ui.indent("coverage_opts", |ui| {

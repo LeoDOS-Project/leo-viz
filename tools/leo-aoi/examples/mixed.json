@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "grid": {"columns": 1440, "rows": 720},
+  "layers": [
+    {"path": "../data/gdp-total-1990-2024-30arcmin.tif", "band": 35, "kind": "mass", "weight": 0.7},
+    {"path": "../data/population.tif", "band": 1, "kind": "mass", "weight": 0.3}
+  ],
+  "mask": {"path": "../data/eligible-fraction.tif", "band": 1},
+  "mask_threshold": 0.5,
+  "background_fraction": 0.05,
+  "concentration": 1.0
+}

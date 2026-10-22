@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "grid": {"columns": 1440, "rows": 720},
+  "layers": [
+    {
+      "path": "../data/gdp-total-1990-2024-30arcmin.tif",
+      "band": 35,
+      "kind": "mass",
+      "weight": 1.0,
+      "label": "Kummu et al. v4 total GDP PPP, 2024, 30 arc-min",
+      "citation": "https://doi.org/10.5281/zenodo.18429133"
+    }
+  ],
+  "background_fraction": 0.0,
+  "concentration": 1.0
+}

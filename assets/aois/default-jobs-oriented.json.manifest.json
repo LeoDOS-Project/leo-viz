@@ -1,0 +1,97 @@
+{
+  "artifact": {
+    "bytes": 11853644,
+    "file": "default-jobs-oriented.json.gz",
+    "format": "gzip-compressed viewer schema v1 JSON",
+    "sha256": "8fcd83c6da20f8f03c4a29ab23bf4e567c365c5f9597c24648feaf6bd3f18961"
+  },
+  "config": {
+    "count": 50000,
+    "hotspot_count": 600,
+    "hotspot_fraction": 0.4,
+    "hotspot_spread_km": 100.0,
+    "max_area_km2": 691.4669948931069,
+    "max_aspect": 3.0,
+    "max_bands": 6,
+    "min_area_km2": 0.6914669948931068,
+    "min_aspect": 0.3333333333333333,
+    "random_rotation": true,
+    "schema_version": 1,
+    "seed": 42,
+    "shape": "oriented_rectangle",
+    "tile_edge_km": 0.1
+  },
+  "demand_provenance": {
+    "config": {
+      "background_fraction": 0.0,
+      "concentration": 1.0,
+      "grid": {
+        "columns": 1440,
+        "rows": 720
+      },
+      "layers": [
+        {
+          "band": 35,
+          "citation": "https://doi.org/10.5281/zenodo.18429133",
+          "kind": "mass",
+          "label": "Kummu et al. v4 total GDP PPP, 2024, 30 arc-min",
+          "path": "../data/gdp-total-1990-2024-30arcmin.tif",
+          "weight": 1.0
+        }
+      ],
+      "schema_version": 1
+    },
+    "resolved_background_fraction": 0.0,
+    "resolved_concentration": 1.0,
+    "sources": [
+      {
+        "band": 35,
+        "band_description": "gdp_tot_2024",
+        "citation": "https://doi.org/10.5281/zenodo.18429133",
+        "kind": "mass",
+        "label": "Kummu et al. v4 total GDP PPP, 2024, 30 arc-min",
+        "nodata": "nan",
+        "path": "/Users/adam/Dev/leo-viz/tools/leo-aoi/data/gdp-total-1990-2024-30arcmin.tif",
+        "resampled_total": 196564801998545.53,
+        "resampling": "sum",
+        "sha256": "29c32a5e7f96e6f07f4103ba9099e3181408619580c2ed30e9fe5264fea20f58",
+        "source_crs": "EPSG:4326",
+        "source_shape": [
+          360,
+          720
+        ],
+        "weight": 1.0
+      }
+    ]
+  },
+  "demand_sha256": "afb508a710131aef7b761d8198e4a707918395d67ab924693d529de54aa69d02",
+  "generator": "leo-aoi",
+  "generator_version": "0.1.2",
+  "grid": {
+    "cell_area_km2": 0.009999993402991028,
+    "columns": 400302,
+    "origin": "north_west",
+    "projection": "spherical_cylindrical_equal_area",
+    "radius_km": 6371.0,
+    "rows": 127420
+  },
+  "name": "Default Jobs",
+  "requested_mean_area_km2": 100.0,
+  "rng": "NumPy PCG64, independent location/shape/parent/rotation streams",
+  "schema_version": 1,
+  "size_ratio": 1000.0,
+  "summary": {
+    "count": 50000,
+    "max_area_km2": 691.4293347587843,
+    "mean_area_km2": 99.4342182838677,
+    "min_area_km2": 0.6914847573190109,
+    "total_tile_memberships": null
+  },
+  "versions": {
+    "gdal": "3.10.3",
+    "numpy": "2.3.5",
+    "python": "3.12.14",
+    "rasterio": "1.4.4",
+    "shapely": "2.1.2"
+  }
+}

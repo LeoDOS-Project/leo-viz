@@ -1130,6 +1130,11 @@ fn format_capacity(bps: f64) -> String {
 }
 
 pub struct Draw3dInput<'a> {
+    pub selected_aoi: Option<(&'a Arc<crate::aoi::preview::Preview>, usize)>,
+    pub observation_sampler: bool,
+    pub observation_marker: Option<(f64, f64)>,
+    pub pushbroom: Option<(&'a crate::pushbroom::History, crate::pushbroom::Settings)>,
+    pub generated_aois: Vec<(&'a Arc<crate::aoi::preview::Preview>, f32, f32)>,
     pub id: &'a str,
     pub constellations: &'a [DrawConstellationData],
     pub flags: View3DFlags,
@@ -1169,6 +1174,8 @@ pub struct Draw3dInput<'a> {
 }
 
 pub struct Draw3dState<'a> {
+    pub job_pick: &'a mut Vec<crate::aoi::preview::Hit>,
+    pub observation_pick: &'a mut Option<(f64, f64)>,
     pub pending_cameras: &'a mut Vec<SatelliteCamera>,
     pub camera_id_counter: &'a mut usize,
     pub satellite_cameras: &'a mut [SatelliteCamera],
@@ -1187,6 +1194,11 @@ pub fn draw_3d_view(
     state: Draw3dState<'_>,
 ) -> (Matrix3<f64>, f64) {
     let Draw3dInput {
+        selected_aoi,
+        observation_sampler,
+        observation_marker,
+        pushbroom,
+        generated_aois,
         id,
         constellations,
         flags,
@@ -1225,6 +1237,8 @@ pub fn draw_3d_view(
         flash_intensities,
     } = input;
     let Draw3dState {
+        job_pick,
+        observation_pick,
         pending_cameras,
         camera_id_counter,
         satellite_cameras,
@@ -2571,6 +2585,12 @@ pub fn draw_3d_view(
             }
         }
 
+        if let Some((history, settings)) = pushbroom {
+            plot_ui.add(crate::pushbroom::Overlay::new(
+                history, settings, surface_rotation, planet_radius, flattening,
+            ));
+        }
+
         if show_ground_tracks {
             // Ground tracks live in Earth-fixed lat/lon, so they're drawn with
             // the surface rotation (which rotates with the body). Consecutive
@@ -2835,6 +2855,15 @@ pub fn draw_3d_view(
                     ));
                     count += 1;
                 }
+            }
+        }
+
+        if body_key.0 == CelestialBody::Earth {
+            for (preview, opacity, fill_opacity) in &generated_aois {
+                let selected = selected_aoi.filter(|(p, _)| Arc::ptr_eq(p, preview)).map(|(_, i)| i);
+                plot_ui.add(crate::aoi::preview::Overlay::new(
+                    Arc::clone(preview), surface_rotation, planet_radius, flattening, *opacity,
+                ).with_fill(*fill_opacity).with_selection(selected));
             }
         }
 
@@ -5590,7 +5619,23 @@ pub fn draw_3d_view(
         }
     }
 
-    if response.response.is_pointer_button_down_on() {
+    if let Some((lat, lon)) = observation_marker {
+        let (s, c) = lat.to_radians().sin_cos();
+        let (sl, cl) = lon.to_radians().sin_cos();
+        let surface = if earth_fixed_camera { rotation } else { rotation * *body_rotation };
+        let (point, front) = crate::globe_overlay::project_surface(
+            Vector3::new(c * cl, s, -c * sl), &surface, planet_radius, 1.0-flattening,
+        );
+        if front >= 0.0 {
+            let pos = response.transform.position_from_point(&egui_plot::PlotPoint::new(point.x, point.y));
+            let painter = ui.painter().with_clip_rect(response.response.rect);
+            painter.circle_filled(pos, 3.0, egui::Color32::YELLOW);
+            painter.circle_stroke(pos, 8.0, egui::Stroke::new(2.0, egui::Color32::YELLOW));
+        }
+    }
+    if observation_sampler && response.response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    } else if response.response.is_pointer_button_down_on() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     } else if !hovering_satellite {
         if response.response.hover_pos().is_some() {
@@ -5598,7 +5643,7 @@ pub fn draw_3d_view(
         }
     }
 
-    if response.response.double_clicked() {
+    if !observation_sampler && response.response.double_clicked() {
         let up_screen = rotation * Vector3::new(0.0, 1.0, 0.0);
         let bearing = up_screen.x.atan2(up_screen.y);
         if bearing.abs() > 1e-6 {
@@ -5612,7 +5657,7 @@ pub fn draw_3d_view(
         if let Some(pos) = response.response.interact_pointer_pos() {
             let mut found = false;
             for (rect, is_gs, idx) in &label_rects {
-                if rect.contains(pos) {
+                if !observation_sampler && rect.contains(pos) {
                     if *is_gs && ground_stations_locked {
                         continue;
                     }
@@ -5714,7 +5759,14 @@ pub fn draw_3d_view(
         *dragging_place = None;
     }
 
-    if response.response.clicked() {
+    if observation_sampler && response.response.clicked() {
+        if let Some(pos) = response.response.interact_pointer_pos() {
+            let point = response.transform.value_from_position(pos);
+            let surface = if earth_fixed_camera { rotation } else { rotation * *body_rotation };
+            *observation_pick = crate::globe_overlay::pick_surface(point.x, point.y, &surface, planet_radius, 1.0-flattening);
+        }
+    }
+    if !observation_sampler && response.response.clicked() {
         if let Some(pos) = response.response.interact_pointer_pos() {
             let mut handled = false;
             for (rect, is_gs, idx) in &label_rects {
@@ -5723,6 +5775,15 @@ pub fn draw_3d_view(
                     handled = true;
                     break;
                 }
+            }
+            if !handled && body_key.0 == CelestialBody::Earth {
+                let surface = if earth_fixed_camera { rotation } else { rotation * *body_rotation };
+                for (preview, opacity, _) in &generated_aois {
+                    job_pick.extend(crate::aoi::preview::Overlay::new(
+                        Arc::clone(preview), surface, planet_radius, flattening, *opacity,
+                    ).pick(pos, &response.transform));
+                }
+                handled = !job_pick.is_empty();
             }
             if !handled {
                 let plot_pos = response.transform.value_from_position(pos);
@@ -5805,7 +5866,7 @@ pub fn draw_3d_view(
         }
     }
 
-    if response.response.secondary_clicked() {
+    if !observation_sampler && response.response.secondary_clicked() {
         if let Some(pos) = response.response.interact_pointer_pos() {
             let plot_pos = response.transform.value_from_position(pos);
             let px = plot_pos.x;
