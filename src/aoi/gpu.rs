@@ -1,5 +1,10 @@
 //! Persistent body-fixed geometry; rotation, clipping, and detail selection run on the GPU.
 
+#[cfg(not(target_arch = "wasm32"))]
+mod texture;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use texture::{MapRenderer, MapTexture};
+
 use egui_plot::{PlotPoint, PlotTransform};
 use egui_wgpu::{wgpu, CallbackResources, CallbackTrait, ScreenDescriptor};
 use nalgebra::Matrix3;

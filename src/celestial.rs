@@ -41,9 +41,6 @@ pub enum CelestialBody {
 pub enum Skin {
     Default,
     Abstract,
-    HellOnEarth,
-    Terraformed,
-    Civilized,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -98,16 +95,6 @@ impl TextureResolution {
 }
 
 impl Skin {
-    pub fn label(&self) -> &'static str {
-        match self {
-            Skin::Default => "Default",
-            Skin::Abstract => "Abstract",
-            Skin::HellOnEarth => "Hell on Earth",
-            Skin::Terraformed => "Terraformed",
-            Skin::Civilized => "Civilized",
-        }
-    }
-
     pub fn filename(
         &self,
         body: CelestialBody,
@@ -127,9 +114,6 @@ impl Skin {
                 Some("textures/earth/earth_512.jpg")
             }
             (CelestialBody::Earth, Skin::Default, _) => Some("textures/earth/earth_2k.jpg"),
-            (CelestialBody::Earth, Skin::HellOnEarth, _) => {
-                Some("textures/earth/hell_on_earth_2k.png")
-            }
             (CelestialBody::Moon, Skin::Default, TextureResolution::R4096) => {
                 Some("textures/moon/moon_4k.jpg")
             }
@@ -144,10 +128,6 @@ impl Skin {
                 Some("textures/mars/mars_8k.jpg")
             }
             (CelestialBody::Mars, Skin::Default, _) => Some("textures/mars/mars_2k.jpg"),
-            (CelestialBody::Mars, Skin::Terraformed, _) => {
-                Some("textures/mars/mars_terraformed.png")
-            }
-            (CelestialBody::Mars, Skin::Civilized, _) => Some("textures/mars/mars_civilized.png"),
             (CelestialBody::Mercury, Skin::Default, TextureResolution::R21504) => {
                 Some("textures/mercury/Mercury_Diffuse_16k.jpg")
             }
@@ -341,14 +321,6 @@ impl CelestialBody {
             CelestialBody::Iapetus => "Iapetus",
             CelestialBody::Phobos => "Phobos",
             CelestialBody::Vesta => "Vesta",
-        }
-    }
-
-    pub fn available_skins(&self) -> &'static [Skin] {
-        match self {
-            CelestialBody::Earth => &[Skin::Default, Skin::Abstract, Skin::HellOnEarth],
-            CelestialBody::Mars => &[Skin::Default, Skin::Terraformed, Skin::Civilized],
-            _ => &[Skin::Default],
         }
     }
 

@@ -8,23 +8,91 @@ use chrono::{Duration, Local, Utc};
 use eframe::egui;
 use nalgebra::Matrix3;
 
+pub(crate) fn set_sidebar_toggle_rect(ctx: &egui::Context, rect: Option<egui::Rect>) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new("sidebar-toggle-rect"), rect));
+}
+
+pub(crate) fn reserve_sidebar_toggle(ui: &mut egui::Ui) {
+    let rect = ui.ctx().data(|data| {
+        data.get_temp::<Option<egui::Rect>>(egui::Id::new("sidebar-toggle-rect"))
+            .flatten()
+    });
+    if let Some(rect) = rect {
+        let next = ui.next_widget_position();
+        // Only indent the header under the floating control, not the canvas or other panes.
+        if next.y >= rect.top() - 4.0 && next.y < rect.bottom() && next.x < rect.right() + 4.0 {
+            ui.add_space(rect.right() + 4.0 - next.x);
+        }
+    }
+}
+
 impl ViewerState {
-    pub(crate) fn show_settings(&mut self, ui: &mut egui::Ui) {
-        let current_body = self
-            .tabs
-            .first()
-            .and_then(|t| t.planets.first())
-            .map(|p| p.celestial_body)
-            .unwrap_or(CelestialBody::Earth);
+    pub(crate) fn theme_toggle(&mut self, ui: &mut egui::Ui) -> egui::Response {
+        let (icon, tooltip) = if self.dark_mode {
+            (
+                egui::include_image!("../assets/lucide-moon.svg"),
+                "Switch to light mode",
+            )
+        } else {
+            (
+                egui::include_image!("../assets/lucide-sun.svg"),
+                "Switch to dark mode",
+            )
+        };
+        let response = toolbar_icon(ui, icon, tooltip, false);
+        if response.clicked() {
+            self.dark_mode = !self.dark_mode;
+            ui.ctx().request_repaint();
+        }
+        response
+    }
 
+    pub(crate) fn sidebar_toggle(&mut self, ui: &mut egui::Ui) -> egui::Response {
+        let (icon, tooltip) = if self.show_side_panel {
+            (
+                egui::include_image!("../assets/lucide-panel-left-close.svg"),
+                "Hide settings sidebar",
+            )
+        } else {
+            (
+                egui::include_image!("../assets/lucide-panel-left-open.svg"),
+                "Show settings sidebar",
+            )
+        };
+        let response = toolbar_icon(ui, icon, tooltip, false);
+        if response.clicked() {
+            self.show_side_panel = !self.show_side_panel;
+            ui.ctx().request_repaint();
+        }
+        response
+    }
+
+    pub(crate) fn presentation_toggle(&mut self, ui: &mut egui::Ui) -> egui::Response {
+        let tooltip = if self.show_tab_info {
+            "Show controls"
+        } else {
+            "Hide controls (presentation mode)"
+        };
+        let response = toolbar_icon(
+            ui,
+            egui::include_image!("../assets/lucide-presentation.svg"),
+            tooltip,
+            self.show_tab_info,
+        );
+        if response.clicked() {
+            self.show_tab_info = !self.show_tab_info;
+            ui.ctx().request_repaint();
+        }
+        response
+    }
+
+    fn clock_settings(&mut self, ui: &mut egui::Ui) {
         let active = self.active_tab_idx;
-        let current_gmst = self.current_gmst;
-
-        {
+        ui.label(egui::RichText::new("Clock").strong());
+        ui.indent("clock_controls", |ui| {
             let s = &mut self.tabs[active].settings;
             let (time_ref, speed_ref, animate_ref) = (&mut s.time, &mut s.speed, &mut s.animate);
 
-            ui.label(egui::RichText::new("Simulation").strong());
             ui.horizontal(|ui| {
                 ui.label("Speed:");
                 let abs_speed = speed_ref.abs();
@@ -235,15 +303,22 @@ impl ViewerState {
             {
                 *time_ref = self.real_time;
             }
-        }
+        });
+    }
 
+    pub(crate) fn show_settings(&mut self, ui: &mut egui::Ui) {
+        let current_body = self
+            .tabs
+            .get(self.active_tab_idx)
+            .and_then(|t| t.planets.first())
+            .map(|p| p.celestial_body)
+            .unwrap_or(CelestialBody::Earth);
+        let active = self.active_tab_idx;
+        let current_gmst = self.current_gmst;
         let tab = &mut self.tabs[active];
 
-        ui.separator();
-        ui.label(egui::RichText::new("Display").strong());
-
         ui.horizontal(|ui| {
-            ui.label("View:");
+            ui.label(egui::RichText::new("Display:").strong());
             use crate::config::ViewMode;
             egui::ComboBox::from_id_salt("view_mode")
                 .selected_text(tab.settings.view_mode.label())
@@ -259,35 +334,71 @@ impl ViewerState {
                         ViewMode::PlanetSizes,
                         "Planet Sizes",
                     );
+                    ui.selectable_value(
+                        &mut tab.settings.view_mode,
+                        ViewMode::Satellite,
+                        "Satellite",
+                    );
+                    ui.selectable_value(
+                        &mut tab.settings.view_mode,
+                        ViewMode::SatelliteTable,
+                        "Satellite Table",
+                    );
+                    ui.selectable_value(
+                        &mut tab.settings.view_mode,
+                        ViewMode::GroundTerminals,
+                        "Ground Terminals",
+                    );
                 });
         });
+        let mode = tab.settings.view_mode;
+        if matches!(
+            mode,
+            crate::config::ViewMode::Planet | crate::config::ViewMode::SolarSystem
+        ) {
+            ui.indent("display_clock", |ui| self.clock_settings(ui));
+        }
+        let tab = &mut self.tabs[active];
+        if tab.settings.view_mode.is_reference_view() {
+            return;
+        }
+        if tab.planets.is_empty() {
+            tab.add_planet();
+        }
         if tab.settings.view_mode == crate::config::ViewMode::Planet {
-            ui.indent("planet_opts", |ui| {
+            let can_observe = crate::earth_observation::Panel::available_for(tab);
+            if !can_observe {
+                self.earth_observation.open = false;
+            }
+            ui.indent("planet_settings", |ui| {
+                ui.label(egui::RichText::new("Rendering").strong());
+                ui.indent("planet_rendering", |ui| {
+                    projection_ui(ui, &mut tab.settings.planet_projection);
+                    texture_resolution_ui(ui, &mut self.texture_resolution);
+                    let has_earth = tab
+                        .planets
+                        .iter()
+                        .any(|planet| planet.celestial_body == CelestialBody::Earth);
+                    ui.add_enabled(
+                        has_earth,
+                        egui::Checkbox::new(&mut self.tile_overlay.enabled, "ESRI Tiles"),
+                    )
+                    .on_hover_text(
+                        "Earth satellite imagery; the texture is used when tiles are unavailable",
+                    )
+                    .on_disabled_hover_text("Available for Earth only");
+                });
+                ui.label(egui::RichText::new("Application").strong());
+                ui.indent("planet_application", |ui| {
+                    ui.radio_value(&mut self.earth_observation.open, false, "None");
+                    ui.add_enabled_ui(can_observe, |ui| {
+                        ui.radio_value(&mut self.earth_observation.open, true, "Earth Observation");
+                    })
+                    .response
+                    .on_disabled_hover_text("Requires exactly one Earth planet in this view");
+                });
             let (s, planets) = (&mut tab.settings, &mut tab.planets);
             let on = true;
-            ui.add_enabled_ui(on, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Projection:");
-                    use crate::projection::ProjectionKind;
-                    egui::ComboBox::from_id_salt("proj_kind")
-                        .selected_text(s.planet_projection.label())
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut s.planet_projection, ProjectionKind::Orthographic, "Orthographic");
-                            ui.selectable_value(&mut s.planet_projection, ProjectionKind::Equirectangular, "Equirectangular");
-                            ui.selectable_value(&mut s.planet_projection, ProjectionKind::Mercator, "Mercator");
-                            ui.selectable_value(&mut s.planet_projection, ProjectionKind::Mollweide, "Mollweide");
-                            ui.selectable_value(&mut s.planet_projection, ProjectionKind::Sinusoidal, "Sinusoidal");
-                            ui.selectable_value(&mut s.planet_projection, ProjectionKind::AzimuthalEquidistant, "Azimuthal Equidistant");
-                            ui.selectable_value(&mut s.planet_projection, ProjectionKind::Hammer, "Hammer");
-                            ui.selectable_value(&mut s.planet_projection, ProjectionKind::HEALPix, "HEALPix");
-                            ui.selectable_value(&mut s.planet_projection, ProjectionKind::Cassini, "Cassini");
-                            ui.selectable_value(&mut s.planet_projection, ProjectionKind::TransverseMercator, "UTM");
-                            ui.selectable_value(&mut s.planet_projection, ProjectionKind::LambertAzimuthalEqualArea, "Lambert Azimuthal");
-                            ui.selectable_value(&mut s.planet_projection, ProjectionKind::GallPeters, "Gall-Peters");
-                            ui.selectable_value(&mut s.planet_projection, ProjectionKind::PeirceQuincuncial, "Peirce Quincuncial");
-                        });
-                });
-            });
 
             ui.label(egui::RichText::new("Camera").strong());
             ui.indent("camera_opts", |ui| {
@@ -311,28 +422,32 @@ impl ViewerState {
                         };
                         let mut lat_deg = lat.to_degrees();
                         let mut lon_deg = geo_lon.to_degrees();
-                        ui.horizontal(|ui| {
+                        let lat_changed = ui.horizontal(|ui| {
                             ui.label("Lat:");
-                            let lat_changed = ui.add(egui::DragValue::new(&mut lat_deg).speed(0.5).max_decimals(1).suffix("°")).changed();
+                            ui.add(egui::DragValue::new(&mut lat_deg).speed(0.5).max_decimals(1).suffix("°")).changed()
+                        }).inner;
+                        let lon_changed = ui.horizontal(|ui| {
                             ui.label("Lon:");
-                            let lon_changed = ui.add(egui::DragValue::new(&mut lon_deg).speed(0.5).max_decimals(1).suffix("°")).changed();
+                            ui.add(egui::DragValue::new(&mut lon_deg).speed(0.5).max_decimals(1).suffix("°")).changed()
+                        }).inner;
+                        ui.horizontal(|ui| {
                             ui.label("Alt:").on_hover_text("Controls the visible range of the plot");
                             let mut alt_km = 10000.0 / s.zoom;
                             if ui.add(egui::DragValue::new(&mut alt_km).range(0.01..=1000000.0).speed(100.0).suffix(" km")).changed() {
                                 s.zoom = (10000.0 / alt_km).clamp(0.01, crate::math::MAX_CAMERA_ZOOM);
                             }
-                            lat_deg = lat_deg.clamp(-90.0, 90.0);
-                            while lon_deg > 180.0 { lon_deg -= 360.0; }
-                            while lon_deg < -180.0 { lon_deg += 360.0; }
-                            if lat_changed || lon_changed {
-                                let target_lon = if s.earth_fixed_camera {
-                                    lon_deg.to_radians()
-                                } else {
-                                    lon_deg.to_radians() + body_rotation
-                                };
-                                s.rotation = lat_lon_to_matrix(lat_deg.to_radians(), target_lon);
-                            }
                         });
+                        lat_deg = lat_deg.clamp(-90.0, 90.0);
+                        while lon_deg > 180.0 { lon_deg -= 360.0; }
+                        while lon_deg < -180.0 { lon_deg += 360.0; }
+                        if lat_changed || lon_changed {
+                            let target_lon = if s.earth_fixed_camera {
+                                lon_deg.to_radians()
+                            } else {
+                                lon_deg.to_radians() + body_rotation
+                            };
+                            s.rotation = lat_lon_to_matrix(lat_deg.to_radians(), target_lon);
+                        }
                         ui.horizontal(|ui| {
                             ui.label("Roll:").on_hover_text("Rotate camera around viewing axis");
                             ui.add(egui::DragValue::new(&mut s.camera_roll).range(-180.0..=180.0).speed(0.5).suffix("°"));
@@ -386,13 +501,14 @@ impl ViewerState {
                                     s.rotation = lat_lon_to_matrix(lat.to_radians(), target_lon);
                                 }
                             }
-                            ui.separator();
+                        });
                             use crate::time::{DAYS_PER_YEAR, SOLAR_DECLINATION_MAX};
                             let ts = self.start_timestamp + Duration::seconds(s.time as i64);
                             use chrono::Datelike;
                             let doy = ts.ordinal() as f64;
                             let decl = SOLAR_DECLINATION_MAX * ((360.0 / DAYS_PER_YEAR) * (doy + 10.0)).to_radians().cos();
                             let sun_geo_lon = ((doy - 80.0) * 360.0 / DAYS_PER_YEAR).to_radians() - body_rotation;
+                        ui.horizontal(|ui| {
                             for (label, tip, lat_deg, lon_rad) in [
                                 ("Day", "View the sunlit side", decl, sun_geo_lon),
                                 ("Night", "View the dark side", -decl, sun_geo_lon + std::f64::consts::PI),
@@ -457,9 +573,6 @@ impl ViewerState {
             ui.indent("constellation_opts", |ui| {
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_orbits, "Show orbits"))
                     .on_hover_text("Draw orbital paths for each satellite");
-                if ui.button("Earth Observation…").on_hover_text("Sweep controls, coverage equations and point sampler").clicked() {
-                    self.earth_observation.open = true;
-                }
                 s.pushbroom.ui(ui, planets.iter().any(|planet| planet.celestial_body == crate::celestial::CelestialBody::Earth));
                 ui.add_enabled(on, egui::Checkbox::new(&mut s.show_coverage, "Show coverage"))
                     .on_hover_text("Display ground coverage cones");
@@ -980,54 +1093,73 @@ impl ViewerState {
                 });
             });
         }
-
-        ui.separator();
-        ui.label(egui::RichText::new("Rendering").strong());
-        ui.checkbox(&mut self.dark_mode, "Dark mode")
-            .on_hover_text("Use dark background theme");
-        ui.horizontal(|ui| {
-            ui.label("Texture:");
-            egui::ComboBox::from_id_salt("tex_res")
-                .selected_text(self.texture_resolution.label())
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.texture_resolution,
-                        TextureResolution::R512,
-                        "512",
-                    );
-                    ui.selectable_value(
-                        &mut self.texture_resolution,
-                        TextureResolution::R1024,
-                        "1K",
-                    );
-                    ui.selectable_value(
-                        &mut self.texture_resolution,
-                        TextureResolution::R2048,
-                        "2K",
-                    );
-                    ui.selectable_value(
-                        &mut self.texture_resolution,
-                        TextureResolution::R4096,
-                        "4K",
-                    );
-                    #[cfg(not(target_arch = "wasm32"))]
-                    ui.selectable_value(
-                        &mut self.texture_resolution,
-                        TextureResolution::R8192,
-                        "8K",
-                    );
-                    #[cfg(not(target_arch = "wasm32"))]
-                    ui.selectable_value(
-                        &mut self.texture_resolution,
-                        TextureResolution::R21504,
-                        "21K",
-                    );
-                });
-        });
-        ui.checkbox(&mut self.use_gpu_rendering, "GPU rendering")
-            .on_hover_text("Use GPU shaders for planet rendering");
-        #[cfg(not(target_arch = "wasm32"))]
-        ui.checkbox(&mut self.tile_overlay.enabled, "Satellite tiles (Esri)")
-            .on_hover_text("Overlay Esri satellite imagery tiles");
     }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "settings_tests.rs"]
+mod tests;
+
+fn toolbar_icon(
+    ui: &mut egui::Ui,
+    icon: egui::ImageSource<'_>,
+    tooltip: &str,
+    selected: bool,
+) -> egui::Response {
+    ui.add(
+        egui::Button::image(
+            egui::Image::new(icon)
+                .fit_to_exact_size(egui::vec2(14.0, 14.0))
+                .tint(ui.visuals().text_color()),
+        )
+        .selected(selected)
+        .min_size(egui::Vec2::splat(ui.spacing().interact_size.y)),
+    )
+    .on_hover_text(tooltip)
+}
+
+fn projection_ui(ui: &mut egui::Ui, projection: &mut crate::projection::ProjectionKind) {
+    use crate::projection::ProjectionKind::*;
+    ui.horizontal(|ui| {
+        ui.label("Projection:");
+        egui::ComboBox::from_id_salt("proj_kind")
+            .selected_text(projection.label())
+            .show_ui(ui, |ui| {
+                for choice in [
+                    Orthographic,
+                    Equirectangular,
+                    Mercator,
+                    Mollweide,
+                    Sinusoidal,
+                    AzimuthalEquidistant,
+                    Hammer,
+                    HEALPix,
+                    Cassini,
+                    TransverseMercator,
+                    LambertAzimuthalEqualArea,
+                    GallPeters,
+                    PeirceQuincuncial,
+                ] {
+                    ui.selectable_value(projection, choice, choice.label());
+                }
+            });
+    });
+}
+
+fn texture_resolution_ui(ui: &mut egui::Ui, resolution: &mut TextureResolution) {
+    ui.horizontal(|ui| {
+        ui.label("Texture:");
+        egui::ComboBox::from_id_salt("tex_res")
+            .selected_text(resolution.label())
+            .show_ui(ui, |ui| {
+                ui.selectable_value(resolution, TextureResolution::R512, "512");
+                ui.selectable_value(resolution, TextureResolution::R1024, "1K");
+                ui.selectable_value(resolution, TextureResolution::R2048, "2K");
+                ui.selectable_value(resolution, TextureResolution::R4096, "4K");
+                #[cfg(not(target_arch = "wasm32"))]
+                ui.selectable_value(resolution, TextureResolution::R8192, "8K");
+                #[cfg(not(target_arch = "wasm32"))]
+                ui.selectable_value(resolution, TextureResolution::R21504, "21K");
+            });
+    });
 }

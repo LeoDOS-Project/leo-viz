@@ -43,6 +43,25 @@ impl Trace {
         self.record_for(self.step.load(Ordering::Relaxed), kind, data);
     }
 
+    pub fn pushbroom_preview(&self) -> Option<(egui::Vec2, f32)> {
+        if !std::env::var("LEO_VIZ_PUSHBROOM_DIAGNOSTICS").is_ok_and(|value| value == "1") {
+            return None;
+        }
+        let step = self.step.load(Ordering::Relaxed);
+        Some((
+            if step == 3 {
+                egui::vec2(300.0, 380.0)
+            } else {
+                egui::vec2(700.0, 700.0)
+            },
+            match step {
+                1 => 2.0,
+                2 | 3 => 4.0,
+                _ => 1.0,
+            },
+        ))
+    }
+
     fn record_for(&self, step: usize, kind: &'static str, data: Value) {
         self.events.lock().unwrap().push(Event {
             elapsed_ms: self.started.elapsed().as_secs_f64() * 1000.0,
@@ -205,6 +224,7 @@ impl Replay {
         let projections =
             std::env::var("LEO_VIZ_TILE_DIAGNOSTICS_PROJECTIONS").is_ok_and(|value| value == "1");
         let aois = std::env::var("LEO_VIZ_TILE_DIAGNOSTICS_AOIS").is_ok_and(|value| value == "1");
+        let search = std::env::var("LEO_VIZ_SEARCH_DIAGNOSTICS").is_ok_and(|value| value == "1");
         if projections {
             use crate::projection::ProjectionKind::*;
             steps = [
@@ -231,6 +251,21 @@ impl Replay {
             })
             .collect();
         }
+        if search {
+            steps.truncate(3);
+        }
+        if pushbroom {
+            steps.truncate(5);
+            for (step, label) in steps.iter_mut().zip([
+                "preview_large",
+                "preview_zoom_2x",
+                "preview_zoom_4x",
+                "preview_small",
+                "preview_fit",
+            ]) {
+                step.label = label;
+            }
+        }
         Some(Self {
             trace: Trace::new(),
             steps,
@@ -239,7 +274,9 @@ impl Replay {
             quiet_since: None,
             screenshot_requested: None,
             results: Vec::new(),
-            report: if aois {
+            report: if search {
+                "target/search-diagnostics.json"
+            } else if aois {
                 "target/aoi-projections-diagnostics.json"
             } else if projections {
                 "target/esri-projections-diagnostics.json"
@@ -263,6 +300,20 @@ impl Replay {
         ctx.request_repaint();
         // Let the panels establish the viewport before selecting the first tiles.
         if self.warmup_frames < 3 {
+            if self.warmup_frames == 0
+                && std::env::var("LEO_VIZ_SEARCH_DIAGNOSTICS").is_ok_and(|value| value == "1")
+            {
+                let tab = &mut viewer.tabs[0];
+                let mut second = tab.planets[0].clone();
+                second.name = "Earth map".into();
+                second.projection_override = Some(crate::projection::ProjectionKind::Mercator);
+                tab.planets.push(second);
+                crate::location_search::prepare_diagnostic(
+                    &mut tab.planets[0].location_search,
+                    ctx,
+                );
+                tab.planets[1].location_search.open = true;
+            }
             if self.warmup_frames == 0 && self.aois {
                 viewer.aoi_generator.load_default_jobs(ctx);
                 viewer.tabs[0].planets[0]
@@ -315,6 +366,47 @@ impl Replay {
                 }];
                 tab.settings.pushbroom.enabled = true;
                 tab.settings.pushbroom.show_images = true;
+                if std::env::var("LEO_VIZ_PUSHBROOM_AOI_DIAGNOSTICS")
+                    .is_ok_and(|value| value == "1")
+                {
+                    tab.planets[0].areas_of_interest = (0..40)
+                        .map(|i| crate::config::AreaOfInterest {
+                            name: format!("Preview area {i}"),
+                            lat: 0.0,
+                            lon: 25.5 + i as f64 * 0.2,
+                            radius_km: 4.0,
+                            color: egui::Color32::from_rgb(255, 80, 90),
+                            ground_station_idx: None,
+                            job_mode: crate::config::AoiJobMode::Route,
+                            job_n: 3,
+                            reducer_placement:
+                                crate::config::SpaceCompReducerPlacement::NearMappers,
+                            show_spacecomp_flow: false,
+                            selected: false,
+                        })
+                        .collect();
+                    let polygons: Vec<_> = (0..40)
+                        .map(|i| {
+                            let x = 25.4 + i as f64 * 0.2;
+                            vec![vec![
+                                [x, -0.05],
+                                [x + 0.08, -0.05],
+                                [x + 0.08, 0.05],
+                                [x, 0.05],
+                                [x, -0.05],
+                            ]]
+                        })
+                        .collect();
+                    viewer.aoi_generator.preview = Some(Arc::new(
+                        crate::aoi::preview::Preview::from_geojson(
+                            json!({"type":"MultiPolygon","coordinates":polygons}),
+                            [29.4, 0.0],
+                            [70, 230, 240],
+                        )
+                        .unwrap(),
+                    ));
+                    viewer.aoi_generator.visible = true;
+                }
                 self.pushbroom_started = Some(Instant::now());
             }
             tab.settings.time = self
@@ -328,6 +420,23 @@ impl Replay {
             return;
         }
         let step = self.steps[self.index];
+        if self.index == 2
+            && std::env::var("LEO_VIZ_SEARCH_DIAGNOSTICS").is_ok_and(|value| value == "1")
+        {
+            viewer.show_info = true;
+        }
+        if self.index == 1
+            && std::env::var("LEO_VIZ_SEARCH_DIAGNOSTICS").is_ok_and(|value| value == "1")
+        {
+            viewer.dark_mode = false;
+            viewer.earth_observation.open = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(900.0, 650.0)));
+            if let Some(place) = viewer.tabs[0].planets[0].location_search.diagnostic_area() {
+                for planet in &mut viewer.tabs[0].planets {
+                    planet.location_search.select(place.clone());
+                }
+            }
+        }
         if let Some(projection) = step.projection {
             viewer.tabs[0].settings.planet_projection = projection;
             viewer.tabs[0].planets[0].projection_override = Some(projection);
@@ -377,6 +486,38 @@ impl Replay {
                 })
             });
             if let Some(image) = screenshot {
+                if self.pushbroom {
+                    let events = self.trace.events.lock().unwrap();
+                    if let Some(bounds) = events
+                        .iter()
+                        .rev()
+                        .find(|event| event.kind == "pushbroom_frame")
+                        .and_then(|event| event.data["image_bounds"].as_array())
+                        .filter(|bounds| bounds.len() == 4)
+                    {
+                        let bounds: Vec<_> = bounds
+                            .iter()
+                            .map(|v| v.as_f64().unwrap_or(0.0).max(0.0) as usize)
+                            .collect();
+                        let (left, top, right, bottom) = (
+                            bounds[0].min(image.size[0]),
+                            bounds[1].min(image.size[1]),
+                            bounds[2].min(image.size[0]),
+                            bounds[3].min(image.size[1]),
+                        );
+                        let total = right.saturating_sub(left) * bottom.saturating_sub(top);
+                        let visible = (top..bottom)
+                            .flat_map(|y| (left..right).map(move |x| (x, y)))
+                            .filter(|&(x, y)| {
+                                let p = image[(x, y)];
+                                u32::from(p.r()) + u32::from(p.g()) + u32::from(p.b()) > 24
+                            })
+                            .count();
+                        self.results.last_mut().unwrap()["pushbroom_pixels"] = json!({
+                            "total": total, "visible_fraction": visible as f64 / total.max(1) as f64,
+                        });
+                    }
+                }
                 let path = format!(
                     "{}-{:02}.png",
                     self.report.with_extension("").display(),
@@ -439,13 +580,42 @@ impl Replay {
                         .projection
                         .is_none_or(|projection| preview.projected_geometry_ready(projection))
                 });
+        let search = std::env::var("LEO_VIZ_SEARCH_DIAGNOSTICS").is_ok_and(|value| value == "1");
+        let search_ready = !search
+            || if self.index == 0 {
+                viewer.tabs[0].planets[0]
+                    .location_search
+                    .diagnostic_area()
+                    .is_some()
+            } else {
+                let tab = &viewer.tabs[0];
+                tab.planets.iter().all(|planet| {
+                    planet.location_search.diagnostic_boundary_ready(
+                        planet
+                            .projection_override
+                            .unwrap_or(tab.settings.planet_projection),
+                    )
+                })
+            };
+        let preview_ready = !self.pushbroom
+            || self
+                .trace
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .rev()
+                .find(|event| event.kind == "pushbroom_frame" && event.step == self.index)
+                .is_some_and(|event| event.data["ready"] == true);
         let quiet = aois_ready
+            && search_ready
+            && preview_ready
             && self.trace.outstanding.load(Ordering::Relaxed) == 0
             && !overlay.dirty
             && !fading
             && !overlay.needed_tiles.is_empty()
             && overlay.detail_texture.is_some();
-        if self.pushbroom && quiet {
+        if self.pushbroom && preview_ready && started.elapsed() >= Duration::from_secs(2) {
             self.pushbroom_hold
                 .get_or_insert(viewer.tabs[0].settings.time);
         }
@@ -465,6 +635,8 @@ impl Replay {
                 "source_levels": source_levels,
                 "covered_tiles": source_levels.values().sum::<usize>(),
                 "view_size": [viewer.view_width, viewer.view_height],
+                "search": search.then(|| viewer.tabs[0].planets.iter()
+                    .map(|planet| planet.location_search.diagnostic_state()).collect::<Vec<_>>()),
             }));
             self.screenshot_requested = Some(Instant::now());
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(

@@ -147,7 +147,7 @@ fn unit([lon, lat]: [f64; 2]) -> Vector3<f64> {
     Vector3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin())
 }
 
-fn ring(points: Vec<[f64; 2]>) -> Result<Vec<Vector3<f64>>, String> {
+fn validate_ring(points: &[[f64; 2]]) -> Result<(), String> {
     if points.len() < 4
         || points.first() != points.last()
         || points.iter().any(|p| {
@@ -156,18 +156,24 @@ fn ring(points: Vec<[f64; 2]>) -> Result<Vec<Vector3<f64>>, String> {
     {
         return Err("Invalid AOI boundary returned by generator".into());
     }
+    Ok(())
+}
+
+fn ring(points: Vec<[f64; 2]>) -> Result<Vec<Vector3<f64>>, String> {
+    validate_ring(&points)?;
     let mut result = Vec::new();
     for edge in points.windows(2) {
         let a = edge[0];
         let b = edge[1];
+        let longitude_delta = (b[0] - a[0] + 180.0).rem_euclid(360.0) - 180.0;
         // GeoJSON is already split at the dateline. Interpolate lon/lat along
         // parallels/meridians, not a great circle across a rectangular AOI.
-        let steps = ((b[0] - a[0]).abs().max((b[1] - a[1]).abs()) / 0.5)
+        let steps = (longitude_delta.abs().max((b[1] - a[1]).abs()) / 0.5)
             .ceil()
             .max(1.0) as usize;
         for i in 0..steps {
             let t = i as f64 / steps as f64;
-            result.push(unit([a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]));
+            result.push(unit([a[0] + t * longitude_delta, a[1] + t * (b[1] - a[1])]));
         }
     }
     result.push(result[0]);
@@ -175,6 +181,132 @@ fn ring(points: Vec<[f64; 2]>) -> Result<Vec<Vector3<f64>>, String> {
 }
 
 impl Preview {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn from_areas(
+        areas: &[crate::config::AreaOfInterest],
+        radius: f64,
+    ) -> Result<Self, String> {
+        let mut preview = Self::empty(areas.len(), 0);
+        for (index, area) in areas.iter().enumerate() {
+            let lat = area.lat.to_radians();
+            let lon = area.lon.to_radians();
+            let angle = area.radius_km / radius;
+            let mut points: Vec<_> = (0..64)
+                .map(|i| {
+                    let bearing = std::f64::consts::TAU * i as f64 / 64.0;
+                    let y = (lat.sin() * angle.cos() + lat.cos() * angle.sin() * bearing.cos())
+                        .clamp(-1.0, 1.0)
+                        .asin();
+                    let x = lon
+                        + (angle.sin() * bearing.sin()).atan2(
+                            lat.cos() * angle.cos() - lat.sin() * angle.sin() * bearing.cos(),
+                        );
+                    [
+                        (x.to_degrees() + 180.0).rem_euclid(360.0) - 180.0,
+                        y.to_degrees(),
+                    ]
+                })
+                .collect();
+            points.push(points[0]);
+            preview.push_record(Record {
+                id: format!("manual-{index}"),
+                anchor_lon: area.lon,
+                anchor_lat: area.lat,
+                area_km2: std::f64::consts::PI * area.radius_km.powi(2),
+                geometry: Geometry::Polygon(vec![points]),
+                source_kind: "manual".into(),
+                path_truncated: false,
+                path_length_km: None,
+            })?;
+            preview.boundaries.last_mut().unwrap().color =
+                [area.color.r(), area.color.g(), area.color.b()];
+        }
+        Ok(preview.finish())
+    }
+
+    pub fn from_geojson(
+        geometry: serde_json::Value,
+        anchor: [f64; 2],
+        color: [u8; 3],
+    ) -> Result<Self, String> {
+        use geo::GeodesicArea;
+        let geometry: Geometry = serde_json::from_value(geometry)
+            .map_err(|e| format!("Invalid mapped boundary: {e}"))?;
+        let polygons = match &geometry {
+            Geometry::Polygon(polygon) => std::slice::from_ref(polygon),
+            Geometry::MultiPolygon(polygons) => polygons.as_slice(),
+        };
+        let count: usize = polygons.iter().flatten().map(Vec::len).sum();
+        if count > 250_000 || polygons.is_empty() || polygons.iter().any(Vec::is_empty) {
+            return Err("Mapped boundary is empty or too detailed.".into());
+        }
+        for points in polygons.iter().flatten() {
+            validate_ring(points)?;
+        }
+        let dense_count: usize = polygons
+            .iter()
+            .flatten()
+            .flat_map(|points| points.windows(2))
+            .map(|edge| {
+                let longitude = (edge[1][0] - edge[0][0] + 180.0).rem_euclid(360.0) - 180.0;
+                (longitude.abs().max((edge[1][1] - edge[0][1]).abs()) / 0.5)
+                    .ceil()
+                    .max(1.0) as usize
+            })
+            .sum();
+        if dense_count > 1_000_000 {
+            return Err("Mapped boundary is too detailed.".into());
+        }
+        let mut shapes = Vec::with_capacity(polygons.len());
+        for polygon in polygons {
+            let line = |points: &Vec<[f64; 2]>| {
+                geo::LineString::new(points.iter().map(|&[x, y]| geo::Coord { x, y }).collect())
+            };
+            shapes.push(geo::Polygon::new(
+                line(&polygon[0]),
+                polygon[1..].iter().map(line).collect(),
+            ));
+        }
+        let area_km2 = shapes
+            .iter()
+            .map(|polygon| polygon.geodesic_area_signed().abs())
+            .sum::<f64>()
+            / 1e6;
+        let mut preview = Self::empty(1, 0);
+        preview.push_record(Record {
+            id: "mapped-search-boundary".into(),
+            anchor_lon: anchor[0],
+            anchor_lat: anchor[1],
+            area_km2,
+            geometry,
+            source_kind: "osm".into(),
+            path_truncated: false,
+            path_length_km: None,
+        })?;
+        preview.boundaries[0].color = color;
+        Ok(preview.finish())
+    }
+
+    pub fn geographic_bounds(&self) -> Option<[f64; 4]> {
+        let mut bounds = [
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+        ];
+        for [lon, lat] in self
+            .boundaries
+            .iter()
+            .flat_map(|b| b.polygons.iter().flatten().flatten())
+        {
+            bounds[0] = bounds[0].min(*lon);
+            bounds[1] = bounds[1].max(*lat);
+            bounds[2] = bounds[2].max(*lon);
+            bounds[3] = bounds[3].min(*lat);
+        }
+        bounds.iter().all(|v| v.is_finite()).then_some(bounds)
+    }
+
     pub fn from_json(bytes: &[u8]) -> Result<Self, String> {
         let doc: Document =
             serde_json::from_slice(bytes).map_err(|e| format!("Invalid AOI response: {e}"))?;
@@ -449,7 +581,7 @@ impl Preview {
             .any(|(id, _)| *id == projection.shader_id())
     }
 
-    fn projected_geometry_for_view(
+    pub(super) fn projected_geometry_for_view(
         self: &Arc<Self>,
         projection: crate::projection::ProjectionKind,
         _ctx: &egui::Context,
@@ -503,6 +635,26 @@ pub(crate) struct Hit {
 }
 
 fn contains_ring(points: &[[f64; 2]], x: f64, y: f64) -> bool {
+    if points
+        .windows(2)
+        .any(|edge| (edge[1][0] - edge[0][0]).abs() > 180.0)
+    {
+        let Some(first) = points.first() else {
+            return false;
+        };
+        let x = x + ((first[0] - x) / 360.0).round() * 360.0;
+        let mut ax = first[0];
+        let mut inside = false;
+        for edge in points.windows(2) {
+            let (ay, by) = (edge[0][1], edge[1][1]);
+            let bx = ax + (edge[1][0] - edge[0][0] + 180.0).rem_euclid(360.0) - 180.0;
+            if (ay > y) != (by > y) && x < ax + (y - ay) * (bx - ax) / (by - ay) {
+                inside = !inside;
+            }
+            ax = bx;
+        }
+        return inside;
+    }
     let mut inside = false;
     for edge in points.windows(2) {
         let ([ax, ay], [bx, by]) = (edge[0], edge[1]);
@@ -1040,6 +1192,44 @@ impl PlotItem for Overlay {
 mod tests {
     use super::*;
     use egui::Pos2;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn manual_areas_keep_their_spherical_boundaries_and_colors() {
+        use crate::config::{AoiJobMode, AreaOfInterest, SpaceCompReducerPlacement};
+        for (lat, lon) in [(0.0, 0.0), (60.0, 179.99), (-70.0, -179.99)] {
+            let area = AreaOfInterest {
+                name: "Test".into(),
+                lat,
+                lon,
+                radius_km: 10.0,
+                color: Color32::from_rgb(255, 70, 90),
+                ground_station_idx: None,
+                job_mode: AoiJobMode::Route,
+                job_n: 3,
+                reducer_placement: SpaceCompReducerPlacement::NearMappers,
+                show_spacecomp_flow: false,
+                selected: false,
+            };
+            let preview = Preview::from_areas(&[area], 6371.0).unwrap();
+            assert_eq!(preview.count, 1);
+            let boundary = &preview.boundaries[0];
+            assert_eq!(boundary.color, [255, 70, 90]);
+            for point in &boundary.rings[0].levels[0].1 {
+                let distance = boundary
+                    .anchor
+                    .cross(point)
+                    .norm()
+                    .atan2(boundary.anchor.dot(point))
+                    * 6371.0;
+                assert!((distance - 10.0).abs() < 1e-7);
+            }
+            assert!(!preview
+                .projected_geometry(crate::projection::ProjectionKind::Mercator)
+                .segments
+                .is_empty());
+        }
+    }
     #[test]
     fn gpu_geometry_is_cached_and_keeps_the_cpu_fallback_and_picking() {
         let preview = Arc::new(Preview::from_json(br#"{"schema_version":1,"config":{"seed":42,"count":1},"aois":[{"area_km2":100,"anchor_lon":-90,"anchor_lat":0,"geometry":{"type":"Polygon","coordinates":[[[-91,-1],[-89,-1],[-89,1],[-91,1],[-91,-1]]]}}]}"#).unwrap());

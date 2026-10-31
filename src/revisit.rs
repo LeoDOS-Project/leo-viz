@@ -93,6 +93,9 @@ pub(crate) fn fingerprint(p: &PlanetConfig, swath: f64, epoch: DateTime<Utc>) ->
             c.raan_offset,
             c.eccentricity,
             c.arg_periapsis,
+            c.orbital_phase[0],
+            c.orbital_phase[1],
+            c.orbital_phase[2],
         ] {
             n.to_bits().hash(&mut h);
         }

@@ -1,0 +1,7681 @@
+{
+  "checked": "2026-10-30",
+  "source": "https://space.oscar.wmo.int/satellites",
+  "satellites": [
+    {
+      "id": 454,
+      "slug": "ace",
+      "name": "ACE",
+      "full_name": "Advanced Composition Explorer",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "25 Aug 1997",
+      "orbit": "Lagrange libration point 1",
+      "altitude_km": "1.5e+06",
+      "payload": [
+        "CRIS (ACE)",
+        "EPAM",
+        "MAG (ACE)",
+        "SIS (degraded)",
+        "SWEPAM (degraded)",
+        "SWICS",
+        "SWIMS",
+        "ULEIS"
+      ],
+      "launch_mass": "785 kg",
+      "dry_mass": "596 kg",
+      "power": "443 W",
+      "updated": "2024-05-02"
+    },
+    {
+      "id": 469,
+      "slug": "aditya_1",
+      "name": "Aditya-1",
+      "full_name": "Aditya-1",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "02 Sep 2023",
+      "orbit": "Lagrange libration point 1",
+      "altitude_km": "1500000",
+      "payload": [
+        "ASPEX",
+        "HEL1OS",
+        "Magnetometer (Aditya)",
+        "PAPA",
+        "SUIT",
+        "SoLEXS",
+        "VELC"
+      ],
+      "launch_mass": "300 kg",
+      "dry_mass": null,
+      "power": "400 W",
+      "updated": "2025-04-07"
+    },
+    {
+      "id": 6,
+      "slug": "alos_2",
+      "name": "ALOS-2",
+      "full_name": "Advanced Land Observing Satellite  - 2",
+      "agency": "JAXA",
+      "status": "Operational",
+      "launched": "24 May 2014",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "640",
+      "payload": [
+        "CIRC",
+        "PALSAR-2"
+      ],
+      "launch_mass": "2000 kg",
+      "dry_mass": null,
+      "power": "5200 W",
+      "updated": "2026-10-12"
+    },
+    {
+      "id": 751,
+      "slug": "alos_4_daichi_4",
+      "name": "ALOS-4 (DAICHI-4)",
+      "full_name": "Advanced Land Observing Satellite  - 4",
+      "agency": "JAXA",
+      "status": "Operational",
+      "launched": "01 Jul 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "628",
+      "payload": [
+        "AIS",
+        "PALSAR-3"
+      ],
+      "launch_mass": "3000 kg",
+      "dry_mass": null,
+      "power": "5200 W",
+      "updated": "2026-06-08"
+    },
+    {
+      "id": 708,
+      "slug": "alsat_1b",
+      "name": "AlSat-1B",
+      "full_name": "Algeria Satellite - 1B",
+      "agency": "ASAL",
+      "status": "Operational",
+      "launched": "26 Sep 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "690",
+      "payload": [
+        "SLIM6"
+      ],
+      "launch_mass": "90 kg",
+      "dry_mass": "88 kg",
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 10,
+      "slug": "alsat_2b",
+      "name": "AlSat-2B",
+      "full_name": "Algeria Satellite - 2B",
+      "agency": "ASAL",
+      "status": "Operational",
+      "launched": "26 Sep 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "680",
+      "payload": [
+        "NAOMI (AlSat)"
+      ],
+      "launch_mass": "116 kg",
+      "dry_mass": "111 kg",
+      "power": "180 W",
+      "updated": "2022-10-24"
+    },
+    {
+      "id": 11,
+      "slug": "amazonia_1",
+      "name": "Amazônia-1",
+      "full_name": "Amazônia-1",
+      "agency": "INPE,AEB",
+      "status": "Operational",
+      "launched": "28 Feb 2021",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "752",
+      "payload": [
+        "AWFI"
+      ],
+      "launch_mass": "500 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2021-07-13"
+    },
+    {
+      "id": 79,
+      "slug": "aqua",
+      "name": "Aqua",
+      "full_name": "Earth Observation System - Aqua",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "04 May 2002",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "705",
+      "payload": [
+        "AIRS",
+        "AMSU-A (degraded)",
+        "CERES (degraded)",
+        "MODIS"
+      ],
+      "launch_mass": "2934 kg",
+      "dry_mass": "2832 kg",
+      "power": "4860 W",
+      "updated": "2026-08-24"
+    },
+    {
+      "id": 715,
+      "slug": "arase_erg",
+      "name": "Arase (ERG)",
+      "full_name": "Exploration of energization and Radiation in Geospace",
+      "agency": "JAXA",
+      "status": "Operational",
+      "launched": "20 Dec 2016",
+      "orbit": "Cross-magnetosphere orbit",
+      "altitude_km": "3000",
+      "payload": [
+        "HEP-e",
+        "LEP-e",
+        "LEP-i",
+        "MEP-e",
+        "MEP-i",
+        "MGF (ERG)",
+        "PWE",
+        "XEP-e"
+      ],
+      "launch_mass": "350 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2023-04-27"
+    },
+    {
+      "id": 465,
+      "slug": "arctica_m_n1",
+      "name": "Arctica-M N1",
+      "full_name": "Arctica-M N1",
+      "agency": "RosHydroMet,Roscosmos",
+      "status": "Operational",
+      "launched": "28 Feb 2021",
+      "orbit": "Molniya orbit",
+      "altitude_km": null,
+      "payload": [
+        "DCS/A",
+        "GGAK-E/FM-E",
+        "GGAK-E/GALS-E (Arctica)",
+        "GGAK-E/SKIF-6 (Arctica)",
+        "MSU-GS/A"
+      ],
+      "launch_mass": "2000 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-01-23"
+    },
+    {
+      "id": 466,
+      "slug": "arctica_m_n2",
+      "name": "Arctica-M N2",
+      "full_name": "Arctica-M N2",
+      "agency": "RosHydroMet,Roscosmos",
+      "status": "Operational",
+      "launched": "16 Dec 2023",
+      "orbit": "Molniya orbit",
+      "altitude_km": null,
+      "payload": [
+        "DCS/A",
+        "GGAK-E/FM-E",
+        "GGAK-E/GALS-E (Arctica)",
+        "GGAK-E/SKIF-6 (Arctica)",
+        "MSU-GS/A"
+      ],
+      "launch_mass": "2100 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-01-23"
+    },
+    {
+      "id": 965,
+      "slug": "argos_4_gazelle",
+      "name": "Argos-4 (GAzelle)",
+      "full_name": "Argos-4 also referred to as GAzelle",
+      "agency": "NOAA,CNES",
+      "status": "Operational",
+      "launched": "07 Oct 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "750",
+      "payload": [
+        "Argos-4"
+      ],
+      "launch_mass": "118 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2024-11-11"
+    },
+    {
+      "id": 576,
+      "slug": "artemis_p1",
+      "name": "ARTEMIS-P1",
+      "full_name": "Acceleration, Reconnection, Turbulence, and Electrodynamics of the Moon's Interaction with the Sun - P1",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "15 Jul 2011",
+      "orbit": "Lunar orbit",
+      "altitude_km": null,
+      "payload": [
+        "EFI (THEMIS) (degraded)",
+        "ESA",
+        "FGM (THEMIS)",
+        "SCM",
+        "SST"
+      ],
+      "launch_mass": "126 kg",
+      "dry_mass": "77 kg",
+      "power": "41 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 814,
+      "slug": "artemis_p2",
+      "name": "ARTEMIS-P2",
+      "full_name": "Acceleration, Reconnection, Turbulence, and Electrodynamics of the Moon's Interaction with the Sun - P2",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "15 Jul 2011",
+      "orbit": "Lunar orbit",
+      "altitude_km": null,
+      "payload": [
+        "EFI (THEMIS)",
+        "ESA",
+        "FGM (THEMIS)",
+        "SCM",
+        "SST"
+      ],
+      "launch_mass": "126 kg",
+      "dry_mass": "77 kg",
+      "power": "41 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 467,
+      "slug": "asnaro_1",
+      "name": "ASNARO-1",
+      "full_name": "Advanced Satellite with new system ARchitecure for Observation - 1",
+      "agency": "USEF,METI,NEC",
+      "status": "Operational",
+      "launched": "06 Nov 2014",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "504",
+      "payload": [
+        "OPS (ASNARO)"
+      ],
+      "launch_mass": "495 kg",
+      "dry_mass": "450 kg",
+      "power": "1300 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 468,
+      "slug": "asnaro_2",
+      "name": "ASNARO-2",
+      "full_name": "Advanced Satellite with new system ARchitecure for Observation - 2",
+      "agency": "USEF,METI,NEC",
+      "status": "Operational",
+      "launched": "17 Jan 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "XSAR"
+      ],
+      "launch_mass": "570 kg",
+      "dry_mass": "525 kg",
+      "power": "1300 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 972,
+      "slug": "aso_s_kuafu_1",
+      "name": "ASO-S (Kuafu-1)",
+      "full_name": "Advanced Space-based Solar Observatory",
+      "agency": "CAS",
+      "status": "Operational",
+      "launched": "08 Oct 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "744",
+      "payload": [
+        "FMG",
+        "HXI",
+        "LST"
+      ],
+      "launch_mass": "888 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2023-05-22"
+    },
+    {
+      "id": 80,
+      "slug": "aura",
+      "name": "Aura",
+      "full_name": "Earth Observation System - Aura",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "15 Jul 2004",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "705",
+      "payload": [
+        "MLS  (EOS-Aura)",
+        "OMI "
+      ],
+      "launch_mass": "2967 kg",
+      "dry_mass": null,
+      "power": "4600 W",
+      "updated": "2026-02-27"
+    },
+    {
+      "id": 1078,
+      "slug": "aurora",
+      "name": "Aurora",
+      "full_name": "Aurora",
+      "agency": "OSK",
+      "status": "Operational",
+      "launched": "30 Jun 2021",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "454",
+      "payload": [],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2024-09-23"
+    },
+    {
+      "id": 934,
+      "slug": "aws_pfm",
+      "name": "AWS PFM",
+      "full_name": "Arctic Weather Satellite Proto-Flight Model",
+      "agency": "ESA",
+      "status": "Operational",
+      "launched": "16 Aug 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "600",
+      "payload": [
+        "MWR (AWS)"
+      ],
+      "launch_mass": "135 kg",
+      "dry_mass": "125 kg",
+      "power": "220 W",
+      "updated": "2026-08-24"
+    },
+    {
+      "id": 508,
+      "slug": "biomass",
+      "name": "BIOMASS",
+      "full_name": "BIOMASS",
+      "agency": "ESA",
+      "status": "Operational",
+      "launched": "29 Apr 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "660",
+      "payload": [
+        "SAR-P"
+      ],
+      "launch_mass": "1200 kg",
+      "dry_mass": "1140 kg",
+      "power": "1500 W",
+      "updated": "2026-07-20"
+    },
+    {
+      "id": 776,
+      "slug": "blacksky_1",
+      "name": "BlackSky-1",
+      "full_name": "BlackSky 1",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "29 Nov 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SpaceView 24"
+      ],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 903,
+      "slug": "blacksky_10",
+      "name": "BlackSky-10",
+      "full_name": "BlackSky-10",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "18 Nov 2021",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SpaceView 24"
+      ],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 904,
+      "slug": "blacksky_11",
+      "name": "BlackSky-11",
+      "full_name": "BlackSky-11",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "18 Nov 2021",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SpaceView 24"
+      ],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 905,
+      "slug": "blacksky_12",
+      "name": "BlackSky-12",
+      "full_name": "BlackSky-12",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "02 Dec 2021",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SpaceView 24"
+      ],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 906,
+      "slug": "blacksky_13",
+      "name": "BlackSky-13",
+      "full_name": "BlackSky-13",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "02 Dec 2021",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SpaceView 24"
+      ],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 907,
+      "slug": "blacksky_14",
+      "name": "BlackSky-14",
+      "full_name": "BlackSky-14",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "09 Dec 2021",
+      "orbit": "Drifting orbit",
+      "altitude_km": "430",
+      "payload": [
+        "SpaceView 24"
+      ],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 908,
+      "slug": "blacksky_15",
+      "name": "BlackSky-15",
+      "full_name": "BlackSky-15",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "09 Dec 2021",
+      "orbit": "Drifting orbit",
+      "altitude_km": "430",
+      "payload": [
+        "SpaceView 24"
+      ],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 925,
+      "slug": "blacksky_16",
+      "name": "BlackSky-16",
+      "full_name": "BlackSky-16",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "02 Apr 2022",
+      "orbit": "Drifting orbit",
+      "altitude_km": "430",
+      "payload": [],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 926,
+      "slug": "blacksky_17",
+      "name": "BlackSky-17",
+      "full_name": "BlackSky-17",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "02 Apr 2022",
+      "orbit": "Drifting orbit",
+      "altitude_km": "430",
+      "payload": [],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 990,
+      "slug": "blacksky_18",
+      "name": "BlackSky-18",
+      "full_name": "BlackSky-18",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "24 Mar 2023",
+      "orbit": "Drifting orbit",
+      "altitude_km": "450",
+      "payload": [
+        "SpaceView 24"
+      ],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2023-11-23"
+    },
+    {
+      "id": 991,
+      "slug": "blacksky_19",
+      "name": "BlackSky-19",
+      "full_name": "BlackSky-19",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "24 Mar 2023",
+      "orbit": "Drifting orbit",
+      "altitude_km": "450",
+      "payload": [
+        "SpaceView 24"
+      ],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2023-11-23"
+    },
+    {
+      "id": 777,
+      "slug": "blacksky_2",
+      "name": "BlackSky-2",
+      "full_name": "BlackSky 2",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "03 Dec 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SpaceView 24"
+      ],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 1112,
+      "slug": "blacksky_20_gen3_1",
+      "name": "BlackSky-20 (Gen3-1)",
+      "full_name": "BlackSky 3rd Generation 1",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "18 Feb 2025",
+      "orbit": "Drifting orbit",
+      "altitude_km": "470",
+      "payload": [
+        "Blacksky Imager"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2025-09-15"
+    },
+    {
+      "id": 1124,
+      "slug": "blacksky_21_gen3_2",
+      "name": "BlackSky-21 (Gen3-2)",
+      "full_name": "BlackSky-21",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "02 Jun 2025",
+      "orbit": "Drifting orbit",
+      "altitude_km": "450",
+      "payload": [],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2025-11-24"
+    },
+    {
+      "id": 1154,
+      "slug": "blacksky_22_gen3_3",
+      "name": "BlackSky-22 (Gen3-3)",
+      "full_name": "BlackSky-22",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "20 Nov 2025",
+      "orbit": "Drifting orbit",
+      "altitude_km": "450",
+      "payload": [],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-09-14"
+    },
+    {
+      "id": 1163,
+      "slug": "blacksky_23_gen3_4",
+      "name": "BlackSky-23 (Gen3-4)",
+      "full_name": "BlackSky-23",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "05 Mar 2026",
+      "orbit": "Drifting orbit",
+      "altitude_km": "450",
+      "payload": [],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-09-14"
+    },
+    {
+      "id": 785,
+      "slug": "blacksky_3",
+      "name": "BlackSky-3",
+      "full_name": "BlackSky-3",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "28 Jun 2019",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SpaceView 24"
+      ],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 788,
+      "slug": "blacksky_4",
+      "name": "BlackSky-4",
+      "full_name": "BlackSky-4",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "19 Aug 2019",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SpaceView 24"
+      ],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 797,
+      "slug": "blacksky_5",
+      "name": "BlackSky-5",
+      "full_name": "BlackSky-5",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "07 Aug 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SpaceView 24"
+      ],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 891,
+      "slug": "blacksky_6",
+      "name": "BlackSky-6",
+      "full_name": "BlackSky-6",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "07 Aug 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "490",
+      "payload": [
+        "SpaceView 24"
+      ],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 796,
+      "slug": "blacksky_7",
+      "name": "BlackSky-7",
+      "full_name": "BlackSky-7",
+      "agency": "BSG",
+      "status": "Operational",
+      "launched": "22 Mar 2021",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SpaceView 24"
+      ],
+      "launch_mass": "56 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 893,
+      "slug": "capella",
+      "name": "Capella",
+      "full_name": "Capella",
+      "agency": "Capella",
+      "status": "Operational",
+      "launched": "03 Dec 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "Capella SAR"
+      ],
+      "launch_mass": "112 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-10-22"
+    },
+    {
+      "id": 22,
+      "slug": "cartosat_2a",
+      "name": "CartoSat-2A",
+      "full_name": "CartoSat-2A",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "28 Apr 2008",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "635",
+      "payload": [
+        "PAN (CartoSat-2A/B)"
+      ],
+      "launch_mass": "690 kg",
+      "dry_mass": "626 kg",
+      "power": "900 W",
+      "updated": "2026-01-19"
+    },
+    {
+      "id": 23,
+      "slug": "cartosat_2b",
+      "name": "CartoSat-2B",
+      "full_name": "CartoSat-2B",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "12 Jul 2010",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "640",
+      "payload": [
+        "PAN (CartoSat-2A/B)"
+      ],
+      "launch_mass": "694 kg",
+      "dry_mass": "630 kg",
+      "power": "930 W",
+      "updated": "2026-01-19"
+    },
+    {
+      "id": 593,
+      "slug": "cartosat_2c",
+      "name": "CartoSat-2C",
+      "full_name": "CartoSat-2C",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "22 Jun 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "505",
+      "payload": [
+        "EvM",
+        "HRMX",
+        "PAN (CartoSat 2C/D"
+      ],
+      "launch_mass": "727 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 594,
+      "slug": "cartosat_2d",
+      "name": "CartoSat-2D",
+      "full_name": "CartoSat-2D",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "15 Feb 2017",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "515",
+      "payload": [
+        "EvM",
+        "HRMX",
+        "PAN (CartoSat 2C/D"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 660,
+      "slug": "cartosat_2e",
+      "name": "CartoSat-2E",
+      "full_name": "CartoSat-2E",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "23 Jun 2017",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "505",
+      "payload": [
+        "EvM",
+        "HRMX",
+        "PAN (CartoSat 2C/D"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 738,
+      "slug": "cartosat_2f",
+      "name": "CartoSat-2F",
+      "full_name": "CartoSat-2F",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "12 Jan 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "505",
+      "payload": [
+        "EvM",
+        "HRMX",
+        "PAN (CartoSat 2C/D"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 24,
+      "slug": "cartosat_3",
+      "name": "CartoSat-3",
+      "full_name": "CartoSat-3",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "27 Nov 2019",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "450",
+      "payload": [
+        "MX",
+        "PAN (CartoSat-3)"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-01-19"
+    },
+    {
+      "id": 812,
+      "slug": "cas_500_1",
+      "name": "CAS 500-1",
+      "full_name": "Compact Advanced Satellite 500-1",
+      "agency": "KARI",
+      "status": "Operational",
+      "launched": "22 Mar 2021",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "528",
+      "payload": [
+        "AEISS-HR"
+      ],
+      "launch_mass": "540 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-10-19"
+    },
+    {
+      "id": 29,
+      "slug": "cbers_4",
+      "name": "CBERS-4",
+      "full_name": "China-Brazil Earth Resources Satellite - 4 (ZY-1 FM4) ",
+      "agency": "CAST,AEB,CRESDA,INPE",
+      "status": "Operational",
+      "launched": "07 Dec 2014",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "778",
+      "payload": [
+        "DCS (CBERS)",
+        "IRMSS-2",
+        "MUXCAM",
+        "PANMUX",
+        "WFI-2"
+      ],
+      "launch_mass": "1980 kg",
+      "dry_mass": null,
+      "power": "2300 W",
+      "updated": "2026-01-19"
+    },
+    {
+      "id": 774,
+      "slug": "cbers_4b",
+      "name": "CBERS-4B",
+      "full_name": "China-Brazil Earth Resources Satellite - 4B (ZY-1 FM4B) ",
+      "agency": "CAST,AEB,CRESDA,INPE",
+      "status": "Operational",
+      "launched": "20 Dec 2019",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "778",
+      "payload": [
+        "DCS (CBERS)",
+        "IRMSS-2",
+        "MUXCAM",
+        "PANMUX",
+        "WFI-2"
+      ],
+      "launch_mass": "1980 kg",
+      "dry_mass": null,
+      "power": "2300 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 545,
+      "slug": "cfosat",
+      "name": "CFOSAT",
+      "full_name": "Chinese-French Oceanography Satellite",
+      "agency": "NSOAS,CNES",
+      "status": "Operational",
+      "launched": "29 Oct 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SWIM"
+      ],
+      "launch_mass": "650 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-08-24"
+    },
+    {
+      "id": 828,
+      "slug": "cicero",
+      "name": "CICERO",
+      "full_name": "Community Initiative for Continuing Earth Radio Occultation",
+      "agency": "GeoOptics",
+      "status": "Operational",
+      "launched": "23 Jun 2017",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "550",
+      "payload": [
+        "CION"
+      ],
+      "launch_mass": "10 kg",
+      "dry_mass": null,
+      "power": "21 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 950,
+      "slug": "cicero_2",
+      "name": "CICERO-2",
+      "full_name": "Community Initiative for Continuing Earth Radio Occultation",
+      "agency": "GeoOptics",
+      "status": "Operational",
+      "launched": "25 May 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": null,
+      "payload": [],
+      "launch_mass": null,
+      "dry_mass": "10 kg",
+      "power": null,
+      "updated": "2022-07-04"
+    },
+    {
+      "id": 450,
+      "slug": "cosmic_2",
+      "name": "COSMIC-2",
+      "full_name": "Constellation Observing System for Meteorology, Ionosphere & Climate - 2a",
+      "agency": "NSPO,NOAA,UCAR",
+      "status": "Operational",
+      "launched": "25 Jun 2019",
+      "orbit": "Drifting orbit",
+      "altitude_km": "520",
+      "payload": [
+        "RFB",
+        "TGRS (COSMIC-2)",
+        "VIDI"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-08-27"
+    },
+    {
+      "id": 39,
+      "slug": "cryosat_2",
+      "name": "CryoSat-2",
+      "full_name": "CryoSat-2",
+      "agency": "ESA",
+      "status": "Operational",
+      "launched": "08 Apr 2010",
+      "orbit": "Drifting orbit",
+      "altitude_km": "717",
+      "payload": [
+        "DORIS",
+        "LRR (ESA)",
+        "SIRAL"
+      ],
+      "launch_mass": "720 kg",
+      "dry_mass": "683 kg",
+      "power": "1700 W",
+      "updated": "2026-01-16"
+    },
+    {
+      "id": 40,
+      "slug": "csg_1",
+      "name": "CSG-1",
+      "full_name": "COSMO-SkyMed Second Generation - 1",
+      "agency": "ASI",
+      "status": "Operational",
+      "launched": "18 Dec 2019",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "619",
+      "payload": [
+        "CSG-SAR"
+      ],
+      "launch_mass": "2205 kg",
+      "dry_mass": "2050 kg",
+      "power": "19000 W",
+      "updated": "2022-03-01"
+    },
+    {
+      "id": 41,
+      "slug": "csg_2",
+      "name": "CSG-2",
+      "full_name": "COSMO-SkyMed Second Generation - 2",
+      "agency": "ASI",
+      "status": "Operational",
+      "launched": "31 Jan 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "619",
+      "payload": [
+        "CSG-SAR"
+      ],
+      "launch_mass": "2205 kg",
+      "dry_mass": "2050 kg",
+      "power": "19000 W",
+      "updated": "2022-09-26"
+    },
+    {
+      "id": 940,
+      "slug": "csg_3",
+      "name": "CSG-3",
+      "full_name": "COSMO-SkyMed Second Generation - 3",
+      "agency": "ASI",
+      "status": "Operational",
+      "launched": "03 Jan 2026",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "619",
+      "payload": [
+        "CSG-SAR"
+      ],
+      "launch_mass": "2205 kg",
+      "dry_mass": "2050 kg",
+      "power": "19000 W",
+      "updated": "2026-04-10"
+    },
+    {
+      "id": 42,
+      "slug": "csk_1",
+      "name": "CSK-1",
+      "full_name": "COSMO-SkyMed - 1",
+      "agency": "ASI",
+      "status": "Operational",
+      "launched": "08 Jun 2007",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "629.5",
+      "payload": [
+        "SAR-2000"
+      ],
+      "launch_mass": "1700 kg",
+      "dry_mass": null,
+      "power": "4000 W",
+      "updated": "2026-01-19"
+    },
+    {
+      "id": 43,
+      "slug": "csk_2",
+      "name": "CSK-2",
+      "full_name": "COSMO-SkyMed - 2",
+      "agency": "ASI",
+      "status": "Operational",
+      "launched": "09 Dec 2007",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "629.5",
+      "payload": [
+        "SAR-2000"
+      ],
+      "launch_mass": "1700 kg",
+      "dry_mass": null,
+      "power": "4000 W",
+      "updated": "2026-01-19"
+    },
+    {
+      "id": 44,
+      "slug": "csk_3",
+      "name": "CSK-3",
+      "full_name": "COSMO-SkyMed - 3",
+      "agency": "ASI",
+      "status": "Operational",
+      "launched": "25 Oct 2008",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "629.5",
+      "payload": [
+        "SAR-2000"
+      ],
+      "launch_mass": "1700 kg",
+      "dry_mass": null,
+      "power": "4000 W",
+      "updated": "2026-01-19"
+    },
+    {
+      "id": 45,
+      "slug": "csk_4",
+      "name": "CSK-4",
+      "full_name": "COSMO-SkyMed - 4",
+      "agency": "ASI",
+      "status": "Operational",
+      "launched": "06 Nov 2010",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "629.5",
+      "payload": [
+        "SAR-2000"
+      ],
+      "launch_mass": "1700 kg",
+      "dry_mass": null,
+      "power": "4000 W",
+      "updated": "2026-01-19"
+    },
+    {
+      "id": 547,
+      "slug": "cygnss_8_sats",
+      "name": "CYGNSS (8 sats)",
+      "full_name": "Cyclone Global Navigation Satellite System (8 sats)",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "15 Dec 2016",
+      "orbit": "Drifting orbit",
+      "altitude_km": "500",
+      "payload": [
+        "DDMI"
+      ],
+      "launch_mass": "25 kg",
+      "dry_mass": null,
+      "power": "40 W",
+      "updated": "2023-12-18"
+    },
+    {
+      "id": 629,
+      "slug": "deimos_2",
+      "name": "Deimos-2",
+      "full_name": "Deimos-2",
+      "agency": "Elecnor-Deimos",
+      "status": "Operational",
+      "launched": "19 Jun 2014",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "620",
+      "payload": [
+        "HiRAIS"
+      ],
+      "launch_mass": "300 kg",
+      "dry_mass": "297 kg",
+      "power": "450 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 636,
+      "slug": "diademe_1",
+      "name": "Diadéme-1",
+      "full_name": "Diadéme-1",
+      "agency": "CNES",
+      "status": "Operational",
+      "launched": "08 Feb 1967",
+      "orbit": "Drifting orbit",
+      "altitude_km": "698",
+      "payload": [
+        "RRA (CNES)"
+      ],
+      "launch_mass": "23 kg",
+      "dry_mass": "23 kg",
+      "power": null,
+      "updated": "2015-07-28"
+    },
+    {
+      "id": 637,
+      "slug": "diademe_2",
+      "name": "Diadéme-2",
+      "full_name": "Diadéme-2",
+      "agency": "CNES",
+      "status": "Operational",
+      "launched": "15 Feb 1967",
+      "orbit": "Drifting orbit",
+      "altitude_km": "990",
+      "payload": [
+        "RRA (CNES)"
+      ],
+      "launch_mass": "23 kg",
+      "dry_mass": "23 kg",
+      "power": null,
+      "updated": "2015-07-28"
+    },
+    {
+      "id": 64,
+      "slug": "dmsp_f17",
+      "name": "DMSP-F17",
+      "full_name": "Defense Meteorological Satellite Program - F17",
+      "agency": "DoD,NOAA",
+      "status": "Operational",
+      "launched": "04 Nov 2006",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "848",
+      "payload": [
+        "OLS",
+        "SESS/SSI/ES-3",
+        "SESS/SSJ5 ",
+        "SESS/SSM-Boom",
+        "SESS/SSULI",
+        "SSMIS"
+      ],
+      "launch_mass": "1220 kg",
+      "dry_mass": null,
+      "power": "2200 W",
+      "updated": "2025-11-17"
+    },
+    {
+      "id": 65,
+      "slug": "dmsp_f18",
+      "name": "DMSP-F18",
+      "full_name": "Defense Meteorological Satellite Program - F18",
+      "agency": "DoD,NOAA",
+      "status": "Operational",
+      "launched": "18 Oct 2009",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "850",
+      "payload": [
+        "OLS",
+        "SESS/SSI/ES-3 (degraded)",
+        "SESS/SSJ5 ",
+        "SESS/SSM-Boom (degraded)",
+        "SESS/SSULI (degraded)",
+        "SESS/SSUSI",
+        "SSMIS (degraded)"
+      ],
+      "launch_mass": "1220 kg",
+      "dry_mass": null,
+      "power": "2200 W",
+      "updated": "2025-11-17"
+    },
+    {
+      "id": 937,
+      "slug": "dq_1",
+      "name": "DQ-1",
+      "full_name": "DQ-1 also AEMS (Atmospheric Environment Monitoring Satellite) or Daqi-1",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "15 Apr 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "705",
+      "payload": [
+        "ACDL",
+        "DPC-2",
+        "EMI-2",
+        "POSP",
+        "WSI"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2023-03-06"
+    },
+    {
+      "id": 525,
+      "slug": "dscovr",
+      "name": "DSCOVR",
+      "full_name": "Deep Space Climate Observatory",
+      "agency": "NOAA,NASA",
+      "status": "Operational",
+      "launched": "11 Feb 2015",
+      "orbit": "Lagrange libration point 1",
+      "altitude_km": "1.5e+06",
+      "payload": [
+        "EPIC (DSCOVR)",
+        "ES",
+        "FC",
+        "MAG (DSCOVR) (degraded)",
+        "NISTAR"
+      ],
+      "launch_mass": "440 kg",
+      "dry_mass": "307 kg",
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 773,
+      "slug": "dubaisat_3",
+      "name": "DubaiSat-3",
+      "full_name": "DubaiSat-3",
+      "agency": "EIAST",
+      "status": "Operational",
+      "launched": "29 Oct 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "613",
+      "payload": [
+        "KHCS"
+      ],
+      "launch_mass": "330 kg",
+      "dry_mass": null,
+      "power": "450 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 1164,
+      "slug": "eaglet_ii",
+      "name": "EAGLET-II",
+      "full_name": "EAGLET-II",
+      "agency": "ASI",
+      "status": "Operational",
+      "launched": "28 Nov 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": null,
+      "payload": [
+        "Eaglet-II (Imager)"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-10-05"
+    },
+    {
+      "id": 71,
+      "slug": "earthcare",
+      "name": "EarthCARE",
+      "full_name": "Earth Clouds, Aerosol and Radiation Explorer",
+      "agency": "ESA,JAXA",
+      "status": "Operational",
+      "launched": "28 May 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "394",
+      "payload": [
+        "ATLID",
+        "BBR",
+        "CPR (Earth-CARE)",
+        "MSI"
+      ],
+      "launch_mass": "2200 kg",
+      "dry_mass": "1546 kg",
+      "power": "1130 W",
+      "updated": "2026-07-20"
+    },
+    {
+      "id": 931,
+      "slug": "edrs_c",
+      "name": "EDRS-C",
+      "full_name": "European Data Relay Satellite - C",
+      "agency": "ESA,Airbus",
+      "status": "Operational",
+      "launched": "06 Aug 2019",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "RMU"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-09-28"
+    },
+    {
+      "id": 768,
+      "slug": "egyptsat_a",
+      "name": "EgyptSat-A",
+      "full_name": "EgyptSat-A",
+      "agency": "NARSS",
+      "status": "Operational",
+      "launched": "21 Feb 2019",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "668",
+      "payload": [
+        "MSI (EgyptSat)"
+      ],
+      "launch_mass": "1050 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 74,
+      "slug": "electro_l_n2",
+      "name": "Electro-L N2",
+      "full_name": "Electro-L Number 2",
+      "agency": "RosHydroMet,Roscosmos",
+      "status": "Operational",
+      "launched": "11 Dec 2015",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "DCS (Electro)",
+        "GEOS&R (Electro)",
+        "GGAK-E/DIR-E",
+        "GGAK-E/GALS-E",
+        "GGAK-E/SKIF-6",
+        "GGAK-E/SKL-E",
+        "GGAK-E/VUSS-E",
+        "MSU-GS (degraded)"
+      ],
+      "launch_mass": "3000 kg",
+      "dry_mass": "1500 kg",
+      "power": "1700 W",
+      "updated": "2026-01-19"
+    },
+    {
+      "id": 474,
+      "slug": "electro_l_n3",
+      "name": "Electro-L N3",
+      "full_name": "Electro-L Number 3",
+      "agency": "RosHydroMet,Roscosmos",
+      "status": "Operational",
+      "launched": "24 Dec 2019",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "DCS (Electro)",
+        "GEOS&R (Electro)",
+        "GGAK-E/DIR-E",
+        "GGAK-E/GALS-E",
+        "GGAK-E/SKIF-6",
+        "GGAK-E/VUSS-E",
+        "MSU-GS"
+      ],
+      "launch_mass": "3000 kg",
+      "dry_mass": "1500 kg",
+      "power": "1700 W",
+      "updated": "2024-09-30"
+    },
+    {
+      "id": 613,
+      "slug": "electro_l_n4",
+      "name": "Electro-L N4",
+      "full_name": "Electro-L Number 4",
+      "agency": "RosHydroMet,Roscosmos",
+      "status": "Operational",
+      "launched": "05 Feb 2023",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "DCS (Electro)",
+        "GEOS&R (Electro)",
+        "GGAK-E/DIR-E",
+        "GGAK-E/FM-E",
+        "GGAK-E/GALS-E",
+        "GGAK-E/ISP-2M",
+        "GGAK-E/SKIF-6",
+        "GGAK-E/SKL-E",
+        "GGAK-E/VUSS-E",
+        "MSU-GS"
+      ],
+      "launch_mass": "3000 kg",
+      "dry_mass": "1740 kg",
+      "power": "1700 W",
+      "updated": "2024-09-30"
+    },
+    {
+      "id": 77,
+      "slug": "enmap",
+      "name": "EnMAP",
+      "full_name": "Environmental Mapping and Analysis Programme",
+      "agency": "DLR",
+      "status": "Operational",
+      "launched": "01 Apr 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "653",
+      "payload": [
+        "HSI (EnMAP)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "980 kg",
+      "power": "810 W",
+      "updated": "2026-10-19"
+    },
+    {
+      "id": 805,
+      "slug": "eos_01",
+      "name": "EOS-01",
+      "full_name": "Earth Observation Satellite - 01",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "07 Nov 2020",
+      "orbit": "Drifting orbit",
+      "altitude_km": "555",
+      "payload": [
+        "SAR-X (RISAT-2)"
+      ],
+      "launch_mass": "615 kg",
+      "dry_mass": null,
+      "power": "2000 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 604,
+      "slug": "eos_04",
+      "name": "EOS-04",
+      "full_name": "Earth Observation Satellite - 04 (also known as RISAT-1A)",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "14 Feb 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "529",
+      "payload": [
+        "SAR-C (RISAT)"
+      ],
+      "launch_mass": "1710 kg",
+      "dry_mass": null,
+      "power": "2200 W",
+      "updated": "2023-07-24"
+    },
+    {
+      "id": 996,
+      "slug": "eos_07",
+      "name": "EOS-07",
+      "full_name": "EOS-07 also known as Microsat-2B",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "10 Feb 2023",
+      "orbit": "Drifting orbit",
+      "altitude_km": "450",
+      "payload": [
+        "MHS (EOS-07)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "156 kg",
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 1070,
+      "slug": "eos_08",
+      "name": "EOS-08",
+      "full_name": "EOS-08  (also Microsat-2C)",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "16 Aug 2024",
+      "orbit": "Drifting orbit",
+      "altitude_km": "475",
+      "payload": [
+        "EOIR",
+        "GNSS-R (MicroSat-2C)",
+        "SiC UV Dosimeter"
+      ],
+      "launch_mass": null,
+      "dry_mass": "175 kg",
+      "power": null,
+      "updated": "2026-04-20"
+    },
+    {
+      "id": 1113,
+      "slug": "ews_g2",
+      "name": "EWS-G2",
+      "full_name": "Electro-optical Infrared Weather System-Geostationary mission-2",
+      "agency": "DoD,NOAA,USAF",
+      "status": "Operational",
+      "launched": "Dec 2023",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "DCIS",
+        "GEOS&R ",
+        "IMAGER (GOES 12-15)",
+        "SEM/EPS",
+        "SEM/HEPAD",
+        "SEM/MAG",
+        "SOUNDER (degraded)"
+      ],
+      "launch_mass": "3210 kg",
+      "dry_mass": "1540 kg",
+      "power": "2300 W",
+      "updated": "2025-03-10"
+    },
+    {
+      "id": 781,
+      "slug": "falcon_eye_2",
+      "name": "Falcon-Eye 2",
+      "full_name": "Falcon-Eye 2",
+      "agency": "EIAST",
+      "status": "Operational",
+      "launched": "02 Dec 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "610",
+      "payload": [
+        "HiRI"
+      ],
+      "launch_mass": "1200 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 1100,
+      "slug": "firesat_pathfinder",
+      "name": "FireSat-Pathfinder",
+      "full_name": "FireSat- Pathfinder",
+      "agency": "MUON SPACE",
+      "status": "Operational",
+      "launched": "15 Mar 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": null,
+      "payload": [
+        "Radiometer(FireSat)"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2025-10-16"
+    },
+    {
+      "id": 911,
+      "slug": "flock",
+      "name": "FLOCK",
+      "full_name": "FLOCK (Dove)",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "09 Jan 2014",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "475",
+      "payload": [
+        "FLOCK"
+      ],
+      "launch_mass": "5 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-10-05"
+    },
+    {
+      "id": 734,
+      "slug": "formosat_5",
+      "name": "FORMOSAT-5",
+      "full_name": "FORMOSAT-5",
+      "agency": "NSPO,UCAR",
+      "status": "Operational",
+      "launched": "24 Aug 2017",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "720",
+      "payload": [
+        "AIP",
+        "RSI (FORMOSAT-5)"
+      ],
+      "launch_mass": "525 kg",
+      "dry_mass": null,
+      "power": "280 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 111,
+      "slug": "fy_2g",
+      "name": "FY-2G",
+      "full_name": "Feng-Yun - 2G",
+      "agency": "CMA",
+      "status": "Operational",
+      "launched": "31 Dec 2014",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "DCS (FY)",
+        "S-VISSR (FY-2F/G/H)",
+        "SEM (FY-2)"
+      ],
+      "launch_mass": "1380 kg",
+      "dry_mass": "680 kg",
+      "power": "300 W",
+      "updated": "2026-10-12"
+    },
+    {
+      "id": 112,
+      "slug": "fy_2h",
+      "name": "FY-2H",
+      "full_name": "Feng-Yun - 2H",
+      "agency": "CMA",
+      "status": "Operational",
+      "launched": "05 Jun 2018",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "DCS (FY)",
+        "S-VISSR (FY-2F/G/H)",
+        "SEM (FY-2)"
+      ],
+      "launch_mass": "1380 kg",
+      "dry_mass": "680 kg",
+      "power": "300 W",
+      "updated": "2026-10-12"
+    },
+    {
+      "id": 116,
+      "slug": "fy_3d",
+      "name": "FY-3D",
+      "full_name": "Feng-Yun 3D",
+      "agency": "CMA",
+      "status": "Operational",
+      "launched": "14 Nov 2017",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "836",
+      "payload": [
+        "GAS",
+        "GNOS",
+        "HIRAS",
+        "MERSI-2",
+        "MWHS-2",
+        "MWRI-1",
+        "MWTS-2",
+        "SWS/IPM",
+        "SWS/WAI"
+      ],
+      "launch_mass": "2300 kg",
+      "dry_mass": "2250 kg",
+      "power": "2500 W",
+      "updated": "2026-08-27"
+    },
+    {
+      "id": 117,
+      "slug": "fy_3e",
+      "name": "FY-3E",
+      "full_name": "Feng-Yun 3E",
+      "agency": "CMA",
+      "status": "Operational",
+      "launched": "04 Jul 2021",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "836",
+      "payload": [
+        "GNOS-2",
+        "HIRAS-2",
+        "MERSI-LL",
+        "MWHS-2",
+        "MWTS-3",
+        "SIM-2",
+        "SSIM",
+        "SWS/SEM/HEPD",
+        "SWS/Tri-IPM",
+        "WindRAD",
+        "XEUVI"
+      ],
+      "launch_mass": "2300 kg",
+      "dry_mass": "2250 kg",
+      "power": "2500 W",
+      "updated": "2026-08-27"
+    },
+    {
+      "id": 119,
+      "slug": "fy_3f",
+      "name": "FY-3F",
+      "full_name": "Feng-Yun 3F",
+      "agency": "CMA",
+      "status": "Operational",
+      "launched": "03 Aug 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "836",
+      "payload": [
+        "ERM-2",
+        "GNOS-2",
+        "HIRAS-2",
+        "MERSI-3",
+        "MWHS-2",
+        "MWTS-3",
+        "OMS-limb",
+        "OMS-nadir",
+        "SIM-2"
+      ],
+      "launch_mass": "2300 kg",
+      "dry_mass": "2250 kg",
+      "power": "2500 W",
+      "updated": "2026-01-26"
+    },
+    {
+      "id": 520,
+      "slug": "fy_3g",
+      "name": "FY-3G",
+      "full_name": "Feng Yun 3G",
+      "agency": "CMA",
+      "status": "Operational",
+      "launched": "16 Apr 2023",
+      "orbit": "Drifting orbit",
+      "altitude_km": "407",
+      "payload": [
+        "GNOS-2",
+        "HAOC",
+        "MERSI-RM",
+        "MWRI-RM",
+        "PMAI",
+        "PMR (FY-3)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "3850 kg",
+      "power": "2600 W",
+      "updated": "2025-11-03"
+    },
+    {
+      "id": 118,
+      "slug": "fy_3h",
+      "name": "FY-3H",
+      "full_name": "Feng-Yun 3H",
+      "agency": "CMA",
+      "status": "Operational",
+      "launched": "27 Sep 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "836",
+      "payload": [
+        "GAS-2",
+        "GNOS-2",
+        "HIRAS-2",
+        "MERSI-3",
+        "MWHS-2",
+        "MWRI-2",
+        "MWTS-3"
+      ],
+      "launch_mass": "2300 kg",
+      "dry_mass": "2250 kg",
+      "power": "2500 W",
+      "updated": "2026-10-26"
+    },
+    {
+      "id": 120,
+      "slug": "fy_4a",
+      "name": "FY-4A",
+      "full_name": "Feng-Yun - 4A",
+      "agency": "CMA",
+      "status": "Operational",
+      "launched": "10 Dec 2016",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "AGRI",
+        "DCS (FY)",
+        "GIIRS",
+        "LMI",
+        "SEP"
+      ],
+      "launch_mass": null,
+      "dry_mass": "306 kg",
+      "power": "3200 W",
+      "updated": "2026-04-13"
+    },
+    {
+      "id": 121,
+      "slug": "fy_4b",
+      "name": "FY-4B",
+      "full_name": "Feng-Yun - 4B",
+      "agency": "CMA",
+      "status": "Operational",
+      "launched": "02 Jun 2021",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "DCS (FY)",
+        "GHI",
+        "GIIRS-2",
+        "SEP"
+      ],
+      "launch_mass": null,
+      "dry_mass": "306 kg",
+      "power": "3200 W",
+      "updated": "2026-08-19"
+    },
+    {
+      "id": 711,
+      "slug": "galileo",
+      "name": "Galileo",
+      "full_name": "Galileo",
+      "agency": "ESA,EC",
+      "status": "Operational",
+      "launched": "21 Oct 2011",
+      "orbit": "Drifting orbit",
+      "altitude_km": "23222",
+      "payload": [
+        "EMU"
+      ],
+      "launch_mass": "730 kg",
+      "dry_mass": "670 kg",
+      "power": "1900 W",
+      "updated": "2016-10-11"
+    },
+    {
+      "id": 127,
+      "slug": "gcom_c",
+      "name": "GCOM-C",
+      "full_name": "Global Change Observation Mission for Climate",
+      "agency": "JAXA",
+      "status": "Operational",
+      "launched": "23 Dec 2017",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "798",
+      "payload": [
+        "SGLI"
+      ],
+      "launch_mass": "2093 kg",
+      "dry_mass": "1917 kg",
+      "power": "4250 W",
+      "updated": "2026-10-12"
+    },
+    {
+      "id": 130,
+      "slug": "gcom_w",
+      "name": "GCOM-W",
+      "full_name": "Global Change Observation Mission for Water",
+      "agency": "JAXA",
+      "status": "Operational",
+      "launched": "17 May 2012",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "700",
+      "payload": [
+        "AMSR2"
+      ],
+      "launch_mass": "1991 kg",
+      "dry_mass": "1840 kg",
+      "power": "4050 W",
+      "updated": "2026-10-12"
+    },
+    {
+      "id": 34,
+      "slug": "geo_kompsat_2a",
+      "name": "GEO-KOMPSAT-2A",
+      "full_name": "Geostationary Korea Multi-Purpose Satellite - 2A",
+      "agency": "KMA,KARI,ME (NIER),MLTM",
+      "status": "Operational",
+      "launched": "04 Dec 2018",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "AMI",
+        "KSEM/CM",
+        "KSEM/MG (SOSMAG)",
+        "KSEM/PD"
+      ],
+      "launch_mass": "2850 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2024-03-06"
+    },
+    {
+      "id": 35,
+      "slug": "geo_kompsat_2b",
+      "name": "GEO-KOMPSAT-2B",
+      "full_name": "Geostationary Korea Multi-Purpose Satellite - 2B",
+      "agency": "KMA,KARI,ME (NIER),MLTM",
+      "status": "Operational",
+      "launched": "18 Feb 2020",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "GEMS",
+        "GOCI-II"
+      ],
+      "launch_mass": "3400 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2025-01-16"
+    },
+    {
+      "id": 741,
+      "slug": "gf_1_02",
+      "name": "GF-1-02",
+      "full_name": "Gao Fen - 1 - 02",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "31 Mar 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "640",
+      "payload": [
+        "PMS"
+      ],
+      "launch_mass": "805 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 742,
+      "slug": "gf_1_03",
+      "name": "GF-1-03",
+      "full_name": "Gao Fen - 1 - 03",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "31 Mar 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "640",
+      "payload": [
+        "PMS"
+      ],
+      "launch_mass": "805 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 743,
+      "slug": "gf_1_04",
+      "name": "GF-1-04",
+      "full_name": "Gao Fen - 1 - 04",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "31 Mar 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "640",
+      "payload": [
+        "PMS"
+      ],
+      "launch_mass": "805 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 798,
+      "slug": "gf_10",
+      "name": "GF-10",
+      "full_name": "Gao Fen - 10",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "04 Oct 2019",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "613",
+      "payload": [
+        "PMS-2"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2020-09-08"
+    },
+    {
+      "id": 765,
+      "slug": "gf_11",
+      "name": "GF-11",
+      "full_name": "Gao Fen - 9",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "31 Jul 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "412",
+      "payload": [
+        "PMS-2"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2020-09-08"
+    },
+    {
+      "id": 879,
+      "slug": "gf_11_02",
+      "name": "GF-11-02",
+      "full_name": "Gao Fen - 11-02",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "07 Sep 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "415",
+      "payload": [
+        "PMS-2"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2021-03-02"
+    },
+    {
+      "id": 902,
+      "slug": "gf_11_03",
+      "name": "GF-11-03",
+      "full_name": "Gao Fen - 11-03",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "20 Nov 2021",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "450",
+      "payload": [],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2022-02-01"
+    },
+    {
+      "id": 981,
+      "slug": "gf_11_04",
+      "name": "GF-11-04",
+      "full_name": "Gao Fen - 11-04",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "27 Dec 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "450",
+      "payload": [
+        "PMS-2"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2023-07-10"
+    },
+    {
+      "id": 1068,
+      "slug": "gf_11_05",
+      "name": "GF-11-05",
+      "full_name": "Gao Fen - 11-05",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "19 Jul 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": null,
+      "payload": [
+        "PMS-2"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2025-01-09"
+    },
+    {
+      "id": 808,
+      "slug": "gf_12",
+      "name": "GF-12",
+      "full_name": "Gao Fen - 12",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "27 Nov 2019",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "635",
+      "payload": [
+        "SAR-C (GF-3)"
+      ],
+      "launch_mass": "2950 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2020-09-08"
+    },
+    {
+      "id": 892,
+      "slug": "gf_12_02",
+      "name": "GF-12-02",
+      "full_name": "Gao Fen - 12-02",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "30 Mar 2021",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "635",
+      "payload": [
+        "SAR-C (GF-3)"
+      ],
+      "launch_mass": "2950 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2021-08-25"
+    },
+    {
+      "id": 956,
+      "slug": "gf_12_03",
+      "name": "GF-12-03",
+      "full_name": "Gao Fen - 12-03",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "27 Jun 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "635",
+      "payload": [
+        "SAR-C (GF-3)"
+      ],
+      "launch_mass": "2950 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2022-12-19"
+    },
+    {
+      "id": 1017,
+      "slug": "gf_12_04",
+      "name": "GF-12-04",
+      "full_name": "Gao Fen - 12-04",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "20 Aug 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "635",
+      "payload": [
+        "SAR-C (GF-3)"
+      ],
+      "launch_mass": "2950 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2024-01-02"
+    },
+    {
+      "id": 1087,
+      "slug": "gf_12_05",
+      "name": "GF-12-05",
+      "full_name": "Gao Fen - 12-05",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "15 Oct 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "635",
+      "payload": [
+        "SAR-C (GF-3)"
+      ],
+      "launch_mass": "2950 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2025-05-12"
+    },
+    {
+      "id": 884,
+      "slug": "gf_13",
+      "name": "GF-13",
+      "full_name": "Gao Fen - 13",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "11 Oct 2020",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "GF-4/13 imager"
+      ],
+      "launch_mass": "4600 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2023-03-20"
+    },
+    {
+      "id": 986,
+      "slug": "gf_13_02",
+      "name": "GF-13-02",
+      "full_name": "Gao Fen - 13",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "17 Mar 2023",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "GF-4/13 imager"
+      ],
+      "launch_mass": "4600 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2023-11-23"
+    },
+    {
+      "id": 885,
+      "slug": "gf_14",
+      "name": "GF-14",
+      "full_name": "Gao Fen - 14",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "06 Dec 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "488",
+      "payload": [
+        "PMS-2"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2021-06-16"
+    },
+    {
+      "id": 1150,
+      "slug": "gf_14_02",
+      "name": "GF-14-02",
+      "full_name": "Gao Fen - 14-02",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "26 Oct 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "488",
+      "payload": [
+        "PMS-2"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-05-25"
+    },
+    {
+      "id": 589,
+      "slug": "gf_2",
+      "name": "GF-2",
+      "full_name": "Gao Fen - 2",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "19 Aug 2014",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "631",
+      "payload": [
+        "PMS-2"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-09"
+    },
+    {
+      "id": 607,
+      "slug": "gf_3",
+      "name": "GF-3",
+      "full_name": "Gao Fen - 3",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "09 Aug 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "758",
+      "payload": [
+        "SAR-C (GF-3)"
+      ],
+      "launch_mass": "2950 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 920,
+      "slug": "gf_3_02_or_csar_01",
+      "name": "GF-3(02) or CSAR-01",
+      "full_name": "GF-3(02)",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "22 Nov 2021",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "740",
+      "payload": [
+        "SAR-C (GF-3)"
+      ],
+      "launch_mass": "2779 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2025-02-19"
+    },
+    {
+      "id": 936,
+      "slug": "gf_3_03_or_csar_02",
+      "name": "GF-3(03) or CSAR-02",
+      "full_name": "GF-3(03)",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "06 Apr 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "740",
+      "payload": [
+        "AIS",
+        "SAR-C (GF-3)"
+      ],
+      "launch_mass": "2779 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2025-02-19"
+    },
+    {
+      "id": 608,
+      "slug": "gf_4",
+      "name": "GF-4",
+      "full_name": "Gao Fen - 4",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "28 Dec 2015",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "GF-4/13 imager"
+      ],
+      "launch_mass": "4600 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 980,
+      "slug": "gf_5_01a",
+      "name": "GF-5-01A",
+      "full_name": "Gao Fen - 5-01A",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "08 Dec 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "705",
+      "payload": [
+        "AHSI",
+        "AIUS",
+        "DPC",
+        "EMI",
+        "GMI (GF-5)",
+        "VIMS"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2023-07-10"
+    },
+    {
+      "id": 910,
+      "slug": "gf_5_02",
+      "name": "GF-5-02",
+      "full_name": "Gao Fen - 5-02",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "07 Sep 2021",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "705",
+      "payload": [],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2021-12-20"
+    },
+    {
+      "id": 746,
+      "slug": "gf_6",
+      "name": "GF-6",
+      "full_name": "Gao Fen - 6",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "02 Jun 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "640",
+      "payload": [
+        "PMS",
+        "WFV"
+      ],
+      "launch_mass": "805 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2020-09-08"
+    },
+    {
+      "id": 775,
+      "slug": "gf_7",
+      "name": "GF-7",
+      "full_name": "Gao Fen - 7",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "03 Nov 2019",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "PMS-2"
+      ],
+      "launch_mass": "2400 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2020-09-08"
+    },
+    {
+      "id": 667,
+      "slug": "gf_8",
+      "name": "GF-8",
+      "full_name": "Gao Fen - 8",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "26 Jun 2015",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "475",
+      "payload": [
+        "PMS-2"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 696,
+      "slug": "gf_9",
+      "name": "GF-9",
+      "full_name": "Gao Fen - 9",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "14 Sep 2015",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "650",
+      "payload": [
+        "PMS-2"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 833,
+      "slug": "gf_9_02",
+      "name": "GF-9-02",
+      "full_name": "Gao Fen - 9-02",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "31 May 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "650",
+      "payload": [
+        "PMS-2"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2021-03-02"
+    },
+    {
+      "id": 834,
+      "slug": "gf_9_03",
+      "name": "GF-9-03",
+      "full_name": "Gao Fen - 9-03",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "17 Jun 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "650",
+      "payload": [
+        "PMS-2"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2021-03-02"
+    },
+    {
+      "id": 869,
+      "slug": "gf_9_04",
+      "name": "GF-9-04",
+      "full_name": "Gao Fen - 9-04",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "06 Aug 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "640",
+      "payload": [
+        "PMS-2"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2021-03-02"
+    },
+    {
+      "id": 877,
+      "slug": "gf_9_05",
+      "name": "GF-9-05",
+      "full_name": "Gao Fen - 9-05",
+      "agency": "CNSA,CGSTL",
+      "status": "Operational",
+      "launched": "23 Aug 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "640",
+      "payload": [
+        "PMS-2"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2021-03-02"
+    },
+    {
+      "id": 952,
+      "slug": "ghgsat",
+      "name": "GHGSat",
+      "full_name": "Greenhouse Gas Satellite",
+      "agency": "GHGSat",
+      "status": "Operational",
+      "launched": "22 Jun 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "C&A",
+        "GHGSat-Spectrometer"
+      ],
+      "launch_mass": "15 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-10-05"
+    },
+    {
+      "id": 994,
+      "slug": "ghost_1",
+      "name": "GHOSt-1",
+      "full_name": "Global Hyperspectral Observation Satellite 1",
+      "agency": "OSK",
+      "status": "Operational",
+      "launched": "15 Apr 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "525",
+      "payload": [
+        "GHOSt-Imager"
+      ],
+      "launch_mass": null,
+      "dry_mass": "91.4 kg",
+      "power": null,
+      "updated": "2023-11-23"
+    },
+    {
+      "id": 995,
+      "slug": "ghost_2",
+      "name": "GHOSt-2",
+      "full_name": "Global Hyperspectral Observation Satellite 2",
+      "agency": "OSK",
+      "status": "Operational",
+      "launched": "15 Apr 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "525",
+      "payload": [
+        "GHOSt-Imager"
+      ],
+      "launch_mass": null,
+      "dry_mass": "91.4 kg",
+      "power": null,
+      "updated": "2023-11-23"
+    },
+    {
+      "id": 1004,
+      "slug": "ghost_3",
+      "name": "GHOSt-3",
+      "full_name": "Global Hyperspectral Observation Satellite 3",
+      "agency": "OSK",
+      "status": "Operational",
+      "launched": "12 Jun 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "525",
+      "payload": [
+        "GHOSt-Imager"
+      ],
+      "launch_mass": null,
+      "dry_mass": "91.4 kg",
+      "power": null,
+      "updated": "2023-11-23"
+    },
+    {
+      "id": 1052,
+      "slug": "ghost_4",
+      "name": "GHOSt-4",
+      "full_name": "Global Hyperspectral Observation Satellite 3",
+      "agency": "OSK",
+      "status": "Operational",
+      "launched": "04 Mar 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "525",
+      "payload": [],
+      "launch_mass": null,
+      "dry_mass": "91.4 kg",
+      "power": null,
+      "updated": "2024-03-05"
+    },
+    {
+      "id": 1054,
+      "slug": "ghost_5",
+      "name": "GHOSt-5",
+      "full_name": "Global Hyperspectral Observation Satellite 3",
+      "agency": "OSK",
+      "status": "Operational",
+      "launched": "04 Mar 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "525",
+      "payload": [],
+      "launch_mass": null,
+      "dry_mass": "91.4 kg",
+      "power": null,
+      "updated": "2024-03-05"
+    },
+    {
+      "id": 1042,
+      "slug": "gnomes_4",
+      "name": "GNOMES-4",
+      "full_name": "GNSS Navigation and Occultation Measurement Satellites",
+      "agency": "PlanetiQ,LOFT",
+      "status": "Operational",
+      "launched": "01 Dec 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "645",
+      "payload": [
+        "Pyxis-RO"
+      ],
+      "launch_mass": "30 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2025-11-17"
+    },
+    {
+      "id": 1073,
+      "slug": "gnomes_5",
+      "name": "GNOMES-5",
+      "full_name": "GNSS Navigation and Occultation Measurement Satellites",
+      "agency": "PlanetiQ,LOFT",
+      "status": "Operational",
+      "launched": "16 Aug 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "645",
+      "payload": [
+        "Pyxis-RO"
+      ],
+      "launch_mass": "30 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-08-27"
+    },
+    {
+      "id": 665,
+      "slug": "goes_18",
+      "name": "GOES-18",
+      "full_name": "Geostationary Operational Environmental Satellite - 18",
+      "agency": "NOAA,NASA",
+      "status": "Operational",
+      "launched": "01 Mar 2022",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "ABI",
+        "DCIS",
+        "EXIS",
+        "GEOS&R ",
+        "GLM",
+        "SEISS/EHIS",
+        "SEISS/MPS",
+        "SEISS/SGPS",
+        "SEM/MAG",
+        "SUVI"
+      ],
+      "launch_mass": "5500 kg",
+      "dry_mass": "2800 kg",
+      "power": "4000 W",
+      "updated": "2026-08-24"
+    },
+    {
+      "id": 666,
+      "slug": "goes_19",
+      "name": "GOES-19",
+      "full_name": "Geostationary Operational Environmental Satellite - 19",
+      "agency": "NOAA,NASA",
+      "status": "Operational",
+      "launched": "25 Jun 2024",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "ABI",
+        "CCOR-1",
+        "DCIS",
+        "EXIS",
+        "GEOS&R ",
+        "GLM",
+        "SEISS/EHIS",
+        "SEISS/MPS",
+        "SEISS/SGPS",
+        "SEM/MAG",
+        "SUVI"
+      ],
+      "launch_mass": "5500 kg",
+      "dry_mass": "2800 kg",
+      "power": "4000 W",
+      "updated": "2026-08-24"
+    },
+    {
+      "id": 154,
+      "slug": "gosat",
+      "name": "GOSAT",
+      "full_name": "Green-house gas Observing Satellite",
+      "agency": "JAXA,MOE",
+      "status": "Operational",
+      "launched": "23 Jan 2009",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "666",
+      "payload": [
+        "TANSO-CAI",
+        "TANSO-FTS"
+      ],
+      "launch_mass": "1750 kg",
+      "dry_mass": null,
+      "power": "3800 W",
+      "updated": "2026-10-12"
+    },
+    {
+      "id": 606,
+      "slug": "gosat_2",
+      "name": "GOSAT-2",
+      "full_name": "Green-house gas Observing Satellite - 2",
+      "agency": "JAXA,MOE",
+      "status": "Operational",
+      "launched": "29 Oct 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "613",
+      "payload": [
+        "TANSO-CAI/2",
+        "TANSO-FTS/2"
+      ],
+      "launch_mass": "1700 kg",
+      "dry_mass": null,
+      "power": "5000 W",
+      "updated": "2026-10-12"
+    },
+    {
+      "id": 752,
+      "slug": "gosat_gw",
+      "name": "GOSAT-GW",
+      "full_name": "Global Observation SATellite for Greenhouse gases and Water cycle",
+      "agency": "JAXA,MOE",
+      "status": "Operational",
+      "launched": "28 Jun 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "666",
+      "payload": [
+        "AMSR3",
+        "TANSO-3"
+      ],
+      "launch_mass": "2600 kg",
+      "dry_mass": null,
+      "power": "5200 W",
+      "updated": "2026-08-10"
+    },
+    {
+      "id": 156,
+      "slug": "gpm_core_observatory",
+      "name": "GPM Core Observatory",
+      "full_name": "Global Precipitation Measurement - Core Observatory",
+      "agency": "NASA,JAXA",
+      "status": "Operational",
+      "launched": "27 Feb 2014",
+      "orbit": "Drifting orbit",
+      "altitude_km": "442",
+      "payload": [
+        "DPR",
+        "GMI (core)"
+      ],
+      "launch_mass": "3850 kg",
+      "dry_mass": null,
+      "power": "1950 W",
+      "updated": "2026-08-24"
+    },
+    {
+      "id": 159,
+      "slug": "grace_c_grace_fo",
+      "name": "GRACE C (GRACE-FO)",
+      "full_name": "Gravity Recovery and Climate Experiment C - Follow-on",
+      "agency": "NASA,DLR",
+      "status": "Operational",
+      "launched": "22 May 2018",
+      "orbit": "Drifting orbit",
+      "altitude_km": "490",
+      "payload": [
+        "HAIRS",
+        "LRR (DLR)",
+        "SCA (GRACE)",
+        "SuperSTAR",
+        "Tri-G (GRACE-FO)"
+      ],
+      "launch_mass": "432 kg",
+      "dry_mass": "398 kg",
+      "power": "200 W",
+      "updated": "2026-08-27"
+    },
+    {
+      "id": 1147,
+      "slug": "grace_d_grace_fo",
+      "name": "GRACE D (GRACE-FO)",
+      "full_name": "Gravity Recovery and Climate Experiment D - Follow-on",
+      "agency": "NASA,DLR",
+      "status": "Operational",
+      "launched": "22 May 2018",
+      "orbit": "Drifting orbit",
+      "altitude_km": "490",
+      "payload": [
+        "HAIRS",
+        "LRR (DLR)",
+        "SCA (GRACE)",
+        "SuperSTAR",
+        "Tri-G (GRACE-FO)"
+      ],
+      "launch_mass": "432 kg",
+      "dry_mass": "398 kg",
+      "power": "200 W",
+      "updated": "2026-08-27"
+    },
+    {
+      "id": 714,
+      "slug": "gokturk_1a",
+      "name": "Göktürk-1A",
+      "full_name": "Göktürk-1A",
+      "agency": "TÜBITAK-UZAY",
+      "status": "Operational",
+      "launched": "05 Dec 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "700",
+      "payload": [
+        "HiRI"
+      ],
+      "launch_mass": "1100 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 1165,
+      "slug": "heo",
+      "name": "HEO",
+      "full_name": "Hawk for Earth Observation",
+      "agency": "ASI",
+      "status": "Operational",
+      "launched": "14 Jan 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": null,
+      "payload": [
+        "HEO (Imager) "
+      ],
+      "launch_mass": null,
+      "dry_mass": "70 kg",
+      "power": null,
+      "updated": "2026-05-04"
+    },
+    {
+      "id": 671,
+      "slug": "himawari_9",
+      "name": "Himawari-9",
+      "full_name": "Himawari-9",
+      "agency": "JMA",
+      "status": "Operational",
+      "launched": "02 Nov 2016",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "AHI (degraded)",
+        "DCS (Himawari)"
+      ],
+      "launch_mass": "3500 kg",
+      "dry_mass": "1300 kg",
+      "power": "2600 W",
+      "updated": "2026-08-24"
+    },
+    {
+      "id": 880,
+      "slug": "hj_2a",
+      "name": "HJ-2A",
+      "full_name": "Huan Jing 2A",
+      "agency": "CRESDA,CAST",
+      "status": "Operational",
+      "launched": "27 Sep 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "650",
+      "payload": [
+        "HSI-2",
+        "IRMSS-2 (HJ)",
+        "WVC-2"
+      ],
+      "launch_mass": "470 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 882,
+      "slug": "hj_2b",
+      "name": "HJ-2B",
+      "full_name": "Huan Jing 2B",
+      "agency": "CRESDA,CAST",
+      "status": "Operational",
+      "launched": "27 Sep 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "650",
+      "payload": [
+        "HSI-2",
+        "IRMSS-2 (HJ)",
+        "WVC-2"
+      ],
+      "launch_mass": "470 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 973,
+      "slug": "hj_2e",
+      "name": "HJ-2E",
+      "full_name": "Huan Jing 2E (also known as S-SAR01)",
+      "agency": "CRESDA,CAST",
+      "status": "Operational",
+      "launched": "13 Oct 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SAR-S"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2023-03-06"
+    },
+    {
+      "id": 974,
+      "slug": "hj_2f",
+      "name": "HJ-2F",
+      "full_name": "Huan Jing 2F (also known as S-SAR02)",
+      "agency": "CRESDA,CAST",
+      "status": "Operational",
+      "launched": "08 Aug 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "506",
+      "payload": [
+        "SAR-S"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2024-03-25"
+    },
+    {
+      "id": 1098,
+      "slug": "hotbird_13f",
+      "name": "HOTBIRD 13F",
+      "full_name": "HOTBIRD 13F",
+      "agency": "ESA,Airbus",
+      "status": "Operational",
+      "launched": "15 Oct 2022",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "ICARE-NG"
+      ],
+      "launch_mass": "4500 kg",
+      "dry_mass": null,
+      "power": "22000 W",
+      "updated": "2025-01-27"
+    },
+    {
+      "id": 1099,
+      "slug": "hotbird_13g",
+      "name": "HOTBIRD 13G",
+      "full_name": "HOTBIRD 13G",
+      "agency": "ESA,Airbus",
+      "status": "Operational",
+      "launched": "03 Nov 2022",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "ICARE-NG"
+      ],
+      "launch_mass": "4500 kg",
+      "dry_mass": null,
+      "power": "22000 W",
+      "updated": "2025-01-27"
+    },
+    {
+      "id": 1175,
+      "slug": "hotsat_2",
+      "name": "HOTSAT-2",
+      "full_name": "HOTSAT-2",
+      "agency": "SSTL,UKSA",
+      "status": "Operational",
+      "launched": "30 Mar 2026",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "512",
+      "payload": [
+        "HotSat Imager"
+      ],
+      "launch_mass": null,
+      "dry_mass": "130 kg",
+      "power": null,
+      "updated": "2026-07-01"
+    },
+    {
+      "id": 1043,
+      "slug": "hrmis",
+      "name": "HRMIS",
+      "full_name": "High Resolution Multi-mode Imaging Satellite",
+      "agency": "CAST",
+      "status": "Operational",
+      "launched": "03 Jul 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": null,
+      "payload": [
+        "HRC(HRMIS)",
+        "SMAC"
+      ],
+      "launch_mass": null,
+      "dry_mass": "2400 kg",
+      "power": null,
+      "updated": "2023-12-04"
+    },
+    {
+      "id": 174,
+      "slug": "hy_1c",
+      "name": "HY-1C",
+      "full_name": "Hai Yang 1C",
+      "agency": "NSOAS,CAST",
+      "status": "Operational",
+      "launched": "07 Sep 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "785",
+      "payload": [
+        "AIS",
+        "COCTS",
+        "CZI",
+        "SCS",
+        "UVI(HY)"
+      ],
+      "launch_mass": "442 kg",
+      "dry_mass": "429 kg",
+      "power": "510 W",
+      "updated": "2026-01-19"
+    },
+    {
+      "id": 175,
+      "slug": "hy_1d",
+      "name": "HY-1D",
+      "full_name": "Hai Yang 1D",
+      "agency": "NSOAS,CAST",
+      "status": "Operational",
+      "launched": "10 Jun 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "798",
+      "payload": [
+        "AIS",
+        "COCTS",
+        "CZI",
+        "SCS",
+        "UVI(HY)"
+      ],
+      "launch_mass": "442 kg",
+      "dry_mass": "429 kg",
+      "power": "510 W",
+      "updated": "2024-09-02"
+    },
+    {
+      "id": 555,
+      "slug": "hy_2b",
+      "name": "HY-2B",
+      "full_name": "Hai Yang 2B",
+      "agency": "NSOAS,CAST",
+      "status": "Operational",
+      "launched": "25 Oct 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "973",
+      "payload": [
+        "ALT (sso)",
+        "CMR",
+        "HSCAT",
+        "LRA (NASA)",
+        "MWRI (HY-2)"
+      ],
+      "launch_mass": "1500 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-08-24"
+    },
+    {
+      "id": 556,
+      "slug": "hy_2c",
+      "name": "HY-2C",
+      "full_name": "Hai Yang 2C",
+      "agency": "NSOAS,CAST",
+      "status": "Operational",
+      "launched": "21 Sep 2020",
+      "orbit": "Drifting orbit",
+      "altitude_km": "1336",
+      "payload": [
+        "ALT (high)",
+        "CMR",
+        "DORIS",
+        "HSCAT",
+        "LRA (NASA)"
+      ],
+      "launch_mass": "1500 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-08-24"
+    },
+    {
+      "id": 557,
+      "slug": "hy_2d",
+      "name": "HY-2D",
+      "full_name": "Hai Yang 2D",
+      "agency": "NSOAS,CAST",
+      "status": "Operational",
+      "launched": "19 May 2021",
+      "orbit": "Drifting orbit",
+      "altitude_km": "973",
+      "payload": [
+        "ALT (high)",
+        "CMR",
+        "DORIS",
+        "HSCAT",
+        "LRA (NASA)"
+      ],
+      "launch_mass": "1575 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2023-11-20"
+    },
+    {
+      "id": 680,
+      "slug": "hy_3a_hy_1e",
+      "name": "HY-3A (HY-1E)",
+      "full_name": "Hai Yang 3A",
+      "agency": "NSOAS,CAST",
+      "status": "Operational",
+      "launched": "16 Nov 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "781",
+      "payload": [
+        "AIS",
+        "COCTS2",
+        "CZI2",
+        "PMRIS"
+      ],
+      "launch_mass": "442 kg",
+      "dry_mass": "429 kg",
+      "power": "510 W",
+      "updated": "2025-05-12"
+    },
+    {
+      "id": 686,
+      "slug": "hy_4a_or_hy_2s",
+      "name": "HY-4A (or HY-2S)",
+      "full_name": "Hai Yang 4A",
+      "agency": "NSOAS",
+      "status": "Operational",
+      "launched": "13 Nov 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "654",
+      "payload": [
+        "IMR",
+        "MICAP"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 999,
+      "slug": "hydrognss_1",
+      "name": "HydroGNSS-1",
+      "full_name": "Hydro Global Navigation Satellite System-1",
+      "agency": "ESA,SSTL,UKSA",
+      "status": "Operational",
+      "launched": "28 Nov 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "550",
+      "payload": [
+        "GNSS-R"
+      ],
+      "launch_mass": null,
+      "dry_mass": "40 kg",
+      "power": null,
+      "updated": "2026-10-19"
+    },
+    {
+      "id": 1000,
+      "slug": "hydrognss_2",
+      "name": "HydroGNSS-2",
+      "full_name": "Hydro Global Navigation Satellite System-2",
+      "agency": "ESA,SSTL,UKSA",
+      "status": "Operational",
+      "launched": "28 Nov 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "550",
+      "payload": [
+        "GNSS-R"
+      ],
+      "launch_mass": null,
+      "dry_mass": "40 kg",
+      "power": null,
+      "updated": "2026-10-19"
+    },
+    {
+      "id": 769,
+      "slug": "hysis",
+      "name": "HySIS",
+      "full_name": "Hyper Spectral Imaging Spectrometer",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "29 Nov 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "630",
+      "payload": [
+        "HySIS"
+      ],
+      "launch_mass": "380 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 178,
+      "slug": "icesat_2",
+      "name": "ICESat-2",
+      "full_name": "Ice, Cloud and land Elevation Satellite",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "15 Sep 2018",
+      "orbit": "Drifting orbit",
+      "altitude_km": "481",
+      "payload": [
+        "ATLAS",
+        "LRA (NASA)",
+        "TRSR"
+      ],
+      "launch_mass": "1390 kg",
+      "dry_mass": "1230 kg",
+      "power": "1200 W",
+      "updated": "2025-04-07"
+    },
+    {
+      "id": 829,
+      "slug": "iceye",
+      "name": "ICEYE",
+      "full_name": "ICEYE",
+      "agency": "ICEYE,ESA",
+      "status": "Operational",
+      "launched": "03 Dec 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "600",
+      "payload": [
+        "ICEYE SAR"
+      ],
+      "launch_mass": "85 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-10-22"
+    },
+    {
+      "id": 194,
+      "slug": "insat_3dr",
+      "name": "INSAT-3DR",
+      "full_name": "Indian National Satellite - 3D repeat",
+      "agency": "IMD,ISRO",
+      "status": "Operational",
+      "launched": "08 Sep 2016",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "DCS (INSAT)",
+        "IMAGER (INSAT)",
+        "SAS&R",
+        "SOUNDER (INSAT)"
+      ],
+      "launch_mass": "2060 kg",
+      "dry_mass": "907 kg",
+      "power": "1164 W",
+      "updated": "2022-03-21"
+    },
+    {
+      "id": 603,
+      "slug": "insat_3ds",
+      "name": "INSAT-3DS",
+      "full_name": "Indian National Satellite - 3D second repeat",
+      "agency": "IMD,ISRO",
+      "status": "Operational",
+      "launched": "17 Feb 2024",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "DCS (INSAT)",
+        "IMAGER (INSAT)",
+        "SAS&R",
+        "SOUNDER (INSAT)"
+      ],
+      "launch_mass": "2060 kg",
+      "dry_mass": "907 kg",
+      "power": "1164 W",
+      "updated": "2025-01-22"
+    },
+    {
+      "id": 522,
+      "slug": "ionosfera_m_n1_n2",
+      "name": "Ionosfera-M N1 & N2",
+      "full_name": "Ionosfera-M N1 and N2",
+      "agency": "Roscosmos",
+      "status": "Operational",
+      "launched": "04 Nov 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "820",
+      "payload": [
+        "ESEP",
+        "GALS/1",
+        "LAERTES",
+        "MAYAK",
+        "NBK/2",
+        "Ozonometer-TM",
+        "PES",
+        "SPER/1",
+        "ST/1"
+      ],
+      "launch_mass": null,
+      "dry_mass": "430 kg",
+      "power": null,
+      "updated": "2025-12-01"
+    },
+    {
+      "id": 523,
+      "slug": "ionosfera_m_n3_n4",
+      "name": "Ionosfera-M N3 & N4",
+      "full_name": "Ionosfera-M N3 and N4",
+      "agency": "Roscosmos",
+      "status": "Operational",
+      "launched": "25 Jul 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "820",
+      "payload": [
+        "ESEP",
+        "GALS/1",
+        "LAERTES",
+        "MAYAK",
+        "NBK/2",
+        "Ozonometer-TM",
+        "PES",
+        "SPER/1",
+        "ST/1"
+      ],
+      "launch_mass": null,
+      "dry_mass": "430 kg",
+      "power": null,
+      "updated": "2026-06-08"
+    },
+    {
+      "id": 572,
+      "slug": "iris",
+      "name": "IRIS",
+      "full_name": "Interface Region Imaging Spectrograph",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "28 Jun 2013",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "649",
+      "payload": [
+        "IRIS (IRIS)"
+      ],
+      "launch_mass": "236 kg",
+      "dry_mass": null,
+      "power": "294 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 206,
+      "slug": "jason_3",
+      "name": "JASON-3",
+      "full_name": "Joint Altimetry Satellite Oceanography Network - 3",
+      "agency": "NOAA,CNES,EUMETSAT",
+      "status": "Operational",
+      "launched": "17 Jan 2016",
+      "orbit": "Drifting orbit",
+      "altitude_km": "1336",
+      "payload": [
+        "AMR",
+        "CARMEN",
+        "DORIS",
+        "LPT",
+        "LRA (NASA)",
+        "Poseidon-3B",
+        "TRSR"
+      ],
+      "launch_mass": "553 kg",
+      "dry_mass": "525 kg",
+      "power": "550 W",
+      "updated": "2026-08-24"
+    },
+    {
+      "id": 674,
+      "slug": "jilin_1",
+      "name": "Jilin-1",
+      "full_name": "Jilin-1",
+      "agency": "CGSTL",
+      "status": "Operational",
+      "launched": "05 Jun 2019",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "528",
+      "payload": [
+        "Jilin Imager"
+      ],
+      "launch_mass": null,
+      "dry_mass": "230 kg",
+      "power": null,
+      "updated": "2026-06-22"
+    },
+    {
+      "id": 212,
+      "slug": "kanopus_v_ik_1",
+      "name": "KANOPUS-V-IK-1",
+      "full_name": "Kanopus-Vulkan-Infra-Krasny-1",
+      "agency": "Roscosmos,RosHydroMet",
+      "status": "Operational",
+      "launched": "14 Jul 2017",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "510",
+      "payload": [
+        "MSS (KANOPUS)",
+        "MSU-IK-SR",
+        "PSS"
+      ],
+      "launch_mass": "473 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-01-19"
+    },
+    {
+      "id": 730,
+      "slug": "kanopus_v3",
+      "name": "KANOPUS-V3",
+      "full_name": "KANOPUS-V3",
+      "agency": "Roscosmos,RosHydroMet",
+      "status": "Operational",
+      "launched": "01 Feb 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "510",
+      "payload": [
+        "MSS (KANOPUS)",
+        "MSU-200",
+        "PSS"
+      ],
+      "launch_mass": "473 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 732,
+      "slug": "kanopus_v4",
+      "name": "KANOPUS-V4",
+      "full_name": "KANOPUS-V4",
+      "agency": "Roscosmos,RosHydroMet",
+      "status": "Operational",
+      "launched": "01 Feb 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "510",
+      "payload": [
+        "MSS (KANOPUS)",
+        "MSU-200",
+        "PSS"
+      ],
+      "launch_mass": "473 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 770,
+      "slug": "kanopus_v5",
+      "name": "KANOPUS-V5",
+      "full_name": "KANOPUS-V5",
+      "agency": "Roscosmos,RosHydroMet",
+      "status": "Operational",
+      "launched": "27 Dec 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "510",
+      "payload": [
+        "MSS (KANOPUS)",
+        "MSU-200",
+        "PSS"
+      ],
+      "launch_mass": "473 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 771,
+      "slug": "kanopus_v6",
+      "name": "KANOPUS-V6",
+      "full_name": "KANOPUS-V6",
+      "agency": "Roscosmos,RosHydroMet",
+      "status": "Operational",
+      "launched": "27 Dec 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "510",
+      "payload": [
+        "MSS (KANOPUS)",
+        "MSU-200",
+        "PSS"
+      ],
+      "launch_mass": "473 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 215,
+      "slug": "kompsat_3",
+      "name": "KOMPSAT-3",
+      "full_name": "Korea Multi-Purpose Satellite - 3",
+      "agency": "KARI",
+      "status": "Operational",
+      "launched": "17 May 2012",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "675",
+      "payload": [
+        "AEISS"
+      ],
+      "launch_mass": null,
+      "dry_mass": "1000 kg",
+      "power": "1300 W",
+      "updated": "2026-01-19"
+    },
+    {
+      "id": 481,
+      "slug": "kompsat_3a",
+      "name": "KOMPSAT-3A",
+      "full_name": "Korea Multi-Purpose Satellite - 3A",
+      "agency": "KARI",
+      "status": "Operational",
+      "launched": "26 Mar 2015",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "528",
+      "payload": [
+        "AEISS",
+        "IIP"
+      ],
+      "launch_mass": null,
+      "dry_mass": "1000 kg",
+      "power": "1300 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 216,
+      "slug": "kompsat_5",
+      "name": "KOMPSAT-5",
+      "full_name": "Korea Multi-Purpose Satellite - 5",
+      "agency": "KARI",
+      "status": "Operational",
+      "launched": "22 Aug 2013",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "550",
+      "payload": [
+        "AOPOD",
+        "COSI",
+        "LRR (DLR)"
+      ],
+      "launch_mass": "1400 kg",
+      "dry_mass": null,
+      "power": "1400 W",
+      "updated": "2026-08-27"
+    },
+    {
+      "id": 1006,
+      "slug": "kondor_fka_1",
+      "name": "Kondor-FKA 1",
+      "full_name": "Kondor-Experimental SAR Spacecraft FKA 1",
+      "agency": "NPOMash",
+      "status": "Operational",
+      "launched": "26 May 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "510",
+      "payload": [
+        "SAR-10"
+      ],
+      "launch_mass": "1100 kg",
+      "dry_mass": null,
+      "power": "1500 W",
+      "updated": "2024-01-02"
+    },
+    {
+      "id": 1007,
+      "slug": "kondor_fka_2",
+      "name": "Kondor-FKA 2",
+      "full_name": "Kondor-Experimental SAR Spacecraft FKA 2",
+      "agency": "NPOMash",
+      "status": "Operational",
+      "launched": "29 Nov 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "510",
+      "payload": [
+        "SAR-10"
+      ],
+      "launch_mass": "1100 kg",
+      "dry_mass": null,
+      "power": "1500 W",
+      "updated": "2025-09-15"
+    },
+    {
+      "id": 217,
+      "slug": "lageos_1",
+      "name": "LAGEOS-1",
+      "full_name": "Laser Geodynamics Satellite - 1",
+      "agency": "ASI,NASA",
+      "status": "Operational",
+      "launched": "04 May 1976",
+      "orbit": "Drifting orbit",
+      "altitude_km": "5900",
+      "payload": [
+        "LRA (ASI)"
+      ],
+      "launch_mass": "407 kg",
+      "dry_mass": "407 kg",
+      "power": null,
+      "updated": "2018-12-28"
+    },
+    {
+      "id": 218,
+      "slug": "lageos_2",
+      "name": "LAGEOS-2",
+      "full_name": "Laser Geodynamics Satellite - 2",
+      "agency": "ASI,NASA",
+      "status": "Operational",
+      "launched": "22 Oct 1992",
+      "orbit": "Drifting orbit",
+      "altitude_km": "5780",
+      "payload": [
+        "LRA (ASI)"
+      ],
+      "launch_mass": "405 kg",
+      "dry_mass": "405 kg",
+      "power": null,
+      "updated": "2018-12-28"
+    },
+    {
+      "id": 227,
+      "slug": "landsat_8",
+      "name": "Landsat-8",
+      "full_name": "Landsat-8",
+      "agency": "USGS,NASA",
+      "status": "Operational",
+      "launched": "11 Feb 2013",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "705",
+      "payload": [
+        "OLI",
+        "TIRS"
+      ],
+      "launch_mass": "2623 kg",
+      "dry_mass": "1512 kg",
+      "power": "4300 W",
+      "updated": "2026-01-19"
+    },
+    {
+      "id": 724,
+      "slug": "landsat_9",
+      "name": "Landsat-9",
+      "full_name": "Landsat-9",
+      "agency": "USGS,NASA",
+      "status": "Operational",
+      "launched": "27 Sep 2021",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "705",
+      "payload": [
+        "OLI",
+        "TIRS"
+      ],
+      "launch_mass": "2623 kg",
+      "dry_mass": "1512 kg",
+      "power": "4300 W",
+      "updated": "2024-09-30"
+    },
+    {
+      "id": 226,
+      "slug": "lares_1",
+      "name": "LARES-1",
+      "full_name": "Laser RElativity Satellite - 1",
+      "agency": "ASI,NASA",
+      "status": "Operational",
+      "launched": "13 Feb 2012",
+      "orbit": "Drifting orbit",
+      "altitude_km": "1450",
+      "payload": [
+        "LRA (ASI)"
+      ],
+      "launch_mass": "387 kg",
+      "dry_mass": "387 kg",
+      "power": null,
+      "updated": "2024-08-12"
+    },
+    {
+      "id": 809,
+      "slug": "lares_2",
+      "name": "LARES-2",
+      "full_name": "Laser RElativity Satellite - 2",
+      "agency": "ASI,NASA",
+      "status": "Operational",
+      "launched": "13 Jul 2022",
+      "orbit": "Drifting orbit",
+      "altitude_km": "5899",
+      "payload": [
+        "LRA (ASI)"
+      ],
+      "launch_mass": "297.5 kg",
+      "dry_mass": "297.5 kg",
+      "power": null,
+      "updated": "2024-08-12"
+    },
+    {
+      "id": 827,
+      "slug": "lemur_2",
+      "name": "Lemur-2",
+      "full_name": "Low Earth Multi-Use Receiver - 2",
+      "agency": "SPIRE",
+      "status": "Operational",
+      "launched": "28 Sep 2015",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "550",
+      "payload": [
+        "STRATOS"
+      ],
+      "launch_mass": "4.6 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-10-05"
+    },
+    {
+      "id": 959,
+      "slug": "ludi_tance_1_01a",
+      "name": "Ludi-Tance 1 01A",
+      "full_name": "L-band differential interferometric synthetic aperture radar satellite A",
+      "agency": "CNSA,CASC",
+      "status": "Operational",
+      "launched": "26 Jan 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "600",
+      "payload": [
+        "L band SAR (Ludi-Tance)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "3200 kg",
+      "power": null,
+      "updated": "2023-11-27"
+    },
+    {
+      "id": 960,
+      "slug": "ludi_tance_1_01b",
+      "name": "Ludi-Tance 1 01B",
+      "full_name": "L-band differential interferometric synthetic aperture radar satellite A",
+      "agency": "CNSA,CASC",
+      "status": "Operational",
+      "launched": "26 Feb 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "600",
+      "payload": [
+        "L band SAR (Ludi-Tance)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "3200 kg",
+      "power": null,
+      "updated": "2023-11-27"
+    },
+    {
+      "id": 1016,
+      "slug": "ludi_tance_4_01a",
+      "name": "Ludi-Tance 4 01A",
+      "full_name": "L-band differential interferometric synthetic aperture radar satellite 4 01A",
+      "agency": "CNSA,CASC",
+      "status": "Operational",
+      "launched": "12 Aug 2023",
+      "orbit": "Geosynchronous orbit",
+      "altitude_km": "36000",
+      "payload": [
+        "L band SAR (Ludi-Tance)"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2025-01-09"
+    },
+    {
+      "id": 764,
+      "slug": "mats",
+      "name": "MATS",
+      "full_name": "Mesospheric Airglow/Aerosol Tomography and Spectroscopy",
+      "agency": "SNSA",
+      "status": "Operational",
+      "launched": "04 Nov 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "585",
+      "payload": [
+        "MATS"
+      ],
+      "launch_mass": "50 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 615,
+      "slug": "meteor_m_n2_3",
+      "name": "Meteor-M N2-3",
+      "full_name": "Meteor-M Number 2-3",
+      "agency": "RosHydroMet,Roscosmos",
+      "status": "Operational",
+      "launched": "27 Jun 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "820",
+      "payload": [
+        "GGAK-E/GALS-E (Meteor)",
+        "GGAK-E/SKIF-6 (Meteor)",
+        "GGAK-M/RIMS-M",
+        "IKFS-2",
+        "KMSS",
+        "MSU-MR",
+        "MTVZA-GY",
+        "MeteoSAR",
+        "SAS&R (Meteor)"
+      ],
+      "launch_mass": "2900 kg",
+      "dry_mass": "2750 kg",
+      "power": "2000 W",
+      "updated": "2026-01-23"
+    },
+    {
+      "id": 616,
+      "slug": "meteor_m_n2_4",
+      "name": "Meteor-M N2-4",
+      "full_name": "Meteor-M Number 2-4",
+      "agency": "RosHydroMet,Roscosmos",
+      "status": "Operational",
+      "launched": "29 Feb 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "820.7",
+      "payload": [
+        "GGAK-E/GALS-E (Meteor)",
+        "GGAK-E/SKIF-6 (Meteor)",
+        "GGAK-M/RIMS-M",
+        "IKFS-2",
+        "IKOR-M",
+        "KMSS",
+        "MSU-MR",
+        "MTVZA-GY",
+        "MeteoSAR",
+        "SAS&R (Meteor)",
+        "SSPD"
+      ],
+      "launch_mass": "2900 kg",
+      "dry_mass": "2750 kg",
+      "power": "2000 W",
+      "updated": "2026-01-23"
+    },
+    {
+      "id": 304,
+      "slug": "meteosat_10",
+      "name": "Meteosat-10",
+      "full_name": "Meteosat-10",
+      "agency": "EUMETSAT,ESA",
+      "status": "Operational",
+      "launched": "05 Jul 2012",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "DCS (Meteosat)",
+        "GEOS&R ",
+        "GERB",
+        "SEVIRI"
+      ],
+      "launch_mass": "2040 kg",
+      "dry_mass": "1070 kg",
+      "power": "600 W",
+      "updated": "2025-11-17"
+    },
+    {
+      "id": 305,
+      "slug": "meteosat_11",
+      "name": "Meteosat-11",
+      "full_name": "Meteosat-11",
+      "agency": "EUMETSAT,ESA",
+      "status": "Operational",
+      "launched": "15 Jul 2015",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "DCS (Meteosat)",
+        "GEOS&R ",
+        "GERB",
+        "SEVIRI"
+      ],
+      "launch_mass": "2040 kg",
+      "dry_mass": "1070 kg",
+      "power": "600 W",
+      "updated": "2024-11-11"
+    },
+    {
+      "id": 289,
+      "slug": "meteosat_12",
+      "name": "Meteosat-12",
+      "full_name": "Meteosat-12 (formerly MTG-1)",
+      "agency": "EUMETSAT,EC,ESA",
+      "status": "Operational",
+      "launched": "13 Dec 2022",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "DCS (Meteosat)",
+        "FCI",
+        "GEOS&R ",
+        "LI",
+        "RMU"
+      ],
+      "launch_mass": "3600 kg",
+      "dry_mass": "1600 kg",
+      "power": "2000 W",
+      "updated": "2026-03-19"
+    },
+    {
+      "id": 918,
+      "slug": "meteosat_9_iodc",
+      "name": "Meteosat-9 (IODC)",
+      "full_name": "Meteosat-9 (IODC)",
+      "agency": "EUMETSAT,ESA",
+      "status": "Operational",
+      "launched": "01 Jul 2022",
+      "orbit": "Geostationary orbit",
+      "altitude_km": "35786",
+      "payload": [
+        "DCS (Meteosat)",
+        "GEOS&R ",
+        "GERB",
+        "SEVIRI"
+      ],
+      "launch_mass": "2040 kg",
+      "dry_mass": "1070 kg",
+      "power": "600 W",
+      "updated": "2025-11-17"
+    },
+    {
+      "id": 307,
+      "slug": "metop_b",
+      "name": "Metop-B",
+      "full_name": "Meteorological operational satellite - B",
+      "agency": "EUMETSAT,ESA",
+      "status": "Operational",
+      "launched": "17 Sep 2012",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "830",
+      "payload": [
+        "A-DCS (degraded)",
+        "AMSU-A (degraded)",
+        "ASCAT",
+        "AVHRR/3",
+        "GOME-2",
+        "GRAS",
+        "IASI",
+        "MHS",
+        "S&RSAT (degraded)",
+        "SEM/MEPED",
+        "SEM/TED"
+      ],
+      "launch_mass": "4087 kg",
+      "dry_mass": "3771 kg",
+      "power": "2210 W",
+      "updated": "2026-08-27"
+    },
+    {
+      "id": 308,
+      "slug": "metop_c",
+      "name": "Metop-C",
+      "full_name": "Meteorological operational satellite - C",
+      "agency": "EUMETSAT,ESA",
+      "status": "Operational",
+      "launched": "07 Nov 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "827",
+      "payload": [
+        "A-DCS",
+        "AMSU-A (degraded)",
+        "ASCAT",
+        "AVHRR/3",
+        "GOME-2",
+        "GRAS",
+        "IASI",
+        "MHS (degraded)",
+        "SEM/MEPED",
+        "SEM/TED"
+      ],
+      "launch_mass": "3950 kg",
+      "dry_mass": "3650 kg",
+      "power": "2100 W",
+      "updated": "2026-08-27"
+    },
+    {
+      "id": 825,
+      "slug": "microcarb",
+      "name": "MicroCarb",
+      "full_name": "MicroCarb",
+      "agency": "CNES,EUMETSAT,UKSA",
+      "status": "Operational",
+      "launched": "26 Jul 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "650",
+      "payload": [
+        "MicroCarb"
+      ],
+      "launch_mass": "175 kg",
+      "dry_mass": "80 kg",
+      "power": "200 W",
+      "updated": "2026-06-08"
+    },
+    {
+      "id": 954,
+      "slug": "miman",
+      "name": "MIMAN",
+      "full_name": "Monochrome Imaging for Monitoring Aerosol by Nanosatellite",
+      "agency": "KARI",
+      "status": "Operational",
+      "launched": "21 Jun 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "710",
+      "payload": [
+        "MIMAN"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 456,
+      "slug": "mms_a",
+      "name": "MMS-A",
+      "full_name": "Magnetospheric MultiScale mission - A",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "13 Mar 2015",
+      "orbit": "Cross-magnetosphere orbit",
+      "altitude_km": null,
+      "payload": [
+        "AFG",
+        "ASPOC (MMS)",
+        "DFG",
+        "DP",
+        "EDI (MMS)",
+        "EIS (MSS)",
+        "FEEPS",
+        "FPI",
+        "HPCA",
+        "SCM (MMS)"
+      ],
+      "launch_mass": "1250 kg",
+      "dry_mass": "890 kg",
+      "power": "318 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 815,
+      "slug": "mms_b",
+      "name": "MMS-B",
+      "full_name": "Magnetospheric MultiScale mission - B",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "13 Mar 2015",
+      "orbit": "Cross-magnetosphere orbit",
+      "altitude_km": null,
+      "payload": [
+        "AFG",
+        "ASPOC (MMS)",
+        "DFG",
+        "DP (degraded)",
+        "EDI (MMS) (degraded)",
+        "EIS (MSS)",
+        "FEEPS",
+        "FPI",
+        "HPCA",
+        "SCM (MMS)"
+      ],
+      "launch_mass": "1250 kg",
+      "dry_mass": "890 kg",
+      "power": "318 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 816,
+      "slug": "mms_c",
+      "name": "MMS-C",
+      "full_name": "Magnetospheric MultiScale mission - C",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "13 Mar 2015",
+      "orbit": "Cross-magnetosphere orbit",
+      "altitude_km": null,
+      "payload": [
+        "AFG",
+        "ASPOC (MMS)",
+        "DFG",
+        "DP",
+        "EDI (MMS) (degraded)",
+        "EIS (MSS)",
+        "FEEPS",
+        "FPI (degraded)",
+        "HPCA",
+        "SCM (MMS)"
+      ],
+      "launch_mass": "1250 kg",
+      "dry_mass": "890 kg",
+      "power": "318 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 817,
+      "slug": "mms_d",
+      "name": "MMS-D",
+      "full_name": "Magnetospheric MultiScale mission - D",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "13 Mar 2015",
+      "orbit": "Cross-magnetosphere orbit",
+      "altitude_km": null,
+      "payload": [
+        "AFG",
+        "ASPOC (MMS)",
+        "DFG",
+        "DP (degraded)",
+        "EDI (MMS)",
+        "EIS (MSS)",
+        "FEEPS",
+        "FPI (degraded)",
+        "HPCA",
+        "SCM (MMS)"
+      ],
+      "launch_mass": "1250 kg",
+      "dry_mass": "890 kg",
+      "power": "318 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 736,
+      "slug": "mohammed_vi_a",
+      "name": "Mohammed VI-A",
+      "full_name": "Mohammed VI-A",
+      "agency": "CRTS",
+      "status": "Operational",
+      "launched": "08 Nov 2017",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "620",
+      "payload": [
+        "HiRI"
+      ],
+      "launch_mass": "1110 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 737,
+      "slug": "mohammed_vi_b",
+      "name": "Mohammed VI-B",
+      "full_name": "Mohammed VI-B",
+      "agency": "CRTS",
+      "status": "Operational",
+      "launched": "21 Nov 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "620",
+      "payload": [
+        "HiRI"
+      ],
+      "launch_mass": "1110 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 1058,
+      "slug": "musat_2",
+      "name": "MuSat-2",
+      "full_name": "MuSat-2",
+      "agency": "MUON SPACE",
+      "status": "Operational",
+      "launched": "04 Mar 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "622",
+      "payload": [
+        "GNSS-R (MuSat)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "67 kg",
+      "power": null,
+      "updated": "2025-03-17"
+    },
+    {
+      "id": 958,
+      "slug": "nachos_2",
+      "name": "NACHOS-2",
+      "full_name": "Nano-satellite Atmospheric Chemistry Hyperspectral Observation System-1",
+      "agency": "LANL,NASA",
+      "status": "Operational",
+      "launched": "02 Jul 2022",
+      "orbit": "Drifting orbit",
+      "altitude_km": "500",
+      "payload": [
+        "NACHOS-Imager"
+      ],
+      "launch_mass": null,
+      "dry_mass": "6.25 kg",
+      "power": null,
+      "updated": "2023-03-06"
+    },
+    {
+      "id": 1188,
+      "slug": "neonsat_1a",
+      "name": "NEONSAT-1A",
+      "full_name": "NEONSAT-1A",
+      "agency": "KAIST,KARI",
+      "status": "Operational",
+      "launched": "30 Jan 2026",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "543",
+      "payload": [],
+      "launch_mass": "100 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-09-28"
+    },
+    {
+      "id": 639,
+      "slug": "nisar",
+      "name": "NISAR",
+      "full_name": "NASA-ISRO Synthetic Aperture Radar",
+      "agency": "NASA,ISRO",
+      "status": "Operational",
+      "launched": "30 Jul 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "747",
+      "payload": [
+        "SAR-L (NISAR)",
+        "SAR-S (NISAR) "
+      ],
+      "launch_mass": null,
+      "dry_mass": "2392 kg",
+      "power": null,
+      "updated": "2026-02-23"
+    },
+    {
+      "id": 208,
+      "slug": "noaa_20",
+      "name": "NOAA-20",
+      "full_name": "National Oceanic and Atmospheric Administration - 20",
+      "agency": "NOAA,NASA",
+      "status": "Operational",
+      "launched": "18 Nov 2017",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "824",
+      "payload": [
+        "ATMS",
+        "CERES",
+        "CrIS",
+        "OMPS-nadir",
+        "VIIRS"
+      ],
+      "launch_mass": "2540 kg",
+      "dry_mass": null,
+      "power": "1932 W",
+      "updated": "2026-08-24"
+    },
+    {
+      "id": 209,
+      "slug": "noaa_21",
+      "name": "NOAA-21",
+      "full_name": "National Oceanic and Atmospheric Administration - 21",
+      "agency": "NOAA,NASA",
+      "status": "Operational",
+      "launched": "10 Nov 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "824",
+      "payload": [
+        "ATMS",
+        "CrIS",
+        "OMPS-limb",
+        "OMPS-nadir",
+        "VIIRS"
+      ],
+      "launch_mass": "2540 kg",
+      "dry_mass": null,
+      "power": "1932 W",
+      "updated": "2026-08-24"
+    },
+    {
+      "id": 767,
+      "slug": "novasar_s",
+      "name": "NovaSAR-S",
+      "full_name": "NovaSAR-S",
+      "agency": "SSTL,UKSA",
+      "status": "Operational",
+      "launched": "16 Sep 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "580",
+      "payload": [
+        "S-SAR"
+      ],
+      "launch_mass": "430 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 345,
+      "slug": "oceansat_3_eos_06",
+      "name": "OceanSat-3 (EOS-06)",
+      "full_name": "OceanSat-3 (EOS-06)",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "26 Nov 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "723",
+      "payload": [
+        "Argos-4",
+        "OCM (OceanSat-3)",
+        "OSCAT-3"
+      ],
+      "launch_mass": "960 kg",
+      "dry_mass": null,
+      "power": "1360 W",
+      "updated": "2026-08-24"
+    },
+    {
+      "id": 347,
+      "slug": "oco_2",
+      "name": "OCO-2",
+      "full_name": "Orbiting Carbon Observatory - 2",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "02 Jul 2014",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "705",
+      "payload": [
+        "OCO spectrometer"
+      ],
+      "launch_mass": "460 kg",
+      "dry_mass": "315 kg",
+      "power": "521 W",
+      "updated": "2025-09-01"
+    },
+    {
+      "id": 358,
+      "slug": "pace",
+      "name": "PACE",
+      "full_name": "Plankton, Aerosol, Cloud, ocean Ecosystem",
+      "agency": "NASA,CNES",
+      "status": "Operational",
+      "launched": "08 Feb 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "676",
+      "payload": [
+        "HARP2",
+        "OCI",
+        "SPEXone"
+      ],
+      "launch_mass": "1700 kg",
+      "dry_mass": null,
+      "power": "1000 W",
+      "updated": "2024-11-04"
+    },
+    {
+      "id": 577,
+      "slug": "parker_solar_probe",
+      "name": "Parker Solar Probe",
+      "full_name": "Parker Solar Probe",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "12 Aug 2018",
+      "orbit": "Solar orbit",
+      "altitude_km": null,
+      "payload": [
+        "FIELDS",
+        "ISIS-EPI",
+        "SWEAPI",
+        "WISPR"
+      ],
+      "launch_mass": "610 kg",
+      "dry_mass": "555 kg",
+      "power": "343 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 1035,
+      "slug": "pelican",
+      "name": "Pelican",
+      "full_name": "Pelican",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "11 Nov 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "475",
+      "payload": [
+        "Pelican Imager"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-10-22"
+    },
+    {
+      "id": 707,
+      "slug": "perusat_1",
+      "name": "PeruSat-1",
+      "full_name": "PeruSat-1",
+      "agency": "CONIDA",
+      "status": "Operational",
+      "launched": "16 Sep 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "705",
+      "payload": [
+        "NAOMI (KazEOSat)"
+      ],
+      "launch_mass": "430 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2017-08-03"
+    },
+    {
+      "id": 1015,
+      "slug": "piesat_1",
+      "name": "PIESAT-1",
+      "full_name": "PIESAT-1 (also known as Hongtu-1)",
+      "agency": "CASC",
+      "status": "Operational",
+      "launched": "30 Mar 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "530",
+      "payload": [
+        "X-SAR (PIESAT)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "320 kg",
+      "power": null,
+      "updated": "2024-11-11"
+    },
+    {
+      "id": 1089,
+      "slug": "piesat_2",
+      "name": "PIESAT-2",
+      "full_name": "PIESAT-2",
+      "agency": "CASC",
+      "status": "Operational",
+      "launched": "09 Nov 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "530",
+      "payload": [
+        "X-SAR (PIESAT)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "320 kg",
+      "power": null,
+      "updated": "2025-05-12"
+    },
+    {
+      "id": 361,
+      "slug": "pleiades_1a",
+      "name": "Pléiades-1A",
+      "full_name": "Pleiades-1A",
+      "agency": "CNES",
+      "status": "Operational",
+      "launched": "17 Dec 2011",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "705",
+      "payload": [
+        "HiRI"
+      ],
+      "launch_mass": "1015 kg",
+      "dry_mass": "940 kg",
+      "power": "1000 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 362,
+      "slug": "pleiades_1b",
+      "name": "Pléiades-1B",
+      "full_name": "Pleiades-1B",
+      "agency": "CNES",
+      "status": "Operational",
+      "launched": "02 Dec 2012",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "694",
+      "payload": [
+        "HiRI"
+      ],
+      "launch_mass": "1015 kg",
+      "dry_mass": "940 kg",
+      "power": "1000 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 821,
+      "slug": "pleiades_neo_3",
+      "name": "Pléiades-Neo 3",
+      "full_name": "Pléiades-Neo 3",
+      "agency": "Airbus",
+      "status": "Operational",
+      "launched": "29 Apr 2021",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "620",
+      "payload": [
+        "Pléiades-Neo"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2021-08-25"
+    },
+    {
+      "id": 822,
+      "slug": "pleiades_neo_4",
+      "name": "Pléiades-Neo 4",
+      "full_name": "Pléiades-Neo 4",
+      "agency": "Airbus",
+      "status": "Operational",
+      "launched": "17 Aug 2021",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "620",
+      "payload": [
+        "Pléiades-Neo"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2022-02-01"
+    },
+    {
+      "id": 875,
+      "slug": "prefire_1",
+      "name": "PREFIRE-1",
+      "full_name": "Polar Radiant Energy in the Far Infrared Experiment-1",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "05 Jun 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "544",
+      "payload": [
+        "TIRS (PREFIRE)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "3 kg",
+      "power": "4.5 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 1063,
+      "slug": "prefire_2",
+      "name": "PREFIRE-2",
+      "full_name": "Polar Radiant Energy in the Far Infrared Experiment-2",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "25 May 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "530",
+      "payload": [
+        "TIRS (PREFIRE)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "3 kg",
+      "power": "4.5 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 1001,
+      "slug": "pretty",
+      "name": "PRETTY",
+      "full_name": "Passive Reflectometry and Dosimetry",
+      "agency": "ESA",
+      "status": "Operational",
+      "launched": "06 Oct 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "491",
+      "payload": [
+        "Dosimeter",
+        "GNSS-R (PRETTY)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "6 kg",
+      "power": "24 W",
+      "updated": "2026-10-19"
+    },
+    {
+      "id": 363,
+      "slug": "prisma",
+      "name": "PRISMA",
+      "full_name": "PRecursore IperSpettrale della Missione Applicativa",
+      "agency": "ASI",
+      "status": "Operational",
+      "launched": "22 Mar 2019",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "615",
+      "payload": [
+        "HYC",
+        "PAN"
+      ],
+      "launch_mass": "879 kg",
+      "dry_mass": null,
+      "power": "350 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 364,
+      "slug": "proba_1",
+      "name": "PROBA-1",
+      "full_name": "Project for On-Board Autonomy - 1",
+      "agency": "ESA",
+      "status": "Operational",
+      "launched": "22 Oct 2001",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "615",
+      "payload": [
+        "HRC",
+        "SREM-dose",
+        "SREM-particles"
+      ],
+      "launch_mass": "94 kg",
+      "dry_mass": null,
+      "power": "90 W",
+      "updated": "2026-10-19"
+    },
+    {
+      "id": 490,
+      "slug": "proba_2",
+      "name": "PROBA-2",
+      "full_name": "Project for On-Board Autonomy - 2",
+      "agency": "ESA",
+      "status": "Operational",
+      "launched": "02 Nov 2009",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "730",
+      "payload": [
+        "DSLP",
+        "LYRA",
+        "SWAP",
+        "TPMU"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": "120 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 1046,
+      "slug": "proba_3c",
+      "name": "PROBA-3C",
+      "full_name": "PROBA-3 Coronograph",
+      "agency": "ESA",
+      "status": "Operational",
+      "launched": "05 Dec 2024",
+      "orbit": "Molniya orbit",
+      "altitude_km": null,
+      "payload": [
+        "ASPIICS"
+      ],
+      "launch_mass": null,
+      "dry_mass": "350 kg",
+      "power": null,
+      "updated": "2025-09-15"
+    },
+    {
+      "id": 1047,
+      "slug": "proba_3o",
+      "name": "PROBA-3O",
+      "full_name": "PROBA-3 Occulter",
+      "agency": "ESA",
+      "status": "Operational",
+      "launched": "05 Dec 2024",
+      "orbit": "Molniya orbit",
+      "altitude_km": null,
+      "payload": [
+        "Occulter"
+      ],
+      "launch_mass": null,
+      "dry_mass": "200 kg",
+      "power": null,
+      "updated": "2025-09-15"
+    },
+    {
+      "id": 1021,
+      "slug": "proba_v_cc",
+      "name": "PROBA-V-CC",
+      "full_name": "Project for On-Board Autonomy - Végétation Companion Cubesat",
+      "agency": "ESA",
+      "status": "Operational",
+      "launched": "09 Oct 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "574",
+      "payload": [
+        "Végétation-P"
+      ],
+      "launch_mass": null,
+      "dry_mass": "18 kg",
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 928,
+      "slug": "punch",
+      "name": "PUNCH",
+      "full_name": "Polarimeter to UNify the Corona and Heliosphere",
+      "agency": "NASA,NRL",
+      "status": "Operational",
+      "launched": "12 Mar 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "570",
+      "payload": [
+        "NFI",
+        "STEAM",
+        "WFI (PUNCH)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "40 kg",
+      "power": "55 W",
+      "updated": "2026-07-27"
+    },
+    {
+      "id": 1137,
+      "slug": "qps_sar_10",
+      "name": "QPS-SAR 10",
+      "full_name": "QPS-SAR 10 (Wadatsumi 1)",
+      "agency": "iQPS",
+      "status": "Operational",
+      "launched": "17 May 2025",
+      "orbit": "Drifting orbit",
+      "altitude_km": "580",
+      "payload": [
+        "QPS-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": null,
+      "updated": "2026-02-23"
+    },
+    {
+      "id": 1138,
+      "slug": "qps_sar_11",
+      "name": "QPS-SAR 11",
+      "full_name": "QPS-SAR 11 (Yamatsumi 1)",
+      "agency": "iQPS",
+      "status": "Operational",
+      "launched": "11 Jun 2025",
+      "orbit": "Drifting orbit",
+      "altitude_km": "580",
+      "payload": [
+        "QPS-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": null,
+      "updated": "2026-02-23"
+    },
+    {
+      "id": 1140,
+      "slug": "qps_sar_12",
+      "name": "QPS-SAR 12",
+      "full_name": "QPS-SAR 12 (Kushinada 1)",
+      "agency": "iQPS",
+      "status": "Operational",
+      "launched": "05 Aug 2025",
+      "orbit": "Drifting orbit",
+      "altitude_km": "580",
+      "payload": [
+        "QPS-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": null,
+      "updated": "2026-02-23"
+    },
+    {
+      "id": 1151,
+      "slug": "qps_sar_14",
+      "name": "QPS-SAR 14",
+      "full_name": "QPS-SAR 14 (Yachihoko)",
+      "agency": "iQPS",
+      "status": "Operational",
+      "launched": "05 Nov 2025",
+      "orbit": "Drifting orbit",
+      "altitude_km": "580",
+      "payload": [
+        "QPS-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": null,
+      "updated": "2026-08-10"
+    },
+    {
+      "id": 1157,
+      "slug": "qps_sar_15",
+      "name": "QPS-SAR 15",
+      "full_name": "QPS-SAR 15 (Sukunami 1)",
+      "agency": "iQPS",
+      "status": "Operational",
+      "launched": "21 Dec 2025",
+      "orbit": "Drifting orbit",
+      "altitude_km": "580",
+      "payload": [
+        "QPS-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": null,
+      "updated": "2026-08-10"
+    },
+    {
+      "id": 1132,
+      "slug": "qps_sar_5",
+      "name": "QPS-SAR 5",
+      "full_name": "QPS-SAR 5 (Tsukuyomi 1)",
+      "agency": "iQPS",
+      "status": "Operational",
+      "launched": "15 Dec 2023",
+      "orbit": "Drifting orbit",
+      "altitude_km": "580",
+      "payload": [
+        "QPS-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": null,
+      "updated": "2025-06-16"
+    },
+    {
+      "id": 1133,
+      "slug": "qps_sar_6",
+      "name": "QPS-SAR 6",
+      "full_name": "QPS-SAR 6 (Amateru 3)",
+      "agency": "iQPS",
+      "status": "Operational",
+      "launched": "12 Jun 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "QPS-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": null,
+      "updated": "2025-06-16"
+    },
+    {
+      "id": 1134,
+      "slug": "qps_sar_7",
+      "name": "QPS-SAR 7",
+      "full_name": "QPS-SAR 7 (Tsukuyomi 2)",
+      "agency": "iQPS",
+      "status": "Operational",
+      "launched": "08 Apr 2024",
+      "orbit": "Drifting orbit",
+      "altitude_km": "590",
+      "payload": [
+        "QPS-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": null,
+      "updated": "2025-06-16"
+    },
+    {
+      "id": 1135,
+      "slug": "qps_sar_8",
+      "name": "QPS-SAR 8",
+      "full_name": "QPS-SAR 8 (Amateru 4)",
+      "agency": "iQPS",
+      "status": "Operational",
+      "launched": "16 Aug 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "550",
+      "payload": [
+        "QPS-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": null,
+      "updated": "2025-06-16"
+    },
+    {
+      "id": 1136,
+      "slug": "qps_sar_9",
+      "name": "QPS-SAR 9",
+      "full_name": "QPS-SAR 9 (Susanoo-1)",
+      "agency": "iQPS",
+      "status": "Operational",
+      "launched": "15 Mar 2025",
+      "orbit": "Drifting orbit",
+      "altitude_km": "573",
+      "payload": [
+        "QPS-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": null,
+      "updated": "2025-06-16"
+    },
+    {
+      "id": 367,
+      "slug": "radarsat_2",
+      "name": "RadarSat-2",
+      "full_name": "RadarSat-2",
+      "agency": "CSA",
+      "status": "Operational",
+      "launched": "14 Dec 2007",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "798",
+      "payload": [
+        "SAR (RadarSat-1)"
+      ],
+      "launch_mass": "2200 kg",
+      "dry_mass": null,
+      "power": "2400 W",
+      "updated": "2026-10-26"
+    },
+    {
+      "id": 370,
+      "slug": "rcm_1",
+      "name": "RCM-1",
+      "full_name": "RadarSat Constellation Mission - 1",
+      "agency": "CSA",
+      "status": "Operational",
+      "launched": "12 Jun 2019",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "592",
+      "payload": [
+        "AIS",
+        "SAR RCM"
+      ],
+      "launch_mass": "1300 kg",
+      "dry_mass": null,
+      "power": "1600 W",
+      "updated": "2026-10-26"
+    },
+    {
+      "id": 1085,
+      "slug": "rcm_2",
+      "name": "RCM-2",
+      "full_name": "RadarSat Constellation Mission - 1",
+      "agency": "CSA",
+      "status": "Operational",
+      "launched": "12 Jun 2019",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "592",
+      "payload": [
+        "AIS",
+        "SAR RCM"
+      ],
+      "launch_mass": "1300 kg",
+      "dry_mass": null,
+      "power": "1600 W",
+      "updated": "2026-10-26"
+    },
+    {
+      "id": 1086,
+      "slug": "rcm_3",
+      "name": "RCM-3",
+      "full_name": "RadarSat Constellation Mission - 1",
+      "agency": "CSA",
+      "status": "Operational",
+      "launched": "12 Jun 2019",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "592",
+      "payload": [
+        "AIS",
+        "SAR RCM"
+      ],
+      "launch_mass": "1300 kg",
+      "dry_mass": null,
+      "power": "1600 W",
+      "updated": "2026-10-26"
+    },
+    {
+      "id": 374,
+      "slug": "resourcesat_2",
+      "name": "ResourceSat-2",
+      "full_name": "Satellite for Earth Resources - 2",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "20 Apr 2011",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "817",
+      "payload": [
+        "AWiFS",
+        "LISS-3 (ResourceSat)",
+        "LISS-4"
+      ],
+      "launch_mass": "1206 kg",
+      "dry_mass": null,
+      "power": "1250 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 602,
+      "slug": "resourcesat_2a",
+      "name": "ResourceSat-2A",
+      "full_name": "Satellite for Earth Resources - 2A",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "07 Dec 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "817",
+      "payload": [
+        "AWiFS (degraded)",
+        "LISS-3 (ResourceSat)",
+        "LISS-4"
+      ],
+      "launch_mass": "1206 kg",
+      "dry_mass": null,
+      "power": "1250 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 786,
+      "slug": "resurs_p4",
+      "name": "Resurs-P4",
+      "full_name": "Resurs-P4",
+      "agency": "Roscosmos",
+      "status": "Operational",
+      "launched": "31 Mar 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "477",
+      "payload": [
+        "GSA",
+        "Geoton-L1",
+        "ShMSA-SR",
+        "ShMSA-VR "
+      ],
+      "launch_mass": null,
+      "dry_mass": "6000 kg",
+      "power": "365 W",
+      "updated": "2024-10-21"
+    },
+    {
+      "id": 787,
+      "slug": "resurs_p5",
+      "name": "Resurs-P5",
+      "full_name": "Resurs-P5",
+      "agency": "Roscosmos",
+      "status": "Operational",
+      "launched": "25 Dec 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "477",
+      "payload": [
+        "GSA",
+        "Geoton-L1",
+        "ShMSA-VR "
+      ],
+      "launch_mass": "5730 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-23"
+    },
+    {
+      "id": 778,
+      "slug": "risat_2b",
+      "name": "RISAT-2B",
+      "full_name": "Radar Imaging Satellite - 2B",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "22 May 2019",
+      "orbit": "Drifting orbit",
+      "altitude_km": "555",
+      "payload": [
+        "SAR-X (RISAT-2)"
+      ],
+      "launch_mass": "615 kg",
+      "dry_mass": null,
+      "power": "2000 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 783,
+      "slug": "risat_2br1",
+      "name": "RISAT-2BR1",
+      "full_name": "Radar Imaging Satellite - 2BR-1",
+      "agency": "ISRO",
+      "status": "Operational",
+      "launched": "11 Dec 2019",
+      "orbit": "Drifting orbit",
+      "altitude_km": "555",
+      "payload": [
+        "SAR-X (RISAT-2)"
+      ],
+      "launch_mass": "615 kg",
+      "dry_mass": null,
+      "power": "2000 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 386,
+      "slug": "saocom_1a",
+      "name": "SAOCOM-1A",
+      "full_name": "SAtélite Argentino de Observación COn Microondas - 1A",
+      "agency": "CONAE",
+      "status": "Operational",
+      "launched": "08 Oct 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "620",
+      "payload": [
+        "SAR-L"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 387,
+      "slug": "saocom_1b",
+      "name": "SAOCOM-1B",
+      "full_name": "SAtélite Argentino de Observación COn Microondas - 1B",
+      "agency": "CONAE",
+      "status": "Operational",
+      "launched": "30 Aug 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "620",
+      "payload": [
+        "SAR-L"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 390,
+      "slug": "saral",
+      "name": "SARAL",
+      "full_name": "Satellite with ARGOS and AltiKa",
+      "agency": "CNES,ISRO",
+      "status": "Operational",
+      "launched": "25 Feb 2013",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "800",
+      "payload": [
+        "A-DCS",
+        "AltiKa",
+        "DORIS",
+        "LRA (CNES)"
+      ],
+      "launch_mass": "630 kg",
+      "dry_mass": "450 kg",
+      "power": "850 W",
+      "updated": "2026-08-24"
+    },
+    {
+      "id": 391,
+      "slug": "scd_1",
+      "name": "SCD-1",
+      "full_name": "Satélite de Coleta de Dados - 1",
+      "agency": "INPE,AEB",
+      "status": "Operational",
+      "launched": "09 Feb 1993",
+      "orbit": "Drifting orbit",
+      "altitude_km": "750",
+      "payload": [
+        "DCS (CBERS)"
+      ],
+      "launch_mass": "115 kg",
+      "dry_mass": null,
+      "power": "90 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 392,
+      "slug": "scd_2",
+      "name": "SCD-2",
+      "full_name": "Satélite de Coleta de Dados - 2",
+      "agency": "INPE,AEB",
+      "status": "Operational",
+      "launched": "22 Oct 1998",
+      "orbit": "Drifting orbit",
+      "altitude_km": "750",
+      "payload": [
+        "DCS (CBERS)"
+      ],
+      "launch_mass": "117 kg",
+      "dry_mass": null,
+      "power": "110 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 393,
+      "slug": "scisat_1",
+      "name": "SCISAT-1",
+      "full_name": "Scientific Satellite -1",
+      "agency": "CSA,NASA",
+      "status": "Operational",
+      "launched": "13 Aug 2003",
+      "orbit": "Drifting orbit",
+      "altitude_km": "650",
+      "payload": [
+        "ACE-FTS",
+        "MAESTRO (degraded)"
+      ],
+      "launch_mass": "152 kg",
+      "dry_mass": null,
+      "power": "75 W",
+      "updated": "2026-10-26"
+    },
+    {
+      "id": 1011,
+      "slug": "sdgsat_1",
+      "name": "SDGSAT-1",
+      "full_name": "Sustainable Development Science Satellite 1",
+      "agency": "CAS",
+      "status": "Operational",
+      "launched": "05 Nov 2021",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "505",
+      "payload": [
+        "GLIMMER",
+        "MSI (SDGSAT)",
+        "TIR"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 457,
+      "slug": "sdo",
+      "name": "SDO",
+      "full_name": "Solar Dynamics Observatory",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "11 Feb 2010",
+      "orbit": "Geosynchronous orbit",
+      "altitude_km": "35756",
+      "payload": [
+        "AIA",
+        "EVE",
+        "HMI"
+      ],
+      "launch_mass": "3200 kg",
+      "dry_mass": "1800 kg",
+      "power": "1540 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 754,
+      "slug": "sentinel_1c",
+      "name": "Sentinel-1C",
+      "full_name": "Sentinel-1C",
+      "agency": "ESA,EC",
+      "status": "Operational",
+      "launched": "05 Dec 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "693",
+      "payload": [
+        "SAR-C (Sentinel-1)"
+      ],
+      "launch_mass": "2300 kg",
+      "dry_mass": "2146 kg",
+      "power": "4800 W",
+      "updated": "2025-10-24"
+    },
+    {
+      "id": 755,
+      "slug": "sentinel_1d",
+      "name": "Sentinel-1D",
+      "full_name": "Sentinel-1D",
+      "agency": "ESA,EC",
+      "status": "Operational",
+      "launched": "04 Nov 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "693",
+      "payload": [
+        "SAR-C (Sentinel-1)"
+      ],
+      "launch_mass": "2300 kg",
+      "dry_mass": "2146 kg",
+      "power": "4800 W",
+      "updated": "2026-07-08"
+    },
+    {
+      "id": 399,
+      "slug": "sentinel_2b",
+      "name": "Sentinel-2B",
+      "full_name": "Sentinel-2B",
+      "agency": "ESA,EC",
+      "status": "Operational",
+      "launched": "07 Mar 2017",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "786",
+      "payload": [
+        "MSI (Sentinel-2A)"
+      ],
+      "launch_mass": "1200 kg",
+      "dry_mass": "1080 kg",
+      "power": "1700 W",
+      "updated": "2025-01-27"
+    },
+    {
+      "id": 756,
+      "slug": "sentinel_2c",
+      "name": "Sentinel-2C",
+      "full_name": "Sentinel-2C",
+      "agency": "ESA,EC",
+      "status": "Operational",
+      "launched": "04 Sep 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "786",
+      "payload": [
+        "MSI (Sentinel-2A)"
+      ],
+      "launch_mass": "1200 kg",
+      "dry_mass": "1080 kg",
+      "power": "1700 W",
+      "updated": "2025-06-09"
+    },
+    {
+      "id": 400,
+      "slug": "sentinel_3a",
+      "name": "Sentinel-3A",
+      "full_name": "Sentinel-3A",
+      "agency": "ESA,EC,EUMETSAT",
+      "status": "Operational",
+      "launched": "16 Feb 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "814.5",
+      "payload": [
+        "DORIS",
+        "GPS (ESA)",
+        "LRR (ESA)",
+        "MWR (Sentinel-3)",
+        "OLCI ",
+        "SLSTR",
+        "SRAL"
+      ],
+      "launch_mass": "1250 kg",
+      "dry_mass": "1150 kg",
+      "power": "2300 W",
+      "updated": "2026-03-23"
+    },
+    {
+      "id": 802,
+      "slug": "sentinel_3b",
+      "name": "Sentinel-3B",
+      "full_name": "Sentinel-3B",
+      "agency": "ESA,EC,EUMETSAT",
+      "status": "Operational",
+      "launched": "25 Apr 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "814.5",
+      "payload": [
+        "DORIS",
+        "GPS (ESA)",
+        "LRR (ESA)",
+        "MWR (Sentinel-3)",
+        "OLCI ",
+        "SLSTR",
+        "SRAL"
+      ],
+      "launch_mass": "1250 kg",
+      "dry_mass": "1150 kg",
+      "power": "2300 W",
+      "updated": "2026-08-24"
+    },
+    {
+      "id": 402,
+      "slug": "sentinel_5p",
+      "name": "Sentinel-5P",
+      "full_name": "Sentinel-5 precursor",
+      "agency": "ESA,NSO",
+      "status": "Operational",
+      "launched": "13 Oct 2017",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "824",
+      "payload": [
+        "TROPOMI"
+      ],
+      "launch_mass": "980 kg",
+      "dry_mass": null,
+      "power": "1500 W",
+      "updated": "2025-01-27"
+    },
+    {
+      "id": 479,
+      "slug": "sentinel_6a",
+      "name": "Sentinel-6A",
+      "full_name": "Sentinel-6A",
+      "agency": "EUMETSAT,CNES,EC,ESA,NASA,NOAA",
+      "status": "Operational",
+      "launched": "21 Nov 2020",
+      "orbit": "Drifting orbit",
+      "altitude_km": "1336",
+      "payload": [
+        "AMR-C",
+        "DORIS",
+        "GNSS-RO (Sentinel-6)",
+        "GPS (ESA)",
+        "HRMR",
+        "LRA (NASA)",
+        "Poseidon-4",
+        "RMU"
+      ],
+      "launch_mass": "1440 kg",
+      "dry_mass": "1191 kg",
+      "power": "891 W",
+      "updated": "2026-10-19"
+    },
+    {
+      "id": 480,
+      "slug": "sentinel_6b",
+      "name": "Sentinel-6B",
+      "full_name": "Sentinel-6B",
+      "agency": "EUMETSAT,CNES,EC,ESA,NASA,NOAA",
+      "status": "Operational",
+      "launched": "17 Nov 2025",
+      "orbit": "Drifting orbit",
+      "altitude_km": "1336",
+      "payload": [
+        "AMR-C",
+        "DORIS",
+        "GNSS-RO (Sentinel-6)",
+        "GPS (ESA)",
+        "HRMR",
+        "LRA (NASA)",
+        "Poseidon-4",
+        "RMU"
+      ],
+      "launch_mass": "1440 kg",
+      "dry_mass": "1191 kg",
+      "power": "891 W",
+      "updated": "2026-10-19"
+    },
+    {
+      "id": 360,
+      "slug": "seosar_paz",
+      "name": "SEOSAR/Paz",
+      "full_name": "Satélite Español de Observación SAR (also Paz)",
+      "agency": "MDE,CDTI",
+      "status": "Operational",
+      "launched": "22 Feb 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "514",
+      "payload": [
+        "LRR (DLR)",
+        "ROHPP",
+        "SAR-X (Paz (SEOSAR))"
+      ],
+      "launch_mass": "1341 kg",
+      "dry_mass": "1282 kg",
+      "power": null,
+      "updated": "2026-08-27"
+    },
+    {
+      "id": 927,
+      "slug": "sich_2_30",
+      "name": "SICH-2-30",
+      "full_name": "SICH-2-30 (originally SICH-2-1)",
+      "agency": "NSAU",
+      "status": "Operational",
+      "launched": "13 Jan 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "700",
+      "payload": [
+        "IREI",
+        "MBEI",
+        "Potential"
+      ],
+      "launch_mass": "170 kg",
+      "dry_mass": null,
+      "power": "90 W",
+      "updated": "2022-05-16"
+    },
+    {
+      "id": 703,
+      "slug": "skysat_10",
+      "name": "SkySat-10",
+      "full_name": "Sky Satellite - 10",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "31 Oct 2017",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 704,
+      "slug": "skysat_11",
+      "name": "SkySat-11",
+      "full_name": "Sky Satellite - 11",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "31 Oct 2017",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 705,
+      "slug": "skysat_12",
+      "name": "SkySat-12",
+      "full_name": "Sky Satellite - 12",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "31 Oct 2017",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 706,
+      "slug": "skysat_13",
+      "name": "SkySat-13",
+      "full_name": "Sky Satellite - 13",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "31 Oct 2017",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 739,
+      "slug": "skysat_14",
+      "name": "SkySat-14",
+      "full_name": "Sky Satellite - 14",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "03 Dec 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 740,
+      "slug": "skysat_15",
+      "name": "SkySat-15",
+      "full_name": "Sky Satellite - 15",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "03 Dec 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 835,
+      "slug": "skysat_16",
+      "name": "SkySat-16",
+      "full_name": "Sky Satellite - 16",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "13 Jun 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 837,
+      "slug": "skysat_17",
+      "name": "SkySat-17",
+      "full_name": "Sky Satellite - 17",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "13 Jun 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 838,
+      "slug": "skysat_18",
+      "name": "SkySat-18",
+      "full_name": "Sky Satellite - 18",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "13 Jun 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 865,
+      "slug": "skysat_19",
+      "name": "SkySat-19",
+      "full_name": "Sky Satellite - 19",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "18 Aug 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 631,
+      "slug": "skysat_2",
+      "name": "SkySat-2",
+      "full_name": "Sky Satellite - 2",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "08 Jul 2014",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "600",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 866,
+      "slug": "skysat_20",
+      "name": "SkySat-20",
+      "full_name": "Sky Satellite - 20",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "18 Aug 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 867,
+      "slug": "skysat_21",
+      "name": "SkySat-21",
+      "full_name": "Sky Satellite - 21",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "18 Aug 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 679,
+      "slug": "skysat_3",
+      "name": "SkySat-3",
+      "full_name": "Sky Satellite - 3",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "22 Jun 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 697,
+      "slug": "skysat_4",
+      "name": "SkySat-4",
+      "full_name": "Sky Satellite - 4",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "16 Sep 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "507",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 698,
+      "slug": "skysat_5",
+      "name": "SkySat-5",
+      "full_name": "Sky Satellite - 5",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "16 Sep 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "507",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 699,
+      "slug": "skysat_6",
+      "name": "SkySat-6",
+      "full_name": "Sky Satellite - 6",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "16 Sep 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "507",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 700,
+      "slug": "skysat_7",
+      "name": "SkySat-7",
+      "full_name": "Sky Satellite - 7",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "16 Sep 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "509",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 701,
+      "slug": "skysat_8",
+      "name": "SkySat-8",
+      "full_name": "Sky Satellite - 8",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "31 Oct 2017",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 702,
+      "slug": "skysat_9",
+      "name": "SkySat-9",
+      "full_name": "Sky Satellite - 9",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "31 Oct 2017",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "SkySat"
+      ],
+      "launch_mass": "120 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-03-30"
+    },
+    {
+      "id": 406,
+      "slug": "smap",
+      "name": "SMAP",
+      "full_name": "Soil Moisture Active-Passive",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "31 Jan 2015",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "685",
+      "payload": [
+        "SMAP (degraded)"
+      ],
+      "launch_mass": "1122 kg",
+      "dry_mass": "1042 kg",
+      "power": "1351 W",
+      "updated": "2023-12-18"
+    },
+    {
+      "id": 1155,
+      "slug": "smile",
+      "name": "SMILE",
+      "full_name": "Solar wind Magnetosphere Ionosphere Link Explorer",
+      "agency": "ESA,CAS",
+      "status": "Operational",
+      "launched": "19 May 2026",
+      "orbit": "Cross-magnetosphere orbit",
+      "altitude_km": "121000",
+      "payload": [
+        "LIA",
+        "MAG (SMILE)",
+        "SXI (SMILE)",
+        "UVI (SMILE)"
+      ],
+      "launch_mass": "2300 kg",
+      "dry_mass": "707 kg",
+      "power": null,
+      "updated": "2026-10-05"
+    },
+    {
+      "id": 408,
+      "slug": "smos",
+      "name": "SMOS",
+      "full_name": "Soil Moisture and Ocean Salinity",
+      "agency": "ESA,CDTI,CNES",
+      "status": "Operational",
+      "launched": "02 Nov 2009",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "755",
+      "payload": [
+        "GPS (ESA)",
+        "MIRAS",
+        "STA"
+      ],
+      "launch_mass": "658 kg",
+      "dry_mass": "630 kg",
+      "power": "685 W",
+      "updated": "2025-03-24"
+    },
+    {
+      "id": 342,
+      "slug": "snpp",
+      "name": "SNPP",
+      "full_name": "Suomi National Polar-orbiting Partnership",
+      "agency": "NOAA,NASA",
+      "status": "Operational",
+      "launched": "28 Oct 2011",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "824",
+      "payload": [
+        "ATMS",
+        "CERES",
+        "OMPS-limb",
+        "OMPS-nadir",
+        "VIIRS"
+      ],
+      "launch_mass": "2128 kg",
+      "dry_mass": "1400 kg",
+      "power": "2285 W",
+      "updated": "2026-10-26"
+    },
+    {
+      "id": 458,
+      "slug": "soho",
+      "name": "SOHO",
+      "full_name": "Solar and Heliospheric Observatory",
+      "agency": "ESA,NASA",
+      "status": "Operational",
+      "launched": "02 Dec 1995",
+      "orbit": "Lagrange libration point 1",
+      "altitude_km": "1.5e+06",
+      "payload": [
+        "CDS",
+        "CELIAS",
+        "COSTEP",
+        "EIT",
+        "ERNE",
+        "GOLF",
+        "LASCO (degraded)",
+        "MDI",
+        "SEM (SOHO)",
+        "SWAN",
+        "VIRGO"
+      ],
+      "launch_mass": "1850 kg",
+      "dry_mass": null,
+      "power": "950 W",
+      "updated": "2025-02-26"
+    },
+    {
+      "id": 548,
+      "slug": "solar_orbiter",
+      "name": "Solar Orbiter",
+      "full_name": "Solar Orbiter",
+      "agency": "ESA,NASA",
+      "status": "Operational",
+      "launched": "10 Feb 2020",
+      "orbit": "Solar orbit",
+      "altitude_km": "N/A",
+      "payload": [
+        "EPD",
+        "EUI",
+        "MAG (Solar Orbiter)",
+        "METIS",
+        "PHI",
+        "RPW",
+        "SPICE",
+        "STIX",
+        "SWA",
+        "SoloHI"
+      ],
+      "launch_mass": "1800 kg",
+      "dry_mass": "1600 kg",
+      "power": "919 W",
+      "updated": "2025-06-11"
+    },
+    {
+      "id": 455,
+      "slug": "solar_b_hinode",
+      "name": "Solar-B (Hinode)",
+      "full_name": "Solar-B (Hinode)",
+      "agency": "JAXA",
+      "status": "Operational",
+      "launched": "23 Sep 2006",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "680",
+      "payload": [
+        "EIS",
+        "SOT (degraded)",
+        "XRT"
+      ],
+      "launch_mass": "893 kg",
+      "dry_mass": "700 kg",
+      "power": "1000 W",
+      "updated": "2025-04-07"
+    },
+    {
+      "id": 784,
+      "slug": "solar_l1",
+      "name": "SOLAR-L1",
+      "full_name": "Space Weather Follow-On at L1",
+      "agency": "NOAA,ESA,NASA",
+      "status": "Operational",
+      "launched": "24 Sep 2025",
+      "orbit": "Lagrange libration point 1",
+      "altitude_km": "1.5e+06",
+      "payload": [
+        "CCOR-2",
+        "SWIS/MAG",
+        "SWIS/STIS",
+        "SWIS/SWiPS"
+      ],
+      "launch_mass": "377 kg",
+      "dry_mass": "304 kg",
+      "power": null,
+      "updated": "2026-06-16"
+    },
+    {
+      "id": 417,
+      "slug": "spot_6",
+      "name": "SPOT-6",
+      "full_name": "Satellite Pour l’Observation de la Terre - 6",
+      "agency": "Spot Image,CNES",
+      "status": "Operational",
+      "launched": "09 Sep 2012",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "695",
+      "payload": [
+        "NAOMI (SPOT)"
+      ],
+      "launch_mass": "712 kg",
+      "dry_mass": "632 kg",
+      "power": "1200 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 668,
+      "slug": "sstl_s1_1",
+      "name": "SSTL-S1 1",
+      "full_name": "Surrey Satellite Technology Ltd - S1 1",
+      "agency": "SSTL,21AT,UKSA",
+      "status": "Operational",
+      "launched": "10 Jul 2015",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "630",
+      "payload": [
+        "VHRI-100"
+      ],
+      "launch_mass": "447 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 669,
+      "slug": "sstl_s1_2",
+      "name": "SSTL-S1 2",
+      "full_name": "Surrey Satellite Technology Ltd - S1 2",
+      "agency": "SSTL,21AT,UKSA",
+      "status": "Operational",
+      "launched": "10 Jul 2015",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "630",
+      "payload": [
+        "VHRI-100"
+      ],
+      "launch_mass": "447 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 670,
+      "slug": "sstl_s1_3",
+      "name": "SSTL-S1 3",
+      "full_name": "Surrey Satellite Technology Ltd - S1 3",
+      "agency": "SSTL,21AT,UKSA",
+      "status": "Operational",
+      "launched": "10 Jul 2015",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "630",
+      "payload": [
+        "VHRI-100"
+      ],
+      "launch_mass": "447 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 766,
+      "slug": "sstl_s1_4",
+      "name": "SSTL-S1 4",
+      "full_name": "Surrey Satellite Technology Ltd - S1 4",
+      "agency": "SSTL,21AT,UKSA",
+      "status": "Operational",
+      "launched": "16 Sep 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "630",
+      "payload": [
+        "VHRI-100"
+      ],
+      "launch_mass": "447 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 419,
+      "slug": "starlette",
+      "name": "STARLETTE",
+      "full_name": "Satellite de Taille Adaptée avec Réflecteurs Laser pour les Etudes de la Terre",
+      "agency": "CNES",
+      "status": "Operational",
+      "launched": "06 Feb 1975",
+      "orbit": "Drifting orbit",
+      "altitude_km": "812",
+      "payload": [
+        "LR"
+      ],
+      "launch_mass": "48 kg",
+      "dry_mass": "48 kg",
+      "power": null,
+      "updated": "2015-07-29"
+    },
+    {
+      "id": 420,
+      "slug": "stella",
+      "name": "STELLA",
+      "full_name": "STELLA",
+      "agency": "CNES",
+      "status": "Operational",
+      "launched": "30 Sep 1993",
+      "orbit": "Drifting orbit",
+      "altitude_km": "800",
+      "payload": [
+        "LR"
+      ],
+      "launch_mass": "48 kg",
+      "dry_mass": "48 kg",
+      "power": null,
+      "updated": "2015-07-29"
+    },
+    {
+      "id": 818,
+      "slug": "stereo_a",
+      "name": "STEREO-A",
+      "full_name": "Solar-TErrestrial RElations Observatory - B",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "26 Oct 2006",
+      "orbit": "Ecliptic orbit",
+      "altitude_km": null,
+      "payload": [
+        "IMPACT/MAG",
+        "IMPACT/SEP",
+        "IMPACT/STE",
+        "IMPACT/SWEA",
+        "PLASTIC",
+        "S/WAVES",
+        "SECCHI/COR-1",
+        "SECCHI/COR-2",
+        "SECCHI/EUVI",
+        "SECCHI/HI-1",
+        "SECCHI/HI-2"
+      ],
+      "launch_mass": "620 kg",
+      "dry_mass": null,
+      "power": "475 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 964,
+      "slug": "strix_1",
+      "name": "StriX-1",
+      "full_name": "StriX-1",
+      "agency": "Synspective",
+      "status": "Operational",
+      "launched": "15 Sep 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "574",
+      "payload": [
+        "X-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": "100 W",
+      "updated": "2024-05-28"
+    },
+    {
+      "id": 1094,
+      "slug": "strix_2",
+      "name": "StriX-2",
+      "full_name": "StriX-2",
+      "agency": "Synspective",
+      "status": "Operational",
+      "launched": "21 Dec 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "570",
+      "payload": [
+        "X-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": "100 W",
+      "updated": "2025-09-15"
+    },
+    {
+      "id": 1056,
+      "slug": "strix_3",
+      "name": "StriX-3",
+      "full_name": "StriX-3",
+      "agency": "Synspective",
+      "status": "Operational",
+      "launched": "12 Mar 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "580",
+      "payload": [
+        "X-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": "100 W",
+      "updated": "2024-08-05"
+    },
+    {
+      "id": 1069,
+      "slug": "strix_4",
+      "name": "StriX-4",
+      "full_name": "StriX-4",
+      "agency": "Synspective",
+      "status": "Operational",
+      "launched": "02 Aug 2024",
+      "orbit": "Drifting orbit",
+      "altitude_km": "545",
+      "payload": [
+        "X-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": "100 W",
+      "updated": "2025-01-09"
+    },
+    {
+      "id": 1148,
+      "slug": "strix_5",
+      "name": "StriX-5",
+      "full_name": "StriX-5",
+      "agency": "Synspective",
+      "status": "Operational",
+      "launched": "14 Oct 2025",
+      "orbit": "Drifting orbit",
+      "altitude_km": "583",
+      "payload": [
+        "X-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": "100 W",
+      "updated": "2026-05-25"
+    },
+    {
+      "id": 1093,
+      "slug": "strix_6",
+      "name": "StriX-6",
+      "full_name": "StriX-6",
+      "agency": "Synspective",
+      "status": "Operational",
+      "launched": "20 Mar 2026",
+      "orbit": "Drifting orbit",
+      "altitude_km": "545",
+      "payload": [
+        "PMS-2",
+        "X-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": "100 W",
+      "updated": "2026-09-21"
+    },
+    {
+      "id": 1171,
+      "slug": "strix_7",
+      "name": "StriX-7",
+      "full_name": "StriX-7",
+      "agency": "Synspective",
+      "status": "Operational",
+      "launched": "22 May 2026",
+      "orbit": "Drifting orbit",
+      "altitude_km": "545",
+      "payload": [
+        "X-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": "100 W",
+      "updated": "2026-09-21"
+    },
+    {
+      "id": 1174,
+      "slug": "strix_8",
+      "name": "StriX-8",
+      "full_name": "StriX-8",
+      "agency": "Synspective",
+      "status": "Operational",
+      "launched": "26 Jun 2026",
+      "orbit": "Drifting orbit",
+      "altitude_km": "545",
+      "payload": [
+        "X-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "100 kg",
+      "power": "100 W",
+      "updated": "2026-09-30"
+    },
+    {
+      "id": 930,
+      "slug": "strix_b",
+      "name": "StriX-β",
+      "full_name": "StriX-β",
+      "agency": "Synspective",
+      "status": "Operational",
+      "launched": "28 Feb 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "X-SAR"
+      ],
+      "launch_mass": null,
+      "dry_mass": "150 kg",
+      "power": "100 W",
+      "updated": "2022-09-26"
+    },
+    {
+      "id": 938,
+      "slug": "superview_neo_1_01",
+      "name": "SuperView Neo-1 01",
+      "full_name": "SuperView Neo-1 01",
+      "agency": "CAST,SpacEyes",
+      "status": "Operational",
+      "launched": "29 Apr 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "495",
+      "payload": [],
+      "launch_mass": "540 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2022-05-03"
+    },
+    {
+      "id": 939,
+      "slug": "superview_neo_1_02",
+      "name": "SuperView Neo-1 02",
+      "full_name": "SuperView Neo-1 02",
+      "agency": "CAST,SpacEyes",
+      "status": "Operational",
+      "launched": "29 Apr 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "495",
+      "payload": [],
+      "launch_mass": "540 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2022-05-03"
+    },
+    {
+      "id": 962,
+      "slug": "superview_neo_2_01",
+      "name": "SuperView Neo-2 01",
+      "full_name": "SuperView Neo-2 01",
+      "agency": "CAST,SpacEyes",
+      "status": "Operational",
+      "launched": "15 Jul 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "495",
+      "payload": [
+        "SAR (Superview)"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2022-09-26"
+    },
+    {
+      "id": 963,
+      "slug": "superview_neo_2_02",
+      "name": "SuperView Neo-2 02",
+      "full_name": "SuperView Neo-2 02",
+      "agency": "CAST,SpacEyes",
+      "status": "Operational",
+      "launched": "15 Jul 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "495",
+      "payload": [
+        "SAR (Superview)"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2022-09-26"
+    },
+    {
+      "id": 1091,
+      "slug": "superview_neo_2_03",
+      "name": "SuperView Neo-2 03",
+      "full_name": "SuperView Neo-2 03",
+      "agency": "CAST,SpacEyes",
+      "status": "Operational",
+      "launched": "24 Nov 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "495",
+      "payload": [
+        "SAR (Superview)"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2025-05-12"
+    },
+    {
+      "id": 1092,
+      "slug": "superview_neo_2_04",
+      "name": "SuperView Neo-2 04",
+      "full_name": "SuperView Neo-2 04",
+      "agency": "CAST,SpacEyes",
+      "status": "Operational",
+      "launched": "24 Nov 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "495",
+      "payload": [
+        "SAR (Superview)"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2025-05-12"
+    },
+    {
+      "id": 1059,
+      "slug": "superview_neo_3_01",
+      "name": "SuperView Neo-3-01",
+      "full_name": "SuperView Neo-3-01",
+      "agency": "CAST,SpacEyes",
+      "status": "Operational",
+      "launched": "15 Apr 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "PMS-3"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2024-11-29"
+    },
+    {
+      "id": 716,
+      "slug": "superview_1",
+      "name": "SuperView-1",
+      "full_name": "SuperView-1",
+      "agency": "CAST,SpacEyes",
+      "status": "Operational",
+      "launched": "28 Dec 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "534",
+      "payload": [
+        "PMS-3"
+      ],
+      "launch_mass": "560 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 717,
+      "slug": "superview_2",
+      "name": "SuperView-2",
+      "full_name": "SuperView-2",
+      "agency": "CAST,SpacEyes",
+      "status": "Operational",
+      "launched": "28 Dec 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "534",
+      "payload": [
+        "PMS-3"
+      ],
+      "launch_mass": "560 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 718,
+      "slug": "superview_3",
+      "name": "SuperView-3",
+      "full_name": "SuperView-3",
+      "agency": "CAST,SpacEyes",
+      "status": "Operational",
+      "launched": "09 Jan 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "PMS-3"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 719,
+      "slug": "superview_4",
+      "name": "SuperView-4",
+      "full_name": "SuperView-4",
+      "agency": "CAST,SpacEyes",
+      "status": "Operational",
+      "launched": "09 Jan 2018",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "PMS-3"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 658,
+      "slug": "swarm_a",
+      "name": "SWARM-A",
+      "full_name": "The Earth’s Magnetic Field and Environment Explorers - A",
+      "agency": "ESA,CNES,CSA",
+      "status": "Operational",
+      "launched": "22 Nov 2013",
+      "orbit": "Drifting orbit",
+      "altitude_km": "460",
+      "payload": [
+        "ACC (degraded)",
+        "ASM",
+        "EFI (SWARM)",
+        "GPS (ESA)",
+        "LRR (DLR)",
+        "STR (SWARM)",
+        "VFM"
+      ],
+      "launch_mass": "473 kg",
+      "dry_mass": "367 kg",
+      "power": "600 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 423,
+      "slug": "swarm_b",
+      "name": "SWARM-B",
+      "full_name": "The Earth’s Magnetic Field and Environment Explorers - B",
+      "agency": "ESA,CNES,CSA",
+      "status": "Operational",
+      "launched": "22 Nov 2013",
+      "orbit": "Drifting orbit",
+      "altitude_km": "530",
+      "payload": [
+        "ACC (degraded)",
+        "ASM",
+        "EFI (SWARM)",
+        "GPS (ESA)",
+        "LRR (DLR)",
+        "STR (SWARM)",
+        "VFM"
+      ],
+      "launch_mass": "473 kg",
+      "dry_mass": "367 kg",
+      "power": "600 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 422,
+      "slug": "swarm_c",
+      "name": "SWARM-C",
+      "full_name": "The Earth’s Magnetic Field and Environment Explorers - C",
+      "agency": "ESA,CNES,CSA",
+      "status": "Operational",
+      "launched": "22 Nov 2013",
+      "orbit": "Drifting orbit",
+      "altitude_km": "460",
+      "payload": [
+        "ACC (degraded)",
+        "EFI (SWARM)",
+        "GPS (ESA)",
+        "LRR (DLR)",
+        "STR (SWARM)",
+        "VFM"
+      ],
+      "launch_mass": "473 kg",
+      "dry_mass": "367 kg",
+      "power": "600 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 424,
+      "slug": "swot",
+      "name": "SWOT",
+      "full_name": "Surface Water and Ocean Topography",
+      "agency": "NASA,CNES",
+      "status": "Operational",
+      "launched": "16 Dec 2022",
+      "orbit": "Drifting orbit",
+      "altitude_km": "891",
+      "payload": [
+        "DORIS",
+        "GPS (NASA)",
+        "KaRIN",
+        "LRA (NASA)",
+        "MW radiometer",
+        "Poseidon-3C"
+      ],
+      "launch_mass": "2200 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-04-20"
+    },
+    {
+      "id": 1018,
+      "slug": "tanager_1",
+      "name": "Tanager-1",
+      "full_name": "Tanager-1",
+      "agency": "Planet",
+      "status": "Operational",
+      "launched": "16 Aug 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "520",
+      "payload": [
+        "Carbon Mapper"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2025-05-12"
+    },
+    {
+      "id": 426,
+      "slug": "tandem_x",
+      "name": "TanDEM-X",
+      "full_name": "TerraSAR-X Add-oN for Digital Elevation Measurement",
+      "agency": "DLR",
+      "status": "Operational",
+      "launched": "21 Jun 2010",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "515",
+      "payload": [
+        "SAR-X",
+        "TOR"
+      ],
+      "launch_mass": "1340 kg",
+      "dry_mass": "1220 kg",
+      "power": "730 W",
+      "updated": "2026-10-19"
+    },
+    {
+      "id": 81,
+      "slug": "terra",
+      "name": "Terra",
+      "full_name": "Earth Observation System - Terra",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "18 Dec 1999",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "705",
+      "payload": [
+        "CERES",
+        "MISR",
+        "MODIS",
+        "MOPITT"
+      ],
+      "launch_mass": "5190 kg",
+      "dry_mass": "4864 kg",
+      "power": "2530 W",
+      "updated": "2025-09-01"
+    },
+    {
+      "id": 427,
+      "slug": "terrasar_x",
+      "name": "TerraSAR-X",
+      "full_name": "TerraSAR-X",
+      "agency": "DLR",
+      "status": "Operational",
+      "launched": "15 Jun 2007",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "515",
+      "payload": [
+        "SAR-X",
+        "TOR"
+      ],
+      "launch_mass": "1230 kg",
+      "dry_mass": "1152 kg",
+      "power": "800 W",
+      "updated": "2026-10-19"
+    },
+    {
+      "id": 673,
+      "slug": "th_1c",
+      "name": "TH-1C",
+      "full_name": "Tian Hui - 1C",
+      "agency": "PLA,CAST",
+      "status": "Operational",
+      "launched": "26 Oct 2015",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "498",
+      "payload": [
+        "MS (TH)",
+        "PAN (TH)"
+      ],
+      "launch_mass": "2636 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 819,
+      "slug": "themis_a",
+      "name": "THEMIS-A",
+      "full_name": "Time History of Events and Macroscale Interactions during Substorms - A",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "17 Feb 2007",
+      "orbit": "Cross-magnetosphere orbit",
+      "altitude_km": null,
+      "payload": [
+        "EFI (THEMIS)",
+        "ESA",
+        "FGM (THEMIS)",
+        "SCM",
+        "SST"
+      ],
+      "launch_mass": "126 kg",
+      "dry_mass": "77 kg",
+      "power": "41 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 460,
+      "slug": "themis_d",
+      "name": "THEMIS-D",
+      "full_name": "Time History of Events and Macroscale Interactions during Substorms - D",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "17 Feb 2007",
+      "orbit": "Cross-magnetosphere orbit",
+      "altitude_km": null,
+      "payload": [
+        "EFI (THEMIS)",
+        "ESA",
+        "FGM (THEMIS)",
+        "SCM",
+        "SST"
+      ],
+      "launch_mass": "126 kg",
+      "dry_mass": "77 kg",
+      "power": "41 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 820,
+      "slug": "themis_e",
+      "name": "THEMIS-E",
+      "full_name": "Time History of Events and Macroscale Interactions during Substorms - E",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "17 Feb 2007",
+      "orbit": "Cross-magnetosphere orbit",
+      "altitude_km": null,
+      "payload": [
+        "EFI (THEMIS)",
+        "ESA",
+        "FGM (THEMIS)",
+        "SCM",
+        "SST"
+      ],
+      "launch_mass": "126 kg",
+      "dry_mass": "77 kg",
+      "power": "41 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 429,
+      "slug": "theos_1",
+      "name": "THEOS-1",
+      "full_name": "Thailand Earth Observation System - 1",
+      "agency": "GISTDA",
+      "status": "Operational",
+      "launched": "01 Oct 2008",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "822",
+      "payload": [
+        "MS (THEOS)",
+        "PAN (THEOS)"
+      ],
+      "launch_mass": "750 kg",
+      "dry_mass": "670 kg",
+      "power": "840 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 889,
+      "slug": "theos_2_main",
+      "name": "THEOS-2 Main",
+      "full_name": "Thailand Earth Observation System - 2 Main VHR Satellite",
+      "agency": "GISTDA",
+      "status": "Operational",
+      "launched": "09 Oct 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "621",
+      "payload": [
+        "MS (THEOS-2)",
+        "PAN (THEOS-2)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "417 kg",
+      "power": null,
+      "updated": "2025-10-31"
+    },
+    {
+      "id": 1014,
+      "slug": "tianmu_1",
+      "name": "Tianmu-1",
+      "full_name": "Tianmu-1",
+      "agency": "CASIC",
+      "status": "Operational",
+      "launched": "09 Jan 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "520",
+      "payload": [
+        "TGNOS-M"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2024-02-26"
+    },
+    {
+      "id": 430,
+      "slug": "timed",
+      "name": "TIMED",
+      "full_name": "Thermosphere, Ionosphere, Mesosphere Energetics and Dynamics mission",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "07 Dec 2001",
+      "orbit": "Drifting orbit",
+      "altitude_km": "625",
+      "payload": [
+        "GUVI",
+        "SABER",
+        "SEE",
+        "TIDI "
+      ],
+      "launch_mass": "660 kg",
+      "dry_mass": "587 kg",
+      "power": "426 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 1074,
+      "slug": "tomorrow_s1",
+      "name": "Tomorrow-S1",
+      "full_name": "Tomorrow Microwave Sounder 1",
+      "agency": "Tomorrow.io",
+      "status": "Operational",
+      "launched": "16 Aug 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "487",
+      "payload": [
+        "TMS-1.1 (Tomorrow)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "12 kg",
+      "power": null,
+      "updated": "2026-01-13"
+    },
+    {
+      "id": 1110,
+      "slug": "tomorrow_s10",
+      "name": "Tomorrow-S10",
+      "full_name": "Tomorrow Microwave Sounder 10",
+      "agency": "Tomorrow.io",
+      "status": "Operational",
+      "launched": "11 Jan 2026",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "510",
+      "payload": [],
+      "launch_mass": null,
+      "dry_mass": "12 kg",
+      "power": null,
+      "updated": "2026-08-10"
+    },
+    {
+      "id": 1158,
+      "slug": "tomorrow_s11",
+      "name": "Tomorrow-S11",
+      "full_name": "Tomorrow Microwave Sounder 11",
+      "agency": "Tomorrow.io",
+      "status": "Operational",
+      "launched": "11 Jan 2026",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "510",
+      "payload": [
+        "TMS-1.1 (Tomorrow)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "12 kg",
+      "power": null,
+      "updated": "2026-08-10"
+    },
+    {
+      "id": 1077,
+      "slug": "tomorrow_s2",
+      "name": "Tomorrow-S2",
+      "full_name": "Tomorrow Microwave Sounder 2",
+      "agency": "Tomorrow.io",
+      "status": "Operational",
+      "launched": "16 Aug 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "487",
+      "payload": [
+        "TMS-1.1 (Tomorrow)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "12 kg",
+      "power": null,
+      "updated": "2026-01-13"
+    },
+    {
+      "id": 1095,
+      "slug": "tomorrow_s3",
+      "name": "Tomorrow-S3",
+      "full_name": "Tomorrow Microwave Sounder 3",
+      "agency": "Tomorrow.io",
+      "status": "Operational",
+      "launched": "21 Dec 2024",
+      "orbit": "Drifting orbit",
+      "altitude_km": "495",
+      "payload": [
+        "TMS-1.1 (Tomorrow)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "12 kg",
+      "power": null,
+      "updated": "2026-01-13"
+    },
+    {
+      "id": 1096,
+      "slug": "tomorrow_s4",
+      "name": "Tomorrow-S4",
+      "full_name": "Tomorrow Microwave Sounder 4",
+      "agency": "Tomorrow.io",
+      "status": "Operational",
+      "launched": "21 Dec 2024",
+      "orbit": "Drifting orbit",
+      "altitude_km": "495",
+      "payload": [
+        "TMS-1.1 (Tomorrow)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "12 kg",
+      "power": null,
+      "updated": "2026-01-13"
+    },
+    {
+      "id": 1105,
+      "slug": "tomorrow_s5",
+      "name": "Tomorrow-S5",
+      "full_name": "Tomorrow Microwave Sounder 5",
+      "agency": "Tomorrow.io",
+      "status": "Operational",
+      "launched": "15 Mar 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "514",
+      "payload": [
+        "TMS-1.1 (Tomorrow)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "12 kg",
+      "power": null,
+      "updated": "2026-01-13"
+    },
+    {
+      "id": 1106,
+      "slug": "tomorrow_s6",
+      "name": "Tomorrow-S6",
+      "full_name": "Tomorrow Microwave Sounder 6",
+      "agency": "Tomorrow.io",
+      "status": "Operational",
+      "launched": "15 Mar 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "514",
+      "payload": [
+        "TMS-1.1 (Tomorrow)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "12 kg",
+      "power": null,
+      "updated": "2026-01-13"
+    },
+    {
+      "id": 1107,
+      "slug": "tomorrow_s7",
+      "name": "Tomorrow-S7",
+      "full_name": "Tomorrow Microwave Sounder 7",
+      "agency": "Tomorrow.io",
+      "status": "Operational",
+      "launched": "22 Apr 2025",
+      "orbit": "Drifting orbit",
+      "altitude_km": "577",
+      "payload": [
+        "TMS-1.1 (Tomorrow)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "12 kg",
+      "power": null,
+      "updated": "2026-01-13"
+    },
+    {
+      "id": 1108,
+      "slug": "tomorrow_s8",
+      "name": "Tomorrow-S8",
+      "full_name": "Tomorrow Microwave Sounder 8",
+      "agency": "Tomorrow.io",
+      "status": "Operational",
+      "launched": "02 Nov 2025",
+      "orbit": "Drifting orbit",
+      "altitude_km": "517",
+      "payload": [
+        "TMS-1.1 (Tomorrow)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "12 kg",
+      "power": null,
+      "updated": "2026-08-10"
+    },
+    {
+      "id": 1109,
+      "slug": "tomorrow_s9",
+      "name": "Tomorrow-S9",
+      "full_name": "Tomorrow Microwave Sounder 9",
+      "agency": "Tomorrow.io",
+      "status": "Operational",
+      "launched": "02 Nov 2025",
+      "orbit": "Drifting orbit",
+      "altitude_km": "517",
+      "payload": [
+        "TMS-1.1 (Tomorrow)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "12 kg",
+      "power": null,
+      "updated": "2026-08-10"
+    },
+    {
+      "id": 1139,
+      "slug": "tracers",
+      "name": "TRACERS",
+      "full_name": "Tandem Reconnection and Cusp Electrodynamics Reconnaissance Satellites",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "23 Jul 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "500",
+      "payload": [
+        "ACE (TRACERS)",
+        "ACI",
+        "EFI",
+        "MAG (TRACERS)",
+        "MAGIC",
+        "MSC (Tracers)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "200 kg",
+      "power": null,
+      "updated": "2025-12-01"
+    },
+    {
+      "id": 451,
+      "slug": "triton",
+      "name": "TRITON ",
+      "full_name": "TRITON also (FORMOSAT-7R)",
+      "agency": "NSPO,NOAA,UCAR",
+      "status": "Operational",
+      "launched": "09 Oct 2023",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "628",
+      "payload": [],
+      "launch_mass": null,
+      "dry_mass": "280 kg",
+      "power": null,
+      "updated": "2024-03-18"
+    },
+    {
+      "id": 1101,
+      "slug": "uvsq_ng",
+      "name": "UVSQ-NG",
+      "full_name": "UVSQ Next Generation",
+      "agency": "LASP,LATMOS",
+      "status": "Operational",
+      "launched": "15 Mar 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "550",
+      "payload": [
+        "ERS (UVSQ)",
+        "UNIS"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-23"
+    },
+    {
+      "id": 488,
+      "slug": "wind",
+      "name": "WIND",
+      "full_name": "WIND",
+      "agency": "NASA",
+      "status": "Operational",
+      "launched": "01 Nov 1994",
+      "orbit": "Lagrange libration point 1",
+      "altitude_km": "1.5e+06",
+      "payload": [
+        "EPACT (degraded)",
+        "KONUS",
+        "MFI",
+        "PLASMA",
+        "SMS (degraded)",
+        "SWE",
+        "WAVES"
+      ],
+      "launch_mass": "1250 kg",
+      "dry_mass": "950 kg",
+      "power": "370 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 976,
+      "slug": "worldview_legion_1",
+      "name": "WorldView Legion-1",
+      "full_name": "WorldView Legion-1",
+      "agency": "Maxar,DigitalGlobe",
+      "status": "Operational",
+      "launched": "02 May 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "524",
+      "payload": [
+        "Spaceview-NG"
+      ],
+      "launch_mass": null,
+      "dry_mass": "625 kg",
+      "power": null,
+      "updated": "2025-02-10"
+    },
+    {
+      "id": 977,
+      "slug": "worldview_legion_2",
+      "name": "WorldView Legion-2",
+      "full_name": "WorldView Legion-2",
+      "agency": "Maxar,DigitalGlobe",
+      "status": "Operational",
+      "launched": "02 May 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "540",
+      "payload": [
+        "Spaceview-NG"
+      ],
+      "launch_mass": null,
+      "dry_mass": "625 kg",
+      "power": null,
+      "updated": "2025-02-10"
+    },
+    {
+      "id": 1071,
+      "slug": "worldview_legion_3",
+      "name": "WorldView Legion-3",
+      "full_name": "WorldView Legion-3",
+      "agency": "Maxar,DigitalGlobe",
+      "status": "Operational",
+      "launched": "15 Aug 2024",
+      "orbit": "Drifting orbit",
+      "altitude_km": "540",
+      "payload": [
+        "Spaceview-NG"
+      ],
+      "launch_mass": null,
+      "dry_mass": "625 kg",
+      "power": null,
+      "updated": "2025-02-10"
+    },
+    {
+      "id": 1072,
+      "slug": "worldview_legion_4",
+      "name": "WorldView Legion-4",
+      "full_name": "WorldView Legion-4",
+      "agency": "Maxar,DigitalGlobe",
+      "status": "Operational",
+      "launched": "15 Aug 2024",
+      "orbit": "Drifting orbit",
+      "altitude_km": "528",
+      "payload": [
+        "Spaceview-NG"
+      ],
+      "launch_mass": null,
+      "dry_mass": "625 kg",
+      "power": null,
+      "updated": "2025-02-10"
+    },
+    {
+      "id": 1103,
+      "slug": "worldview_legion_5",
+      "name": "WorldView Legion-5",
+      "full_name": "WorldView Legion-5",
+      "agency": "Maxar,DigitalGlobe",
+      "status": "Operational",
+      "launched": "04 Feb 2025",
+      "orbit": "Drifting orbit",
+      "altitude_km": "710",
+      "payload": [
+        "Spaceview-NG"
+      ],
+      "launch_mass": null,
+      "dry_mass": "625 kg",
+      "power": null,
+      "updated": "2025-09-15"
+    },
+    {
+      "id": 1104,
+      "slug": "worldview_legion_6",
+      "name": "WorldView Legion-6",
+      "full_name": "WorldView Legion-6",
+      "agency": "Maxar,DigitalGlobe",
+      "status": "Operational",
+      "launched": "04 Feb 2025",
+      "orbit": "Drifting orbit",
+      "altitude_km": "455",
+      "payload": [
+        "Spaceview-NG"
+      ],
+      "launch_mass": null,
+      "dry_mass": "625 kg",
+      "power": null,
+      "updated": "2025-09-15"
+    },
+    {
+      "id": 498,
+      "slug": "worldview_1",
+      "name": "WorldView-1",
+      "full_name": "WorldView-1",
+      "agency": "Maxar,DigitalGlobe",
+      "status": "Operational",
+      "launched": "18 Sep 2007",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "499",
+      "payload": [
+        "WV60"
+      ],
+      "launch_mass": "2500 kg",
+      "dry_mass": null,
+      "power": "3200 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 499,
+      "slug": "worldview_2",
+      "name": "WorldView-2",
+      "full_name": "WorldView-2",
+      "agency": "Maxar,DigitalGlobe",
+      "status": "Operational",
+      "launched": "01 Oct 2009",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "770",
+      "payload": [
+        "WV110"
+      ],
+      "launch_mass": "2800 kg",
+      "dry_mass": null,
+      "power": "3.2 W",
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 500,
+      "slug": "worldview_3",
+      "name": "WorldView-3",
+      "full_name": "WorldView-3",
+      "agency": "Maxar,DigitalGlobe",
+      "status": "Operational",
+      "launched": "13 Aug 2014",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "770",
+      "payload": [
+        "WV110"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 953,
+      "slug": "wsf_m1",
+      "name": "WSF-M1",
+      "full_name": "Weather System Follow-on Microwave",
+      "agency": "DoD",
+      "status": "Operational",
+      "launched": "11 Apr 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "854",
+      "payload": [
+        "ECP",
+        "MWI (WSF-M)"
+      ],
+      "launch_mass": null,
+      "dry_mass": "1200 kg",
+      "power": null,
+      "updated": "2026-08-10"
+    },
+    {
+      "id": 1141,
+      "slug": "xcube_1",
+      "name": "XCUBE-1",
+      "full_name": "XCUBE-1",
+      "agency": "XPLORE",
+      "status": "Operational",
+      "launched": "21 Dec 2024",
+      "orbit": "Drifting orbit",
+      "altitude_km": "508",
+      "payload": [
+        "HyperScape100"
+      ],
+      "launch_mass": null,
+      "dry_mass": "10 kg",
+      "power": null,
+      "updated": "2025-08-18"
+    },
+    {
+      "id": 709,
+      "slug": "xmm_newton",
+      "name": "XMM-Newton",
+      "full_name": "X-ray Multi-Mirror Mission Observatory - Newton",
+      "agency": "ESA",
+      "status": "Operational",
+      "launched": "10 Dec 1999",
+      "orbit": "Drifting orbit",
+      "altitude_km": "40000",
+      "payload": [
+        "EPIC (XMM)",
+        "OM",
+        "RGS"
+      ],
+      "launch_mass": "3800 kg",
+      "dry_mass": null,
+      "power": "1600 W",
+      "updated": "2023-11-06"
+    },
+    {
+      "id": 1170,
+      "slug": "yam_8",
+      "name": "YAM-8",
+      "full_name": "Yet Another Mission-8",
+      "agency": "PlanetiQ,LOFT",
+      "status": "Operational",
+      "launched": "15 Mar 2025",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "540",
+      "payload": [
+        "Pyxis-RO"
+      ],
+      "launch_mass": "30 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-06-29"
+    },
+    {
+      "id": 1062,
+      "slug": "yunhai_1",
+      "name": "Yunhai-1",
+      "full_name": "Yunhai-1",
+      "agency": "CNSA,CASC",
+      "status": "Operational",
+      "launched": "11 Nov 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "780",
+      "payload": [],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2024-05-13"
+    },
+    {
+      "id": 1060,
+      "slug": "yunhai_2",
+      "name": "Yunhai-2",
+      "full_name": "Yunhai-2",
+      "agency": "CNSA,CASC",
+      "status": "Operational",
+      "launched": "29 Dec 2018",
+      "orbit": "Drifting orbit",
+      "altitude_km": "800",
+      "payload": [],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2024-05-13"
+    },
+    {
+      "id": 1061,
+      "slug": "yunhai_3",
+      "name": "Yunhai-3",
+      "full_name": "Yunhai-3",
+      "agency": "CNSA,CASC",
+      "status": "Operational",
+      "launched": "11 Nov 2022",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "870",
+      "payload": [],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2024-05-13"
+    },
+    {
+      "id": 1051,
+      "slug": "yunyao_1",
+      "name": "YunYao-1",
+      "full_name": "YunYao-1 constellation",
+      "agency": "CASC",
+      "status": "Operational",
+      "launched": "11 Jan 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "535",
+      "payload": [
+        "YunYao-receiver"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2025-09-08"
+    },
+    {
+      "id": 790,
+      "slug": "zy_1_2d",
+      "name": "ZY-1-2D",
+      "full_name": "Zi Yuan 1-2D",
+      "agency": "CAST,CRESDA",
+      "status": "Operational",
+      "launched": "12 Sep 2019",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "781",
+      "payload": [],
+      "launch_mass": "1540 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 677,
+      "slug": "zy_3_02",
+      "name": "ZY-3-02",
+      "full_name": "Zi Yuan - 3-02",
+      "agency": "CAST,CRESDA",
+      "status": "Operational",
+      "launched": "30 May 2016",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "506",
+      "payload": [
+        "MSC (ZY)",
+        "TAC"
+      ],
+      "launch_mass": "2636 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 863,
+      "slug": "zy_3_03",
+      "name": "ZY-3-03",
+      "full_name": "Zi Yuan - 3-03",
+      "agency": "CAST,CRESDA",
+      "status": "Operational",
+      "launched": "25 Jul 2020",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "506",
+      "payload": [
+        "MSC (ZY)",
+        "TAC"
+      ],
+      "launch_mass": "2636 kg",
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-02-02"
+    },
+    {
+      "id": 935,
+      "slug": "Nusat",
+      "name": "ÑuSat     ",
+      "full_name": "ÑuSat Earth Observation (also referred to as Aleph)",
+      "agency": "Satellogic ",
+      "status": "Operational",
+      "launched": "30 May 2016",
+      "orbit": "Drifting orbit",
+      "altitude_km": "500",
+      "payload": [
+        "ÑuSat-Imager"
+      ],
+      "launch_mass": null,
+      "dry_mass": "37.5 kg",
+      "power": null,
+      "updated": "2026-10-05"
+    },
+    {
+      "id": 1076,
+      "slug": "Phsat_2",
+      "name": "Φsat-2",
+      "full_name": "Φsat-2 (phisat-2)",
+      "agency": "ESA",
+      "status": "Operational",
+      "launched": "16 Aug 2024",
+      "orbit": "Sunsynchronous orbit",
+      "altitude_km": "510",
+      "payload": [
+        "HyperScout-2"
+      ],
+      "launch_mass": null,
+      "dry_mass": null,
+      "power": null,
+      "updated": "2026-10-26"
+    }
+  ]
+}

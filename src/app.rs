@@ -18,9 +18,10 @@ use crate::texture::{
     TEXTURE_RESULT,
 };
 #[cfg(not(target_arch = "wasm32"))]
+use crate::tile::{fetch_tile, DetailAtlas, TileFetchRequest, TileFetchResult, TileQuadTree};
 use crate::tile::{
-    fetch_tile, lon_lat_to_tile, stable_tile_zoom, AtlasLayout, DetailAtlas, DetailTexture,
-    TileCacheEntry, TileCoord, TileFetchRequest, TileFetchResult, TileOverlayState, TileQuadTree,
+    lon_lat_to_tile, stable_tile_zoom, AtlasLayout, DetailTexture, TileCacheEntry, TileCoord,
+    TileOverlayState,
 };
 use crate::time::{body_rotation_angle, greenwich_mean_sidereal_time};
 #[cfg(target_arch = "wasm32")]
@@ -32,9 +33,7 @@ use eframe::egui;
 use egui_dock::{DockArea, DockState};
 use nalgebra::{Matrix3, Vector3};
 use std::collections::HashMap;
-#[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashSet;
-#[cfg(not(target_arch = "wasm32"))]
 use std::f64::consts::PI;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc;
@@ -328,7 +327,6 @@ impl App {
                 slideshow_mode: false,
                 show_tab_info: false,
                 slideshow_fade_alpha: 1.0,
-                use_gpu_rendering: std::env::var_os("LEO_VIZ_DISABLE_PLANET_GPU").is_none(),
                 #[cfg(not(target_arch = "wasm32"))]
                 show_borders: false,
                 #[cfg(not(target_arch = "wasm32"))]
@@ -385,19 +383,11 @@ impl App {
                                     Ok(m) => m,
                                     Err(_) => break,
                                 };
-                                let TileFetchRequest {
-                                    coord,
-                                    generation: req_gen,
-                                    cancel_if_stale,
-                                    ref trace,
-                                    ..
-                                } = request;
+                                let TileFetchRequest { ref trace, .. } = request;
                                 if let Some(trace) = &trace {
                                     trace.started();
                                 }
-                                if cancel_if_stale
-                                    && coord.z > 6
-                                    && gen.load(std::sync::atomic::Ordering::Relaxed) != req_gen
+                                if request.is_stale(gen.load(std::sync::atomic::Ordering::Relaxed))
                                 {
                                     if let Some(trace) = &trace {
                                         trace.record("cancelled", serde_json::json!({}));
@@ -411,7 +401,7 @@ impl App {
                     }
 
                     TileOverlayState {
-                        enabled: false,
+                        enabled: true,
                         tile_tree: TileQuadTree::new(4096),
                         disk_cache_dir,
                         detail_texture: None,
@@ -430,6 +420,8 @@ impl App {
                         diagnostics: tile_trace,
                     }
                 },
+                #[cfg(target_arch = "wasm32")]
+                tile_overlay: TileOverlayState::new_browser(),
                 view_width: 800.0,
                 view_height: 600.0,
                 solar_system_handles: HashMap::new(),
@@ -463,8 +455,6 @@ impl App {
                 alignment_search_years: 1000.0,
                 #[cfg(target_arch = "wasm32")]
                 last_url_hash: String::new(),
-                last_frame_instant: None,
-                fps_smooth: 0.0,
                 moon_image_handles: HashMap::new(),
                 editing_tab: None,
             },
@@ -710,6 +700,7 @@ impl eframe::App for App {
             self.viewer.start_timestamp,
         );
         let v = &mut self.viewer;
+        crate::location_search::handle_shortcut(ctx, &mut v.tabs, v.active_tab_idx);
 
         let effective_dark_mode = v
             .presentation_uses_dark_mode_for_tab(v.active_tab_idx)
@@ -1005,7 +996,6 @@ impl eframe::App for App {
             }
         }
 
-        #[cfg(not(target_arch = "wasm32"))]
         {
             while let Ok(result) = v.tile_overlay.result_rx.try_recv() {
                 v.tile_overlay.pending_tiles.remove(&result.coord);
@@ -1015,7 +1005,9 @@ impl eframe::App for App {
                         .queue_tile_request(result.coord, result.cancel_if_stale);
                 }
                 if !result.pixels.is_empty() {
+                    #[cfg(not(target_arch = "wasm32"))]
                     let before = v.tile_overlay.tile_tree.tile_count;
+                    #[cfg(not(target_arch = "wasm32"))]
                     let added = usize::from(!v.tile_overlay.tile_tree.has_tile(&result.coord));
                     v.tile_overlay.tile_tree.insert(
                         result.coord,
@@ -1025,6 +1017,7 @@ impl eframe::App for App {
                             height: result.height,
                         },
                     );
+                    #[cfg(not(target_arch = "wasm32"))]
                     if let Some(trace) = &v.tile_overlay.diagnostics {
                         let evicted =
                             (before + added).saturating_sub(v.tile_overlay.tile_tree.tile_count);
@@ -1038,7 +1031,6 @@ impl eframe::App for App {
             }
         }
 
-        #[cfg(not(target_arch = "wasm32"))]
         if v.tile_overlay.enabled {
             if !v.tile_overlay.base_fetched {
                 v.tile_overlay.base_fetched = true;
@@ -1074,41 +1066,50 @@ impl eframe::App for App {
                     .tabs
                     .get(active_tab_idx)
                     .map(|t| {
-                        let map_view = t
+                        let earth = t
                             .planets
                             .iter()
-                            .find(|p| p.celestial_body == CelestialBody::Earth)
-                            .and_then(|p| {
-                                let projection = p
-                                    .projection_override
-                                    .unwrap_or(t.settings.planet_projection);
-                                if projection == crate::projection::ProjectionKind::Orthographic {
-                                    return None;
-                                }
-                                Some(
-                                    p.map_tile_view
-                                        .as_ref()
-                                        .filter(|view| view.projection == projection)
-                                        .cloned()
-                                        .unwrap_or_else(|| {
-                                            let proj = projection.instance();
-                                            let (xmin, xmax) = proj.x_range();
-                                            let (ymin, ymax) = proj.y_range();
-                                            crate::tile::MapTileView::new(
-                                                projection,
-                                                [xmin, xmax, ymin, ymax],
-                                                [v.view_width, v.view_height].map(|size| {
-                                                    (size * ctx.pixels_per_point()).max(1.0) as u32
-                                                }),
-                                            )
-                                        }),
-                                )
+                            .find(|p| {
+                                p.celestial_body == CelestialBody::Earth
+                                    && p.location_search.camera.is_some()
+                            })
+                            .or_else(|| {
+                                t.planets
+                                    .iter()
+                                    .find(|p| p.celestial_body == CelestialBody::Earth)
                             });
+                        let camera = earth.and_then(|p| p.location_search.camera);
+                        let map_view = earth.and_then(|p| {
+                            let projection = p
+                                .projection_override
+                                .unwrap_or(t.settings.planet_projection);
+                            if projection == crate::projection::ProjectionKind::Orthographic {
+                                return None;
+                            }
+                            Some(
+                                p.map_tile_view
+                                    .as_ref()
+                                    .filter(|view| view.projection == projection)
+                                    .cloned()
+                                    .unwrap_or_else(|| {
+                                        let proj = projection.instance();
+                                        let (xmin, xmax) = proj.x_range();
+                                        let (ymin, ymax) = proj.y_range();
+                                        crate::tile::MapTileView::new(
+                                            projection,
+                                            [xmin, xmax, ymin, ymax],
+                                            [v.view_width, v.view_height].map(|size| {
+                                                (size * ctx.pixels_per_point()).max(1.0) as u32
+                                            }),
+                                        )
+                                    }),
+                            )
+                        });
                         (
-                            t.settings.rotation,
+                            camera.map_or(t.settings.rotation, |c| c.rotation),
                             t.settings.time,
-                            t.settings.zoom,
-                            t.settings.earth_fixed_camera,
+                            camera.map_or(t.settings.zoom, |c| c.zoom),
+                            camera.is_some() || t.settings.earth_fixed_camera,
                             map_view,
                         )
                     })
@@ -1280,6 +1281,7 @@ impl eframe::App for App {
                         || v.tile_overlay.needed_tiles != needed;
 
                     if bounds_changed && !needed.is_empty() {
+                        #[cfg(not(target_arch = "wasm32"))]
                         if let Some(trace) = &v.tile_overlay.diagnostics {
                             trace.record("selection", serde_json::json!({
                                 "layout": AtlasLayout::new(&needed, x_origin),
@@ -1362,6 +1364,7 @@ impl eframe::App for App {
                                     );
                                 // Preserve the displayed texture while preparing its replacement.
                                 if layout_changed || updating_current {
+                                    #[cfg(not(target_arch = "wasm32"))]
                                     let started = overlay
                                         .diagnostics
                                         .as_ref()
@@ -1373,6 +1376,7 @@ impl eframe::App for App {
                                         layout,
                                     );
                                     overlay.atlas.set_layout(layout);
+                                    #[cfg(not(target_arch = "wasm32"))]
                                     if let Some(trace) = &overlay.diagnostics {
                                         trace.record("atlas_move", serde_json::json!({
                                             "layout": layout, "updating_current": updating_current,
@@ -1380,6 +1384,7 @@ impl eframe::App for App {
                                         }));
                                     }
                                 }
+                                #[cfg(not(target_arch = "wasm32"))]
                                 let upload_started = overlay
                                     .diagnostics
                                     .as_ref()
@@ -1394,15 +1399,16 @@ impl eframe::App for App {
                                     &overlay.needed_tiles,
                                     &mut writer,
                                 );
-                                let stats = writer.finish();
+                                let _stats = writer.finish();
+                                #[cfg(not(target_arch = "wasm32"))]
                                 if let Some(trace) = &overlay.diagnostics {
                                     trace.record("atlas_upload", serde_json::json!({
-                                        "tiles": stats.uploaded_tiles,
-                                        "bytes": stats.uploaded_tiles * (crate::tile::TILE_SIZE as usize).pow(2) * 4,
-                                        "gpu_reused_tiles": stats.reused_tiles,
-                                        "gpu_resampled_tiles": stats.resampled_tiles,
-                                        "gpu_evicted_tiles": stats.evicted_tiles,
-                                        "gpu_cached_tiles": stats.cached_tiles,
+                                        "tiles": _stats.uploaded_tiles,
+                                        "bytes": _stats.uploaded_tiles * (crate::tile::TILE_SIZE as usize).pow(2) * 4,
+                                        "gpu_reused_tiles": _stats.reused_tiles,
+                                        "gpu_resampled_tiles": _stats.resampled_tiles,
+                                        "gpu_evicted_tiles": _stats.evicted_tiles,
+                                        "gpu_cached_tiles": _stats.cached_tiles,
                                         "elapsed_ms": upload_started.unwrap().elapsed().as_secs_f64() * 1000.0,
                                         "more_uploads": overlay.dirty, "covered": overlay.atlas.covers(&overlay.needed_tiles),
                                     }));
@@ -1413,6 +1419,7 @@ impl eframe::App for App {
                                     && overlay.atlas.covers(&overlay.needed_tiles)
                                 {
                                     gpu.publish_detail_atlas();
+                                    #[cfg(not(target_arch = "wasm32"))]
                                     if let Some(trace) = &overlay.diagnostics {
                                         trace.record(
                                             "published",
@@ -1438,6 +1445,8 @@ impl eframe::App for App {
                 }
             }
         }
+        #[cfg(target_arch = "wasm32")]
+        v.tile_overlay.start_browser_fetches(ctx);
         mark_frame!("tile-overlay");
 
         let real_dt = ctx.input(|i| i.stable_dt) as f64;
@@ -1828,7 +1837,7 @@ impl eframe::App for App {
             });
         }
 
-        if !v.use_gpu_rendering {
+        if v.render_state.is_none() {
             let (tab_rotation, tab_time, tab_animate, tab_earth_fixed) = v
                 .tabs
                 .get(active_tab_idx)
@@ -2246,317 +2255,473 @@ impl eframe::App for App {
 
         if self.viewer.show_info {
             egui::Window::new("Info")
+                .order(egui::Order::Foreground)
                 .open(&mut self.viewer.show_info)
                 .default_width(1000.0)
                 .show(ctx, |ui| {
-                    ui.columns(3, |cols| {
-                        cols[0].heading("Celestial Bodies");
-                        let mut bodies: Vec<_> = CelestialBody::ALL.iter().collect();
-                        bodies.sort_by(|a, b| b.radius_km().partial_cmp(&a.radius_km()).unwrap());
-                        egui::Grid::new("bodies_grid")
-                            .striped(true)
-                            .show(&mut cols[0], |ui| {
-                                ui.strong("Body");
-                                ui.strong("Radius (km)");
-                                ui.strong("mu (km\u{00b3}/s\u{00b2})");
-                                ui.strong("J2 (x10\u{207b}\u{00b3})");
-                                ui.strong("Rotation (h)");
-                                ui.end_row();
-                                for body in bodies {
-                                    ui.label(body.label());
-                                    ui.label(format!("{:.0}", body.radius_km()));
-                                    ui.label(format!("{:.0}", body.mu()));
-                                    ui.label(format!("{:.4}", body.j2() * 1000.0));
-                                    let rot = body.rotation_period_hours();
-                                    if rot.abs() > 100.0 {
-                                        ui.label(format!("{:.0}", rot));
-                                    } else {
-                                        ui.label(format!("{:.1}", rot));
-                                    }
-                                    ui.end_row();
-                                }
-                            });
-
-                        cols[0].add_space(10.0);
-                        cols[0].heading("Walker Constellation");
-                        cols[0].label("Notation: i:T/P/F");
-                        egui::Grid::new("walker_grid").show(&mut cols[0], |ui| {
-                            ui.monospace("i");
-                            ui.label("Inclination (degrees from equator)");
-                            ui.end_row();
-                            ui.monospace("T");
-                            ui.label("Total number of satellites");
-                            ui.end_row();
-                            ui.monospace("P");
-                            ui.label("Number of orbital planes");
-                            ui.end_row();
-                            ui.monospace("F");
-                            ui.label("Phasing factor (0 to P-1)");
-                            ui.end_row();
-                        });
-                        cols[0].add_space(5.0);
-                        cols[0].label("Types:");
-                        cols[0].label("  Delta: 360\u{00b0} RAAN spread (co-rotating)");
-                        cols[0].label("  Star: 180\u{00b0} RAAN spread (counter-rotating)");
-                        cols[0].label("Phasing offset per plane:");
-                        cols[0].monospace("  d = F x 360 / T");
-
-                        cols[0].add_space(10.0);
-                        cols[0].heading("Orbital Parameters");
-                        egui::Grid::new("params_grid").show(&mut cols[0], |ui| {
-                            ui.monospace("RAAN0");
-                            ui.label("Right ascension of first plane");
-                            ui.end_row();
-                            ui.monospace("Delta");
-                            ui.label("RAAN spacing between planes");
-                            ui.end_row();
-                            ui.monospace("Ecc");
-                            ui.label("Eccentricity (0 = circular)");
-                            ui.end_row();
-                            ui.monospace("Omega");
-                            ui.label("Argument of periapsis");
-                            ui.end_row();
-                            ui.monospace("Drag");
-                            ui.label("Atmospheric drag coefficient");
-                            ui.end_row();
-                        });
-
-                        cols[1].heading("Orbital Mechanics");
-                        cols[1].label("Orbital velocity:");
-                        cols[1].monospace("  v = sqrt(mu / r)");
-                        cols[1].label("Orbital period:");
-                        cols[1].monospace("  T = 2pi sqrt(r^3 / mu)");
-                        cols[1].label("One-way latency:");
-                        cols[1].monospace("  t = distance / c");
-                        cols[1].label("J2 RAAN precession:");
-                        cols[1].monospace("  dO/dt = -1.5 J2 (Re/a)^2 n cos(i)");
-                        cols[1].label("where Re = equatorial radius, a = semi-major axis,");
-                        cols[1].label("n = mean motion, i = inclination.");
-
-                        cols[1].add_space(10.0);
-                        cols[1].heading("Satellite Constellations");
-                        egui::Grid::new("constellations_grid").striped(true).show(
-                            &mut cols[1],
-                            |ui| {
-                                ui.strong("Name");
-                                ui.strong("Config");
-                                ui.strong("Alt");
-                                ui.strong("Inc");
-                                ui.end_row();
-                                ui.label("Starlink");
-                                ui.label("22x72");
-                                ui.label("550km");
-                                ui.label("53\u{00b0}");
-                                ui.end_row();
-                                ui.label("OneWeb");
-                                ui.label("49x36");
-                                ui.label("1200km");
-                                ui.label("87.9\u{00b0}");
-                                ui.end_row();
-                                ui.label("Iridium");
-                                ui.label("11x6");
-                                ui.label("780km");
-                                ui.label("86.4\u{00b0}");
-                                ui.end_row();
-                                ui.label("Kuiper");
-                                ui.label("34x34");
-                                ui.label("630km");
-                                ui.label("51.9\u{00b0}");
-                                ui.end_row();
-                                ui.label("Telesat");
-                                ui.label("13x6");
-                                ui.label("1015km");
-                                ui.label("99\u{00b0}");
-                                ui.end_row();
-                            },
-                        );
-
-                        cols[1].add_space(10.0);
-                        cols[1].heading("Constants");
-                        egui::Grid::new("constants_grid").show(&mut cols[1], |ui| {
-                            ui.monospace("mu");
-                            ui.label("Gravitational parameter = G x M");
-                            ui.end_row();
-                            ui.monospace("J2");
-                            ui.label("Oblateness coefficient");
-                            ui.end_row();
-                            ui.monospace("c");
-                            ui.label("Speed of light (299,792 km/s)");
-                            ui.end_row();
-                            ui.monospace("kB");
-                            ui.label("Boltzmann constant (1.381e-23 J/K)");
-                            ui.end_row();
-                        });
-
-                        cols[1].add_space(10.0);
-                        cols[1].heading("ISL Link Budget");
-                        cols[1].label("Optical inter-satellite laser links. The hover tooltip");
-                        cols[1].label("shows the Shannon-Hartley capacity at the current link");
-                        cols[1].label("distance using the parameters in the ISLs panel.");
-                        cols[1].add_space(4.0);
-                        cols[1].label("Shannon-Hartley capacity (bits/s):");
-                        cols[1].monospace("  C = B log2(1 + SNR(d))");
-                        cols[1].label("Signal-to-noise ratio at distance d:");
-                        cols[1].monospace("  SNR(d) = P Gt Gr / (N FSPL(d))");
-                        cols[1].label("Free-space path loss:");
-                        cols[1].monospace("  FSPL(d) = (4 pi d / lambda)^2");
-                        cols[1].label("Thermal noise power:");
-                        cols[1].monospace("  N = kB Nt B");
-                        cols[1].add_space(4.0);
-                        egui::Grid::new("isl_params_grid").show(&mut cols[1], |ui| {
-                            ui.monospace("B");
-                            ui.label("Channel bandwidth (Hz) - hardware spectrum width");
-                            ui.end_row();
-                            ui.monospace("P");
-                            ui.label("Transmit power at the laser aperture (W)");
-                            ui.end_row();
-                            ui.monospace("Gt, Gr");
-                            ui.label("Tx/Rx antenna gain (linear from dBi)");
-                            ui.end_row();
-                            ui.monospace("Nt");
-                            ui.label("Receiver noise temperature (K)");
-                            ui.end_row();
-                            ui.monospace("lambda");
-                            ui.label("Laser wavelength (m)");
-                            ui.end_row();
-                            ui.monospace("d");
-                            ui.label("Link distance (m)");
-                            ui.end_row();
-                            ui.monospace("C");
-                            ui.label("Throughput - the actual bits/s, falls with d");
-                            ui.end_row();
-                        });
-                        cols[1].label("B is constant per terminal; C is what falls off with");
-                        cols[1].label("distance via FSPL. Defaults reproduce SpaceCoMP Table II.");
-
-                        cols[2].heading("Live TLE Data (CelesTrak)");
-                        egui::ScrollArea::vertical()
-                            .max_height(500.0)
-                            .show(&mut cols[2], |ui| {
-                                for (cat, entries) in [
-                                    (
-                                        "Comms",
-                                        vec![
-                                            ("Starlink", "SpaceX LEO broadband", "Operational"),
-                                            ("OneWeb", "LEO broadband", "Operational"),
-                                            ("Kuiper", "Amazon LEO broadband", "Deploying"),
-                                            ("GEO", "Geostationary satellites", "Operational"),
-                                            ("Intelsat", "GEO comms operator", "Operational"),
-                                            ("SES", "GEO/MEO comms operator", "Operational"),
-                                            ("Iridium", "Original voice/data", "Decommissioned"),
-                                            ("Iridium NEXT", "2nd-gen Iridium", "Operational"),
-                                            ("Globalstar", "LEO voice/data", "Operational"),
-                                            ("Orbcomm", "LEO IoT/M2M messaging", "Operational"),
-                                            ("Molniya", "Russian HEO comms", "Decommissioned"),
-                                            ("Swarm", "SpaceX IoT CubeSats", "Operational"),
-                                            ("Amateur", "Amateur radio satellites", "Operational"),
-                                            ("X-Comm", "Experimental comms", "Operational"),
-                                            ("Other Comm", "Miscellaneous comms", "Operational"),
-                                            (
-                                                "SatNOGS",
-                                                "Open-source ground stn network",
-                                                "Operational",
-                                            ),
-                                        ],
-                                    ),
-                                    (
-                                        "Navigation",
-                                        vec![
-                                            ("GPS", "US navigation (MEO)", "Operational"),
-                                            ("Galileo", "EU navigation (MEO)", "Operational"),
-                                            ("GLONASS", "Russian navigation (MEO)", "Operational"),
-                                            (
-                                                "Beidou",
-                                                "Chinese navigation (MEO/GEO)",
-                                                "Operational",
-                                            ),
-                                            ("GNSS", "All GNSS combined", "Operational"),
-                                            ("SBAS", "Augmentation systems (GEO)", "Operational"),
-                                            ("NNSS", "Navy navigation (legacy)", "Decommissioned"),
-                                            ("Musson", "Russian geodetic/nav", "Operational"),
-                                        ],
-                                    ),
-                                    (
-                                        "Observation",
-                                        vec![
-                                            ("Weather", "Weather satellites", "Operational"),
-                                            ("NOAA", "US weather (polar)", "Operational"),
-                                            ("GOES", "US weather (GEO)", "Operational"),
-                                            ("Earth Res.", "Earth resource imaging", "Operational"),
-                                            ("SARSAT", "Search & rescue beacons", "Operational"),
-                                            ("DMC", "Disaster monitoring", "Operational"),
-                                            ("TDRSS", "NASA tracking & data relay", "Operational"),
-                                            (
-                                                "ARGOS",
-                                                "Environmental data collection",
-                                                "Operational",
-                                            ),
-                                            ("Planet", "Earth-imaging CubeSats", "Operational"),
-                                            ("Spire", "Weather/AIS CubeSats", "Operational"),
-                                        ],
-                                    ),
-                                    (
-                                        "Other",
-                                        vec![
-                                            ("Stations", "ISS & space stations", "Operational"),
-                                            ("Last 30 Days", "Recently launched", "Operational"),
-                                            ("100 Brightest", "Visually brightest", "Operational"),
-                                            ("Active", "All active satellites", "Operational"),
-                                            ("Analyst", "Analyst-tracked objects", "Operational"),
-                                            ("Science", "Scientific satellites", "Operational"),
-                                            ("Geodetic", "Geodetic satellites", "Operational"),
-                                            (
-                                                "Engineering",
-                                                "Engineering satellites",
-                                                "Operational",
-                                            ),
-                                            ("Education", "Educational satellites", "Operational"),
-                                            ("Military", "Military satellites", "Operational"),
-                                            ("Radar Cal.", "Radar calibration", "Operational"),
-                                            ("CubeSats", "CubeSat catalog", "Operational"),
-                                            ("Misc", "Uncategorized objects", "Operational"),
-                                        ],
-                                    ),
-                                    (
-                                        "Debris",
-                                        vec![
-                                            ("Fengyun 1C", "2007 ASAT test (~1800)", ""),
-                                            ("Cosmos 2251", "2009 collision (~580)", ""),
-                                            ("Iridium 33", "2009 collision (~110)", ""),
-                                            ("Cosmos 1408", "2021 ASAT test", ""),
-                                        ],
-                                    ),
-                                ] {
-                                    ui.strong(cat);
-                                    egui::Grid::new(format!("tle_{}_grid", cat))
-                                        .striped(true)
-                                        .show(ui, |ui| {
-                                            for (name, desc, status) in &entries {
-                                                ui.label(*name);
-                                                ui.label(*desc);
-                                                if !status.is_empty() {
-                                                    let color = match *status {
-                                                        "Operational" => {
-                                                            egui::Color32::from_rgb(80, 200, 80)
-                                                        }
-                                                        "Deploying" => {
-                                                            egui::Color32::from_rgb(200, 200, 80)
-                                                        }
-                                                        _ => egui::Color32::from_rgb(200, 80, 80),
-                                                    };
-                                                    ui.colored_label(color, *status);
-                                                }
-                                                ui.end_row();
+                    crate::location_search::sources_ui(ui);
+                    ui.separator();
+                    egui::ScrollArea::both()
+                        .id_salt("info_tables")
+                        .max_height((ctx.content_rect().height() - 150.0).max(100.0))
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.set_min_width(1400.0);
+                            ui.columns(3, |cols| {
+                                cols[0].heading("Celestial Bodies");
+                                let mut bodies: Vec<_> = CelestialBody::ALL.iter().collect();
+                                bodies.sort_by(|a, b| {
+                                    b.radius_km().partial_cmp(&a.radius_km()).unwrap()
+                                });
+                                egui::Grid::new("bodies_grid").striped(true).show(
+                                    &mut cols[0],
+                                    |ui| {
+                                        ui.strong("Body");
+                                        ui.strong("Radius (km)");
+                                        ui.strong("mu (km\u{00b3}/s\u{00b2})");
+                                        ui.strong("J2 (x10\u{207b}\u{00b3})");
+                                        ui.strong("Rotation (h)");
+                                        ui.end_row();
+                                        for body in bodies {
+                                            ui.label(body.label());
+                                            ui.label(format!("{:.0}", body.radius_km()));
+                                            ui.label(format!("{:.0}", body.mu()));
+                                            ui.label(format!("{:.4}", body.j2() * 1000.0));
+                                            let rot = body.rotation_period_hours();
+                                            if rot.abs() > 100.0 {
+                                                ui.label(format!("{:.0}", rot));
+                                            } else {
+                                                ui.label(format!("{:.1}", rot));
                                             }
-                                        });
-                                    ui.add_space(4.0);
-                                }
+                                            ui.end_row();
+                                        }
+                                    },
+                                );
+
+                                cols[0].add_space(10.0);
+                                cols[0].heading("Walker Constellation");
+                                cols[0].label("Notation: i:T/P/F");
+                                egui::Grid::new("walker_grid").show(&mut cols[0], |ui| {
+                                    ui.monospace("i");
+                                    ui.label("Inclination (degrees from equator)");
+                                    ui.end_row();
+                                    ui.monospace("T");
+                                    ui.label("Total number of satellites");
+                                    ui.end_row();
+                                    ui.monospace("P");
+                                    ui.label("Number of orbital planes");
+                                    ui.end_row();
+                                    ui.monospace("F");
+                                    ui.label("Phasing factor (0 to P-1)");
+                                    ui.end_row();
+                                });
+                                cols[0].add_space(5.0);
+                                cols[0].label("Types:");
+                                cols[0].label("  Delta: 360\u{00b0} RAAN spread (co-rotating)");
+                                cols[0].label("  Star: 180\u{00b0} RAAN spread (counter-rotating)");
+                                cols[0].label("Phasing offset per plane:");
+                                cols[0].monospace("  d = F x 360 / T");
+
+                                cols[0].add_space(10.0);
+                                cols[0].heading("Orbital Parameters");
+                                egui::Grid::new("params_grid").show(&mut cols[0], |ui| {
+                                    ui.monospace("RAAN0");
+                                    ui.label("Right ascension of first plane");
+                                    ui.end_row();
+                                    ui.monospace("Delta");
+                                    ui.label("RAAN spacing between planes");
+                                    ui.end_row();
+                                    ui.monospace("Ecc");
+                                    ui.label("Eccentricity (0 = circular)");
+                                    ui.end_row();
+                                    ui.monospace("Omega");
+                                    ui.label("Argument of periapsis");
+                                    ui.end_row();
+                                    ui.monospace("Drag");
+                                    ui.label("Atmospheric drag coefficient");
+                                    ui.end_row();
+                                });
+
+                                cols[1].heading("Orbital Mechanics");
+                                cols[1].label("Orbital velocity:");
+                                cols[1].monospace("  v = sqrt(mu / r)");
+                                cols[1].label("Orbital period:");
+                                cols[1].monospace("  T = 2pi sqrt(r^3 / mu)");
+                                cols[1].label("One-way latency:");
+                                cols[1].monospace("  t = distance / c");
+                                cols[1].label("J2 RAAN precession:");
+                                cols[1].monospace("  dO/dt = -1.5 J2 (Re/a)^2 n cos(i)");
+                                cols[1].label("where Re = equatorial radius, a = semi-major axis,");
+                                cols[1].label("n = mean motion, i = inclination.");
+
+                                cols[1].add_space(10.0);
+                                cols[1].heading("Satellite Constellations");
+                                egui::Grid::new("constellations_grid").striped(true).show(
+                                    &mut cols[1],
+                                    |ui| {
+                                        ui.strong("Name");
+                                        ui.strong("Config");
+                                        ui.strong("Alt");
+                                        ui.strong("Inc");
+                                        ui.end_row();
+                                        ui.label("Starlink");
+                                        ui.label("22x72");
+                                        ui.label("550km");
+                                        ui.label("53\u{00b0}");
+                                        ui.end_row();
+                                        ui.label("OneWeb");
+                                        ui.label("49x36");
+                                        ui.label("1200km");
+                                        ui.label("87.9\u{00b0}");
+                                        ui.end_row();
+                                        ui.label("Iridium");
+                                        ui.label("11x6");
+                                        ui.label("780km");
+                                        ui.label("86.4\u{00b0}");
+                                        ui.end_row();
+                                        ui.label("Kuiper");
+                                        ui.label("34x34");
+                                        ui.label("630km");
+                                        ui.label("51.9\u{00b0}");
+                                        ui.end_row();
+                                        ui.label("Telesat");
+                                        ui.label("13x6");
+                                        ui.label("1015km");
+                                        ui.label("99\u{00b0}");
+                                        ui.end_row();
+                                    },
+                                );
+
+                                cols[1].add_space(10.0);
+                                cols[1].heading("Constants");
+                                egui::Grid::new("constants_grid").show(&mut cols[1], |ui| {
+                                    ui.monospace("mu");
+                                    ui.label("Gravitational parameter = G x M");
+                                    ui.end_row();
+                                    ui.monospace("J2");
+                                    ui.label("Oblateness coefficient");
+                                    ui.end_row();
+                                    ui.monospace("c");
+                                    ui.label("Speed of light (299,792 km/s)");
+                                    ui.end_row();
+                                    ui.monospace("kB");
+                                    ui.label("Boltzmann constant (1.381e-23 J/K)");
+                                    ui.end_row();
+                                });
+
+                                cols[1].add_space(10.0);
+                                cols[1].heading("ISL Link Budget");
+                                cols[1].label(
+                                    "Optical inter-satellite laser links. The hover tooltip",
+                                );
+                                cols[1].label(
+                                    "shows the Shannon-Hartley capacity at the current link",
+                                );
+                                cols[1].label("distance using the parameters in the ISLs panel.");
+                                cols[1].add_space(4.0);
+                                cols[1].label("Shannon-Hartley capacity (bits/s):");
+                                cols[1].monospace("  C = B log2(1 + SNR(d))");
+                                cols[1].label("Signal-to-noise ratio at distance d:");
+                                cols[1].monospace("  SNR(d) = P Gt Gr / (N FSPL(d))");
+                                cols[1].label("Free-space path loss:");
+                                cols[1].monospace("  FSPL(d) = (4 pi d / lambda)^2");
+                                cols[1].label("Thermal noise power:");
+                                cols[1].monospace("  N = kB Nt B");
+                                cols[1].add_space(4.0);
+                                egui::Grid::new("isl_params_grid").show(&mut cols[1], |ui| {
+                                    ui.monospace("B");
+                                    ui.label("Channel bandwidth (Hz) - hardware spectrum width");
+                                    ui.end_row();
+                                    ui.monospace("P");
+                                    ui.label("Transmit power at the laser aperture (W)");
+                                    ui.end_row();
+                                    ui.monospace("Gt, Gr");
+                                    ui.label("Tx/Rx antenna gain (linear from dBi)");
+                                    ui.end_row();
+                                    ui.monospace("Nt");
+                                    ui.label("Receiver noise temperature (K)");
+                                    ui.end_row();
+                                    ui.monospace("lambda");
+                                    ui.label("Laser wavelength (m)");
+                                    ui.end_row();
+                                    ui.monospace("d");
+                                    ui.label("Link distance (m)");
+                                    ui.end_row();
+                                    ui.monospace("C");
+                                    ui.label("Throughput - the actual bits/s, falls with d");
+                                    ui.end_row();
+                                });
+                                cols[1]
+                                    .label("B is constant per terminal; C is what falls off with");
+                                cols[1].label(
+                                    "distance via FSPL. Defaults reproduce SpaceCoMP Table II.",
+                                );
+
+                                cols[2].heading("Live TLE Data (CelesTrak)");
+                                egui::ScrollArea::vertical().max_height(500.0).show(
+                                    &mut cols[2],
+                                    |ui| {
+                                        for (cat, entries) in [
+                                            (
+                                                "Comms",
+                                                vec![
+                                                    (
+                                                        "Starlink",
+                                                        "SpaceX LEO broadband",
+                                                        "Operational",
+                                                    ),
+                                                    ("OneWeb", "LEO broadband", "Operational"),
+                                                    ("Kuiper", "Amazon LEO broadband", "Deploying"),
+                                                    (
+                                                        "GEO",
+                                                        "Geostationary satellites",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "Intelsat",
+                                                        "GEO comms operator",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "SES",
+                                                        "GEO/MEO comms operator",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "Iridium",
+                                                        "Original voice/data",
+                                                        "Decommissioned",
+                                                    ),
+                                                    (
+                                                        "Iridium NEXT",
+                                                        "2nd-gen Iridium",
+                                                        "Operational",
+                                                    ),
+                                                    ("Globalstar", "LEO voice/data", "Operational"),
+                                                    (
+                                                        "Orbcomm",
+                                                        "LEO IoT/M2M messaging",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "Molniya",
+                                                        "Russian HEO comms",
+                                                        "Decommissioned",
+                                                    ),
+                                                    ("Swarm", "SpaceX IoT CubeSats", "Operational"),
+                                                    (
+                                                        "Amateur",
+                                                        "Amateur radio satellites",
+                                                        "Operational",
+                                                    ),
+                                                    ("X-Comm", "Experimental comms", "Operational"),
+                                                    (
+                                                        "Other Comm",
+                                                        "Miscellaneous comms",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "SatNOGS",
+                                                        "Open-source ground stn network",
+                                                        "Operational",
+                                                    ),
+                                                ],
+                                            ),
+                                            (
+                                                "Navigation",
+                                                vec![
+                                                    ("GPS", "US navigation (MEO)", "Operational"),
+                                                    (
+                                                        "Galileo",
+                                                        "EU navigation (MEO)",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "GLONASS",
+                                                        "Russian navigation (MEO)",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "Beidou",
+                                                        "Chinese navigation (MEO/GEO)",
+                                                        "Operational",
+                                                    ),
+                                                    ("GNSS", "All GNSS combined", "Operational"),
+                                                    (
+                                                        "SBAS",
+                                                        "Augmentation systems (GEO)",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "NNSS",
+                                                        "Navy navigation (legacy)",
+                                                        "Decommissioned",
+                                                    ),
+                                                    (
+                                                        "Musson",
+                                                        "Russian geodetic/nav",
+                                                        "Operational",
+                                                    ),
+                                                ],
+                                            ),
+                                            (
+                                                "Observation",
+                                                vec![
+                                                    (
+                                                        "Weather",
+                                                        "Weather satellites",
+                                                        "Operational",
+                                                    ),
+                                                    ("NOAA", "US weather (polar)", "Operational"),
+                                                    ("GOES", "US weather (GEO)", "Operational"),
+                                                    (
+                                                        "Earth Res.",
+                                                        "Earth resource imaging",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "SARSAT",
+                                                        "Search & rescue beacons",
+                                                        "Operational",
+                                                    ),
+                                                    ("DMC", "Disaster monitoring", "Operational"),
+                                                    (
+                                                        "TDRSS",
+                                                        "NASA tracking & data relay",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "ARGOS",
+                                                        "Environmental data collection",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "Planet",
+                                                        "Earth-imaging CubeSats",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "Spire",
+                                                        "Weather/AIS CubeSats",
+                                                        "Operational",
+                                                    ),
+                                                ],
+                                            ),
+                                            (
+                                                "Other",
+                                                vec![
+                                                    (
+                                                        "Stations",
+                                                        "ISS & space stations",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "Last 30 Days",
+                                                        "Recently launched",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "100 Brightest",
+                                                        "Visually brightest",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "Active",
+                                                        "All active satellites",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "Analyst",
+                                                        "Analyst-tracked objects",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "Science",
+                                                        "Scientific satellites",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "Geodetic",
+                                                        "Geodetic satellites",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "Engineering",
+                                                        "Engineering satellites",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "Education",
+                                                        "Educational satellites",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "Military",
+                                                        "Military satellites",
+                                                        "Operational",
+                                                    ),
+                                                    (
+                                                        "Radar Cal.",
+                                                        "Radar calibration",
+                                                        "Operational",
+                                                    ),
+                                                    ("CubeSats", "CubeSat catalog", "Operational"),
+                                                    (
+                                                        "Misc",
+                                                        "Uncategorized objects",
+                                                        "Operational",
+                                                    ),
+                                                ],
+                                            ),
+                                            (
+                                                "Debris",
+                                                vec![
+                                                    ("Fengyun 1C", "2007 ASAT test (~1800)", ""),
+                                                    ("Cosmos 2251", "2009 collision (~580)", ""),
+                                                    ("Iridium 33", "2009 collision (~110)", ""),
+                                                    ("Cosmos 1408", "2021 ASAT test", ""),
+                                                ],
+                                            ),
+                                        ] {
+                                            ui.strong(cat);
+                                            egui::Grid::new(format!("tle_{}_grid", cat))
+                                                .striped(true)
+                                                .show(ui, |ui| {
+                                                    for (name, desc, status) in &entries {
+                                                        ui.label(*name);
+                                                        ui.label(*desc);
+                                                        if !status.is_empty() {
+                                                            let color = match *status {
+                                                                "Operational" => {
+                                                                    egui::Color32::from_rgb(
+                                                                        80, 200, 80,
+                                                                    )
+                                                                }
+                                                                "Deploying" => {
+                                                                    egui::Color32::from_rgb(
+                                                                        200, 200, 80,
+                                                                    )
+                                                                }
+                                                                _ => egui::Color32::from_rgb(
+                                                                    200, 80, 80,
+                                                                ),
+                                                            };
+                                                            ui.colored_label(color, *status);
+                                                        }
+                                                        ui.end_row();
+                                                    }
+                                                });
+                                            ui.add_space(4.0);
+                                        }
+                                    },
+                                );
                             });
-                    });
+                        });
                 });
         }
 
-        if self.viewer.show_side_panel {
+        let settings_panel_visible = self.viewer.show_side_panel;
+        if settings_panel_visible {
             #[allow(deprecated)]
             egui::Panel::left("settings_panel")
                 .resizable(true)
@@ -2569,24 +2734,16 @@ impl eframe::App for App {
                 )
                 .show(ctx, |ui| {
                     ui.add_space(4.0);
-                    ui.toggle_value(&mut self.viewer.earth_observation.open, "Earth Observation")
-                        .on_hover_text(
-                            "Show the right sidebar: AOIs, observation model and data collection",
-                        );
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.add_space(4.0);
-                        ui.strong("LeoDOS Visualiser")
-                            .on_hover_text(env!("GIT_HASH"));
-                        if ui.button("[?]").clicked() {
-                            self.viewer.show_info = !self.viewer.show_info;
-                        }
                         if ui
-                            .button("Sim")
-                            .on_hover_text("Open infrastructure experiment controls")
+                            .button("?")
+                            .on_hover_text(concat!("Help\n", env!("GIT_HASH")))
                             .clicked()
                         {
-                            self.simulation_ui.open = true;
+                            self.viewer.show_info = !self.viewer.show_info;
                         }
+                        self.viewer.theme_toggle(ui);
                         {
                             let active = self.viewer.active_tab_idx;
                             let current_name = self
@@ -2620,7 +2777,7 @@ impl eframe::App for App {
                             if button.clicked() {
                                 ui.memory_mut(|m| m.toggle_popup(popup_id));
                             }
-                            if ui.small_button("⏭").on_hover_text("Next tab").clicked() {
+                            if ui.button("⏭").on_hover_text("Next tab").clicked() {
                                 // Advance to the next tab in dock order, wrapping around.
                                 let active_pos = tab_data.iter().position(|&(_, _, i)| i == active);
                                 if let Some(pos) = active_pos {
@@ -2644,6 +2801,9 @@ impl eframe::App for App {
                             let mut demo_requested = false;
                             let mut remove_tab: Option<usize> = None;
                             let mut add_tab = false;
+                            let mut add_satellite_view = false;
+                            let mut add_satellite_table = false;
+                            let mut add_ground_terminals = false;
                             let mut presentation_requested: Option<crate::demo::Presentation> =
                                 None;
                             egui::popup_below_widget(
@@ -2656,7 +2816,7 @@ impl eframe::App for App {
                                     let row_height = ui.spacing().interact_size.y;
                                     let max_rows = 20.0;
                                     egui::ScrollArea::vertical()
-                                        .auto_shrink([false, false])
+                                        .auto_shrink([false, true])
                                         .max_height(row_height * max_rows)
                                         .show(ui, |ui| {
                                             for (pos, &(surface, node, tab_idx)) in
@@ -2688,7 +2848,20 @@ impl eframe::App for App {
                                     if ui.button("+ Add new tab").clicked() {
                                         add_tab = true;
                                     }
+                                    if ui.button("Add satellite view").clicked() {
+                                        add_satellite_view = true;
+                                    }
+                                    if ui.button("Add satellite table").clicked() {
+                                        add_satellite_table = true;
+                                    }
+                                    if ui.button("Add ground terminals").clicked() {
+                                        add_ground_terminals = true;
+                                    }
                                     ui.separator();
+                                    ui.checkbox(
+                                        &mut self.viewer.auto_cycle_tabs,
+                                        "Auto cycle tabs",
+                                    );
                                     ui.horizontal(|ui| {
                                         ui.label("Cycle interval:");
                                         ui.add(
@@ -2767,6 +2940,31 @@ impl eframe::App for App {
                                 let new_idx = self.viewer.tabs.len() - 1;
                                 self.viewer.pending_add_tab = Some(new_idx);
                             }
+                            if add_satellite_view || add_satellite_table || add_ground_terminals {
+                                self.viewer.tab_counter += 1;
+                                let mut tab = crate::config::TabConfig::new_empty(format!(
+                                    "{} {}",
+                                    if add_ground_terminals {
+                                        "Ground Terminals"
+                                    } else if add_satellite_table {
+                                        "Satellite Table"
+                                    } else {
+                                        "Satellite"
+                                    },
+                                    self.viewer.tab_counter
+                                ));
+                                tab.settings.view_mode = if add_ground_terminals {
+                                    crate::config::ViewMode::GroundTerminals
+                                } else if add_satellite_table {
+                                    crate::config::ViewMode::SatelliteTable
+                                } else {
+                                    crate::config::ViewMode::Satellite
+                                };
+                                tab.settings.animate = false;
+                                let new_idx = self.viewer.tabs.len();
+                                self.viewer.tabs.push(tab);
+                                self.viewer.pending_add_tab = Some(new_idx);
+                            }
                             if demo_requested {
                                 self.setup_demo();
                                 #[cfg(target_arch = "wasm32")]
@@ -2778,33 +2976,8 @@ impl eframe::App for App {
                                 replace_web_route("presentation");
                             }
                         }
-                        let play_label = if self.viewer.auto_cycle_tabs {
-                            "⏸"
-                        } else {
-                            "▶"
-                        };
-                        if ui
-                            .small_button(play_label)
-                            .on_hover_text("Auto-cycle tabs")
-                            .clicked()
-                        {
-                            self.viewer.auto_cycle_tabs = !self.viewer.auto_cycle_tabs;
-                        }
-                        let pres_label = if self.viewer.show_tab_info {
-                            "[P]"
-                        } else {
-                            "[p]"
-                        };
-                        if ui
-                            .small_button(pres_label)
-                            .on_hover_text("Presentation mode")
-                            .clicked()
-                        {
-                            self.viewer.show_tab_info = !self.viewer.show_tab_info;
-                        }
-                        if ui.small_button("−").clicked() {
-                            self.viewer.show_side_panel = false;
-                        }
+                        self.viewer.presentation_toggle(ui);
+                        self.viewer.sidebar_toggle(ui);
                     });
                     ui.separator();
                     if self.viewer.show_tab_info {
@@ -2842,6 +3015,7 @@ impl eframe::App for App {
             &mut self.viewer.tabs[active],
             active,
             self.viewer.start_timestamp,
+            &mut self.simulation_ui.open,
         ) {
             self.viewer
                 .revisit
@@ -2859,11 +3033,33 @@ impl eframe::App for App {
             true
         };
         self.viewer.ui_visible = ui_visible;
+        let presentation_loaded = self
+            .viewer
+            .tabs
+            .iter()
+            .any(|tab| tab.slides.is_some() || tab.presentation_slide_number.is_some());
+        let sidebar_toggle =
+            (!settings_panel_visible && (ui_visible || presentation_loaded)).then(|| {
+                egui::Rect::from_min_size(
+                    ctx.content_rect().min + egui::vec2(4.0, 4.0),
+                    egui::vec2(24.0, ctx.global_style().spacing.interact_size.y),
+                )
+            });
+        crate::settings::set_sidebar_toggle_rect(ctx, sidebar_toggle);
         dock_style.tab_bar.height = 0.0;
         dock_style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
         dock_style.tab_bar.show_scroll_bar_on_overflow = false;
         let dock = DockArea::new(&mut self.dock_state).style(dock_style);
         dock.show(ctx, &mut self.viewer);
+        if let Some(rect) = sidebar_toggle {
+            egui::Area::new(egui::Id::new("settings_btn"))
+                .fixed_pos(rect.min)
+                .order(egui::Order::Foreground)
+                .fade_in(false)
+                .show(ctx, |ui| {
+                    self.viewer.sidebar_toggle(ui);
+                });
+        }
         mark_frame!("dock");
 
         #[allow(deprecated)]
@@ -2912,7 +3108,11 @@ impl eframe::App for App {
             } else if space_key {
                 let idx = self.viewer.active_tab_idx;
                 if let Some(tab) = self.viewer.tabs.get_mut(idx) {
-                    tab.settings.animate = !tab.settings.animate;
+                    if tab.settings.view_mode.is_satellite() {
+                        tab.satellite_view.toggle_auto_rotate();
+                    } else if !tab.settings.view_mode.is_reference_view() {
+                        tab.settings.animate = !tab.settings.animate;
+                    }
                 }
             } else if s_key {
                 let idx = self.viewer.active_tab_idx;
@@ -3004,45 +3204,6 @@ impl eframe::App for App {
                             }
                         });
                     });
-                });
-        }
-
-        let presentation_loaded = self
-            .viewer
-            .tabs
-            .iter()
-            .any(|tab| tab.slides.is_some() || tab.presentation_slide_number.is_some());
-        if !self.viewer.show_side_panel && (ui_visible || presentation_loaded) {
-            egui::Area::new(egui::Id::new("settings_btn"))
-                .fixed_pos(egui::pos2(4.0, 4.0))
-                .order(egui::Order::Foreground)
-                .show(ctx, |ui| {
-                    if presentation_loaded {
-                        let response =
-                            ui.allocate_response(egui::vec2(28.0, 28.0), egui::Sense::click());
-                        if response.clicked() {
-                            self.viewer.show_side_panel = true;
-                        }
-                        if response.hovered() {
-                            let visuals = ui.style().interact_selectable(&response, false);
-                            ui.painter().rect(
-                                response.rect,
-                                2.0,
-                                visuals.bg_fill,
-                                visuals.bg_stroke,
-                                egui::StrokeKind::Outside,
-                            );
-                            ui.painter().text(
-                                response.rect.center(),
-                                egui::Align2::CENTER_CENTER,
-                                "+",
-                                egui::FontId::proportional(13.0),
-                                visuals.text_color(),
-                            );
-                        }
-                    } else if ui.small_button("+").clicked() {
-                        self.viewer.show_side_panel = true;
-                    }
                 });
         }
 

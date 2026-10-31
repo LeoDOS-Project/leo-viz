@@ -258,14 +258,12 @@ pub struct MapBindGroupSlot {
     pub texture_gen: u64,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 struct GpuTile {
     texture: wgpu::Texture,
     source: crate::tile::TileCoord,
     last_used: u64,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 struct GpuTileCache {
     tiles: HashMap<crate::tile::TileCoord, GpuTile>,
     clock: u64,
@@ -273,7 +271,6 @@ struct GpuTileCache {
     resampler: TileResampler,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl GpuTileCache {
     fn new(device: &wgpu::Device) -> Self {
         Self {
@@ -285,7 +282,6 @@ impl GpuTileCache {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 pub struct DetailUploadStats {
     pub uploaded_tiles: usize,
@@ -295,13 +291,11 @@ pub struct DetailUploadStats {
     pub cached_tiles: usize,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 struct TileResampler {
     layout: wgpu::BindGroupLayout,
     pipeline: wgpu::ComputePipeline,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl TileResampler {
     fn new(device: &wgpu::Device) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -363,7 +357,6 @@ fn resample(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub struct DetailAtlasWriter<'a> {
     target: &'a wgpu::Texture,
     cache: &'a mut GpuTileCache,
@@ -374,7 +367,6 @@ pub struct DetailAtlasWriter<'a> {
     stats: DetailUploadStats,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl DetailAtlasWriter<'_> {
     fn store_tile(
         &mut self,
@@ -525,7 +517,6 @@ impl DetailAtlasWriter<'_> {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl crate::tile::TileAtlasWriter for &mut DetailAtlasWriter<'_> {
     fn reuse(
         &mut self,
@@ -602,13 +593,9 @@ pub struct GpuResources {
     pub map_texture_key: Option<(CelestialBody, Skin, TextureResolution)>,
     pub detail_view: Option<wgpu::TextureView>,
     pub detail_previous_view: Option<wgpu::TextureView>,
-    #[cfg(not(target_arch = "wasm32"))]
     detail_texture: Option<wgpu::Texture>,
-    #[cfg(not(target_arch = "wasm32"))]
     detail_spare: Option<wgpu::Texture>,
-    #[cfg(not(target_arch = "wasm32"))]
     detail_pending: bool,
-    #[cfg(not(target_arch = "wasm32"))]
     detail_tiles: GpuTileCache,
 
     pub igrf_coeffs_buf: wgpu::Buffer,
@@ -1181,13 +1168,9 @@ impl GpuResources {
             map_texture_key: None,
             detail_view: None,
             detail_previous_view: None,
-            #[cfg(not(target_arch = "wasm32"))]
             detail_texture: None,
-            #[cfg(not(target_arch = "wasm32"))]
             detail_spare: None,
-            #[cfg(not(target_arch = "wasm32"))]
             detail_pending: false,
-            #[cfg(not(target_arch = "wasm32"))]
             detail_tiles: GpuTileCache::new(device),
             dummy_view,
             _dummy_view_rgba: dummy_view_rgba,
@@ -1414,7 +1397,6 @@ impl GpuResources {
         self.write_detail_region(queue, [0, 0], [width, height], rgba);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn new_detail_texture(device: &wgpu::Device, size: [u32; 2]) -> wgpu::Texture {
         device.create_texture(&wgpu::TextureDescriptor {
             label: Some("esri_tile_atlas"),
@@ -1436,7 +1418,6 @@ impl GpuResources {
         })
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn move_detail_atlas(
         &mut self,
         device: &wgpu::Device,
@@ -1504,12 +1485,10 @@ impl GpuResources {
         self.detail_pending = true;
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn detail_atlas_pending(&self) -> bool {
         self.detail_pending
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn publish_detail_atlas(&mut self) {
         self.detail_previous_view = self.detail_view.replace(
             self.detail_texture
@@ -1521,7 +1500,6 @@ impl GpuResources {
         self.texture_gen += 1;
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn detail_atlas_writer<'a>(
         &'a mut self,
         device: &'a wgpu::Device,

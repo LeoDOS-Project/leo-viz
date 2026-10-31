@@ -5,7 +5,7 @@ mod data;
 mod environment;
 mod generate;
 mod geometry;
-mod gpu;
+pub(crate) mod gpu;
 mod presets;
 pub(crate) mod preview;
 mod spatial;

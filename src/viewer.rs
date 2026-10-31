@@ -22,7 +22,6 @@ use crate::texture::{
     STAR_TEXTURE_RESULT, TEXTURE_RESULT,
 };
 use crate::texture::{EarthTexture, RingTexture, TextureLoadState};
-#[cfg(not(target_arch = "wasm32"))]
 use crate::tile::TileOverlayState;
 use crate::time::{
     body_rotation_angle, continuous_day_of_year, DAYS_PER_YEAR, SOLAR_DECLINATION_MAX,
@@ -313,7 +312,6 @@ pub(crate) struct ViewerState {
     pub(crate) slideshow_mode: bool,
     pub(crate) show_tab_info: bool,
     pub(crate) slideshow_fade_alpha: f32,
-    pub(crate) use_gpu_rendering: bool,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) show_borders: bool,
     #[cfg(not(target_arch = "wasm32"))]
@@ -347,7 +345,6 @@ pub(crate) struct ViewerState {
     pub(crate) tle_fetch_tx: mpsc::Sender<(TlePreset, Result<Vec<TleSatellite>, String>)>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) tle_fetch_rx: mpsc::Receiver<(TlePreset, Result<Vec<TleSatellite>, String>)>,
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) tile_overlay: TileOverlayState,
     pub(crate) view_width: f32,
     pub(crate) view_height: f32,
@@ -383,8 +380,6 @@ pub(crate) struct ViewerState {
     pub(crate) alignment_search_years: f64,
     #[cfg(target_arch = "wasm32")]
     pub(crate) last_url_hash: String,
-    pub(crate) last_frame_instant: Option<web_time::Instant>,
-    pub(crate) fps_smooth: f64,
     pub(crate) moon_image_handles: HashMap<CelestialBody, egui::TextureHandle>,
     pub(crate) editing_tab: Option<usize>,
 }
@@ -402,17 +397,24 @@ impl TabViewer for ViewerState {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         if *tab < self.tabs.len() {
-            // Slide tabs are non-disruptive: switching to/from them must not
+            // Slide and spacecraft inspection tabs are non-disruptive: switching must not
             // reset the simulation state on the other side.
             let prev_is_slides = self
                 .tabs
                 .get(self.prev_active_tab_idx)
                 .map_or(false, |t| t.slides.is_some());
             let curr_is_slides = self.tabs[*tab].slides.is_some();
-            let crossing_slide_boundary = prev_is_slides || curr_is_slides;
+            let crossing_inspector_boundary =
+                self.tabs[*tab].settings.view_mode.is_reference_view()
+                    || self
+                        .tabs
+                        .get(self.prev_active_tab_idx)
+                        .is_some_and(|t| t.settings.view_mode.is_reference_view());
+            let preserve_simulation =
+                prev_is_slides || curr_is_slides || crossing_inspector_boundary;
             if self.prev_active_tab_idx != *tab
                 && self.prev_active_tab_idx < self.tabs.len()
-                && !crossing_slide_boundary
+                && !preserve_simulation
             {
                 // Full reset on tab switch so each demo opens in its designed
                 // initial state, regardless of whatever state the previous tab
@@ -596,7 +598,6 @@ impl ViewerState {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn tile_overlay_detail_bounds(
         &self,
         body: CelestialBody,
@@ -615,41 +616,37 @@ impl ViewerState {
         })
     }
 
-    #[cfg(target_arch = "wasm32")]
-    fn tile_overlay_detail_bounds(
-        &self,
-        _body: CelestialBody,
-    ) -> Option<crate::renderer::DetailLayer> {
-        None
-    }
-
     fn render_tab_ui(&mut self, ui: &mut egui::Ui, tab_idx: usize) {
-        let now = web_time::Instant::now();
-        if let Some(prev) = self.last_frame_instant {
-            let dt = now.duration_since(prev).as_secs_f64();
-            if dt > 0.0 {
-                let instant_fps = 1.0 / dt;
-                self.fps_smooth = self.fps_smooth * 0.9 + instant_fps * 0.1;
-            }
-        }
-        self.last_frame_instant = Some(now);
-
         if self.tabs[tab_idx].slides.is_some() {
             self.render_slides_ui(ui, tab_idx);
             return;
         }
 
-        if self.tabs[tab_idx].show_fps {
-            let fps_text = format!("{:.0} FPS", self.fps_smooth);
-            let rect = ui.available_rect_before_wrap();
-            let pos = egui::pos2(rect.right() - 70.0, rect.top() + 4.0);
-            ui.painter().text(
-                pos,
-                egui::Align2::LEFT_TOP,
-                fps_text,
-                egui::FontId::monospace(14.0),
-                egui::Color32::from_rgb(200, 200, 200),
-            );
+        if self.tabs[tab_idx].settings.view_mode == crate::config::ViewMode::GroundTerminals {
+            ui.push_id(("ground_terminals", tab_idx), |ui| {
+                self.tabs[tab_idx].ground_terminals.show(ui);
+            });
+            return;
+        }
+
+        if self.tabs[tab_idx].settings.view_mode.is_satellite() {
+            ui.push_id(("satellite_view", tab_idx), |ui| {
+                let tab = &mut self.tabs[tab_idx];
+                if tab.settings.view_mode == crate::config::ViewMode::SatelliteTable {
+                    if tab
+                        .satellite_view
+                        .show_comparison(ui, self.render_state.as_ref())
+                    {
+                        tab.settings.view_mode = crate::config::ViewMode::Satellite;
+                    }
+                } else {
+                    let back = tab.satellite_view.show(ui, self.render_state.as_ref());
+                    if back {
+                        tab.settings.view_mode = crate::config::ViewMode::SatelliteTable;
+                    }
+                }
+            });
+            return;
         }
 
         if self.auto_cycle_tabs && self.show_tab_info {
@@ -1203,9 +1200,7 @@ impl ViewerState {
 
         let planet_name = self.tabs[tab_idx].planets[planet_idx].name.clone();
         let current_body = self.tabs[tab_idx].planets[planet_idx].celestial_body;
-        let current_skin = self.tabs[tab_idx].planets[planet_idx].skin;
         let mut new_body = current_body;
-        let mut new_skin = current_skin;
         let mut reset_skin = false;
 
         let show_stats = self.tabs[tab_idx].show_stats;
@@ -1224,6 +1219,7 @@ impl ViewerState {
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
+                        crate::settings::reserve_sidebar_toggle(ui);
                         ui.strong(&planet_name);
                         if ui.small_button("+").clicked() {
                             add_planet = true;
@@ -1290,30 +1286,25 @@ impl ViewerState {
                             reset_skin = true;
                         }
 
-                        let available_skins = new_body.available_skins();
-                        if available_skins.len() > 1 {
-                            egui::ComboBox::from_id_salt(format!(
-                                "skin_{}_{}",
-                                tab_idx, planet_idx
-                            ))
-                            .selected_text(new_skin.label())
-                            .show_ui(ui, |ui| {
-                                for skin in available_skins {
-                                    ui.selectable_value(&mut new_skin, *skin, skin.label());
-                                }
-                            });
-                        }
-
                         ui.separator();
 
-                        if ui.selectable_label(show_stats, "Stats").clicked() {
+                        if ui
+                            .add(egui::Button::new("Stats").selected(show_stats))
+                            .clicked()
+                        {
                             self.tabs[tab_idx].show_stats = !show_stats;
                         }
-                        if ui.selectable_label(show_places, "Ground").clicked() {
+                        if ui
+                            .add(egui::Button::new("Ground").selected(show_places))
+                            .clicked()
+                        {
                             self.tabs[tab_idx].planets[planet_idx].show_gs_aoi_window =
                                 !show_places;
                         }
-                        if ui.selectable_label(show_config, "Space").clicked() {
+                        if ui
+                            .add(egui::Button::new("Space").selected(show_config))
+                            .clicked()
+                        {
                             self.tabs[tab_idx].planets[planet_idx].show_config_window =
                                 !show_config;
                         }
@@ -1325,12 +1316,18 @@ impl ViewerState {
                         }
                         let show_conj =
                             self.tabs[tab_idx].planets[planet_idx].show_conjunction_window;
-                        if ui.selectable_label(show_conj, "Conj").clicked() {
+                        if ui
+                            .add(egui::Button::new("Conj").selected(show_conj))
+                            .clicked()
+                        {
                             self.tabs[tab_idx].planets[planet_idx].show_conjunction_window =
                                 !show_conj;
                         }
                         let show_rad = self.tabs[tab_idx].planets[planet_idx].show_radiation_window;
-                        if ui.selectable_label(show_rad, "Rad").clicked() {
+                        if ui
+                            .add(egui::Button::new("Rad").selected(show_rad))
+                            .clicked()
+                        {
                             self.tabs[tab_idx].planets[planet_idx].show_radiation_window =
                                 !show_rad;
                         }
@@ -1347,10 +1344,6 @@ impl ViewerState {
                                 self.tabs[tab_idx].planets[planet_idx].show_moons_window = !show_m;
                             }
                         }
-                        let show_fps = self.tabs[tab_idx].show_fps;
-                        if ui.selectable_label(show_fps, "FPS").clicked() {
-                            self.tabs[tab_idx].show_fps = !show_fps;
-                        }
                     });
                 });
         } // ui_visible
@@ -1364,12 +1357,11 @@ impl ViewerState {
             let planet = &mut tab.planets[planet_idx];
             if new_body != planet.celestial_body {
                 tab.settings.zoom = 1.0;
+                planet.location_search = crate::location_search::Search::default();
             }
             planet.celestial_body = new_body;
             if reset_skin {
                 planet.skin = Skin::Default;
-            } else {
-                planet.skin = new_skin;
             }
         }
 
@@ -2074,6 +2066,7 @@ impl ViewerState {
             let mut adam_applied = false;
             let mut const_to_remove: Option<usize> = None;
             let mut cameras_to_clean: Vec<usize> = Vec::new();
+            let altitude_edit_time = self.tabs[tab_idx].settings.time;
             let planet = &mut self.tabs[tab_idx].planets[planet_idx];
             let num_constellations = planet.constellations.len();
             let show_tle = planet.show_tle_window;
@@ -2437,6 +2430,7 @@ impl ViewerState {
 
                     ui.horizontal(|ui| {
                         ui.label("Alt:");
+                        let previous_altitude = cons.altitude_km;
                         let alt_resp = ui.add_enabled(editable, egui::DragValue::new(&mut cons.altitude_km).range(0.0..=50000.0).suffix(" km")).on_hover_text("Orbit altitude above surface");
                         let orbit_label = if cons.altitude_km < 450.0 { "VLEO" }
                             else if cons.altitude_km < 2000.0 { "LEO" }
@@ -2471,6 +2465,9 @@ impl ViewerState {
                         if alt_resp.changed() {
                             cons.preset = Preset::None;
                         }
+                        cons.preserve_phase_after_altitude_change(
+                            previous_altitude, altitude_edit_time, planet.celestial_body,
+                        );
                     });
 
                     ui.horizontal(|ui| {
@@ -2947,10 +2944,13 @@ impl ViewerState {
         let skin = planet.skin;
         let view_name = planet.name.clone();
 
-        #[cfg(not(target_arch = "wasm32"))]
-        let hide_sats = self.tabs[tab_idx].settings.zoom > 100.0 && self.tile_overlay.enabled;
-        #[cfg(target_arch = "wasm32")]
-        let hide_sats = false;
+        let hide_sats = celestial_body == CelestialBody::Earth
+            && planet
+                .location_search
+                .camera
+                .map_or(self.tabs[tab_idx].settings.zoom, |c| c.zoom)
+                > 100.0
+            && self.tile_overlay.enabled;
         let mut constellations_data: Vec<DrawConstellationData> = if hide_sats {
             Vec::new()
         } else {
@@ -3089,6 +3089,7 @@ impl ViewerState {
                             propagator: Propagator::Keplerian,
                             eccentricity: 0.0,
                             arg_periapsis_deg: 0.0,
+                            orbital_phase: [0.0; 3],
                             planet_radius,
                             planet_mu,
                             planet_j2,
@@ -3123,6 +3124,7 @@ impl ViewerState {
                         propagator: Propagator::Keplerian,
                         eccentricity: 0.0,
                         arg_periapsis_deg: 0.0,
+                        orbital_phase: [0.0; 3],
                         planet_radius,
                         planet_mu,
                         planet_j2,
@@ -3234,6 +3236,7 @@ impl ViewerState {
                         propagator: Propagator::Keplerian,
                         eccentricity: 0.0,
                         arg_periapsis_deg: 0.0,
+                        orbital_phase: [0.0; 3],
                         planet_radius,
                         planet_mu,
                         planet_j2,
@@ -4086,6 +4089,39 @@ impl ViewerState {
         let planet_projection = self.tabs[tab_idx].planets[planet_idx]
             .projection_override
             .unwrap_or(settings.planet_projection);
+        let search_result = if render_planet && celestial_body == CelestialBody::Earth {
+            let divisions = if show_torus { 2.0 } else { 1.0 };
+            let viewport = egui::Rect::from_min_size(
+                ui.cursor().min,
+                egui::vec2(available.x / divisions, (available.y - 20.0).max(0.0)),
+            );
+            self.tabs[tab_idx].planets[planet_idx].location_search.show(
+                ui.ctx(),
+                egui::Id::new(("location_search", tab_idx, planet_idx)),
+                viewport,
+            )
+        } else {
+            None
+        };
+        let aspect =
+            (available.x / if show_torus { 2.0 } else { 1.0 }) / (available.y - 20.0).max(1.0);
+        let search_bounds = search_result.as_ref().and_then(|place| {
+            if planet_projection == crate::projection::ProjectionKind::Orthographic {
+                crate::location_search::navigate(
+                    &mut self.tabs[tab_idx],
+                    planet_idx,
+                    place,
+                    aspect as f64,
+                );
+                None
+            } else {
+                Some(place.map_bounds(planet_projection, aspect as f64))
+            }
+        });
+        let settings = &self.tabs[tab_idx].settings;
+        let search_camera = self.tabs[tab_idx].planets[planet_idx]
+            .location_search
+            .camera;
         let show_solar_system = view_mode == crate::config::ViewMode::SolarSystem;
         let show_planet_sizes = view_mode == crate::config::ViewMode::PlanetSizes;
         let show_orbits = settings.show_orbits;
@@ -4095,8 +4131,12 @@ impl ViewerState {
         let coverage_angle = settings.coverage_angle;
         let time = settings.time;
         let rotation = {
-            let base = settings.rotation;
-            let roll = settings.camera_roll.to_radians();
+            let base = search_camera.map_or(settings.rotation, |c| c.rotation);
+            let roll = if search_camera.is_some() {
+                0.0
+            } else {
+                settings.camera_roll.to_radians()
+            };
             if roll.abs() < 1e-9 {
                 base
             } else {
@@ -4106,9 +4146,9 @@ impl ViewerState {
                 roll_mat * base
             }
         };
-        let zoom = settings.zoom;
-        let earth_fixed_camera = settings.earth_fixed_camera;
-        let sun_fixed_camera = settings.sun_fixed_camera;
+        let zoom = search_camera.map_or(settings.zoom, |c| c.zoom);
+        let earth_fixed_camera = search_camera.is_some() || settings.earth_fixed_camera;
+        let sun_fixed_camera = search_camera.is_none() && settings.sun_fixed_camera;
         let body_rot_angle = body_rotation_angle(celestial_body, time, self.current_gmst);
         let cos_a = body_rot_angle.cos();
         let sin_a = body_rot_angle.sin();
@@ -4335,7 +4375,6 @@ impl ViewerState {
                             show_eclipse,
                             show_sun,
                             earth_fixed_camera,
-                            use_gpu_rendering: self.use_gpu_rendering,
                             show_clouds,
                             show_day_night,
                             show_city_lights,
@@ -4546,6 +4585,7 @@ impl ViewerState {
                         let (rot, new_zoom) = draw_3d_view(
                             ui,
                             Draw3dInput {
+                                search_highlight: planet.location_search.highlight(),
                                 observation_sampler: self
                                     .earth_observation
                                     .armed_for(tab_idx, planet_idx),
@@ -4653,7 +4693,19 @@ impl ViewerState {
                                 label_click_request: &mut label_click_req,
                             },
                         );
-                        {
+                        if rot != rotation || new_zoom != zoom {
+                            self.tabs[tab_idx].planets[planet_idx]
+                                .location_search
+                                .user_navigated();
+                        }
+                        if search_camera.is_some() {
+                            self.tabs[tab_idx].planets[planet_idx]
+                                .location_search
+                                .camera = Some(crate::location_search::Camera {
+                                rotation: rot,
+                                zoom: new_zoom,
+                            });
+                        } else {
                             // Strip the sun-fix rotation before saving so it
                             // doesn't compound across frames.
                             let rot = rot * sun_y_rotation.transpose();
@@ -4667,11 +4719,12 @@ impl ViewerState {
                                     nalgebra::Matrix3::new(c, s, 0.0, -s, c, 0.0, 0.0, 0.0, 1.0);
                                 self.tabs[tab_idx].settings.rotation = roll_inv * rot;
                             }
+                            self.tabs[tab_idx].settings.zoom = new_zoom;
                         }
-                        self.tabs[tab_idx].settings.zoom = new_zoom;
                         if !job_pick.is_empty() {
                             self.aoi_generator.jobs.pick(job_pick);
-                            self.earth_observation.open = true;
+                            self.earth_observation.open =
+                                crate::earth_observation::Panel::available_for(&self.tabs[tab_idx]);
                         }
                         if let Some((lat, lon)) = observation_pick {
                             self.earth_observation.pick(tab_idx, planet_idx, lat, lon);
@@ -4776,12 +4829,17 @@ impl ViewerState {
                             self.aoi_generator.jobs.selected(),
                             &planet.areas_of_interest,
                             &mut job_pick,
+                            search_bounds,
+                            planet.location_search.highlight(),
                         );
                         if !job_pick.is_empty() {
                             self.aoi_generator.jobs.pick(job_pick);
-                            self.earth_observation.open = true;
+                            self.earth_observation.open =
+                                crate::earth_observation::Panel::available_for(&self.tabs[tab_idx]);
                         }
-                        #[cfg(not(target_arch = "wasm32"))]
+                        self.tabs[tab_idx].planets[planet_idx]
+                            .location_search
+                            .observe_map(map_bounds, search_bounds.is_some());
                         if celestial_body == CelestialBody::Earth {
                             let pixels = [view_width, view_height]
                                 .map(|size| (size * ui.ctx().pixels_per_point()).max(1.0) as u32);
@@ -4799,8 +4857,6 @@ impl ViewerState {
                                 ui.ctx().request_repaint();
                             }
                         }
-                        #[cfg(target_arch = "wasm32")]
-                        let _ = map_bounds;
                     });
                 }
 

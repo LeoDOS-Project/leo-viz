@@ -17,9 +17,12 @@ mod drawing;
 mod earth_observation;
 mod geo;
 mod globe_overlay;
+mod ground_terminals;
 mod igrf;
 mod jobs;
 mod kessler;
+mod location_boundary;
+mod location_search;
 mod math;
 mod orbit_presets;
 mod pass;
@@ -31,13 +34,15 @@ mod pushbroom_image;
 mod radiation;
 mod renderer;
 mod revisit;
+mod satellite_catalogue;
+mod satellite_model;
+mod satellite_view;
 mod settings;
 mod simulation_ui;
 mod slides;
 mod solar_system;
 mod spacecomp;
 mod texture;
-#[cfg(not(target_arch = "wasm32"))]
 mod tile;
 #[cfg(not(target_arch = "wasm32"))]
 mod tile_diagnostics;
@@ -113,6 +118,7 @@ fn main() {
             .expect("Not a canvas");
 
         let web_options = eframe::WebOptions::default();
+        location_search::install_web_shortcut(&document);
         eframe::WebRunner::new()
             .start(
                 canvas,

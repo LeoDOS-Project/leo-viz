@@ -30,6 +30,7 @@ pub(crate) fn apply_adam(c: &mut ConstellationConfig) {
     c.sat_spacing_km = None;
     c.eccentricity = 0.0;
     c.arg_periapsis = 0.0;
+    c.orbital_phase = [0.0; 3];
     c.sso = false;
     c.propagator = Propagator::Keplerian;
     c.drag_enabled = false;

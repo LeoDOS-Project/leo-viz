@@ -116,8 +116,9 @@ impl History {
             .find(|&&source| self.tracks.contains_key(&(source, plane, satellite)))?;
         let track = self.tracks.get(&(source, plane, satellite))?;
         let mut samples: Vec<_> = track.samples.iter().copied().collect();
-        if samples.last().is_some_and(|s| s.time != track.head.time) {
-            samples.push(track.head);
+        match samples.last_mut() {
+            Some(last) if last.time == track.head.time => *last = track.head,
+            _ => samples.push(track.head),
         }
         if samples.len() < 2 {
             return None;
@@ -238,27 +239,12 @@ impl History {
             constellations.iter().enumerate()
         {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            (
-                draw_index,
-                kind,
-                source_index,
-                label,
-                orbit.total_sats,
-                orbit.num_planes,
-            )
-                .hash(&mut hasher);
-            for v in [
-                orbit.altitude_km,
-                orbit.inclination_deg,
-                orbit.phasing,
-                orbit.raan_offset_deg,
-                orbit.eccentricity,
-                orbit.arg_periapsis_deg,
-                orbit.raan_spacing_deg.unwrap_or(0.0),
-                orbit.sat_spacing_km.unwrap_or(0.0),
-            ] {
-                v.to_bits().hash(&mut hasher);
+            (kind, source_index, orbit.total_sats, orbit.num_planes).hash(&mut hasher);
+            if *source_index == usize::MAX {
+                (draw_index, label).hash(&mut hasher);
             }
+            // History belongs to the spacecraft, not its current orbital settings.
+            // record() separately rejects discontinuous ground-position changes.
             let source = hasher.finish();
             self.sources.entry(*source_index).or_default().push(source);
             for sat in positions {
@@ -616,6 +602,119 @@ mod tests {
             );
         }
         assert!(history.image_strip(3, 0, 0, settings, R).is_none());
+    }
+
+    #[test]
+    fn gradual_altitude_edits_keep_scan_history_in_both_directions() {
+        use crate::{celestial::CelestialBody, config::ConstellationConfig};
+        let body = CelestialBody::Earth;
+        let settings = Settings {
+            enabled: true,
+            ..Default::default()
+        };
+        let update = |history: &mut History, config: &ConstellationConfig, time| {
+            let orbit = config.constellation(
+                body.radius_km(),
+                body.mu(),
+                body.j2(),
+                body.equatorial_radius_km(),
+            );
+            let positions = orbit.satellite_positions(time);
+            history.update(
+                time,
+                &Matrix3::identity(),
+                body.radius_km(),
+                &[(orbit, positions, 0, 0, 0, config.preset_name().into())],
+                settings,
+            );
+        };
+        for running in [false, true] {
+            let mut config = ConstellationConfig::new(0);
+            config.sats_per_plane = 1;
+            config.num_planes = 1;
+            config.altitude_km = 550.0;
+            config.inclination = 53.0;
+            config.preset = crate::config::Preset::Starlink;
+            let mut history = History::default();
+            for i in 0..=18 {
+                update(&mut history, &config, 12_345.0 + i as f64 * 0.5);
+            }
+            let mut time = history.time.unwrap();
+            let original = history
+                .image_strip(0, 0, 0, settings, body.radius_km())
+                .unwrap();
+            let key = (original.source, 0, 0);
+            let samples = history.tracks[&key].samples.len();
+            for altitude in [550.1, 550.2, 550.3, 550.2, 550.1, 550.0, 549.9, 549.8] {
+                if running {
+                    time += 0.1;
+                }
+                let previous = config.altitude_km;
+                config.altitude_km = altitude;
+                config.preset = crate::config::Preset::None;
+                config.preserve_phase_after_altitude_change(previous, time, body);
+                update(&mut history, &config, time);
+                let strip = history
+                    .image_strip(0, 0, 0, settings, body.radius_km())
+                    .unwrap();
+                assert_eq!(strip.source, original.source);
+                assert!(history.tracks[&key].samples.len() >= samples);
+                assert!(
+                    (strip.lines.last().unwrap().distance_km - settings.image_length_km).abs()
+                        < 1e-8
+                );
+            }
+            // A real teleport must still discard the unvisited connecting strip.
+            config.raan_offset += 60.0;
+            update(&mut history, &config, time);
+            assert_eq!(history.tracks[&key].samples.len(), 1);
+            assert!(history
+                .image_strip(0, 0, 0, settings, body.radius_km())
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn paused_altitude_edits_update_the_current_scanline_horizon() {
+        let mut history = History::default();
+        history.sources.insert(0, vec![0]);
+        for time in [0.0, 2.0] {
+            history.record(
+                (0, 0, 0),
+                Sample {
+                    radius_ratio: 1.0001,
+                    ..sample(time)
+                },
+                Color32::GREEN,
+                60.0,
+                R,
+            );
+        }
+        let settings = Settings {
+            enabled: true,
+            swath_km: 500.0,
+            ..Default::default()
+        };
+        let before = history.image_strip(0, 0, 0, settings, R).unwrap();
+        let head = history.tracks[&(0, 0, 0)].head;
+        history.record(
+            (0, 0, 0),
+            Sample {
+                radius_ratio: 1.01,
+                ..head
+            },
+            Color32::GREEN,
+            60.0,
+            R,
+        );
+        let after = history.image_strip(0, 0, 0, settings, R).unwrap();
+        let width = |strip: &ImageStrip| {
+            angular_distance(strip.lines[0].edges[0], strip.lines[0].edges[1]) * R
+        };
+        assert!(width(&before) < 200.0);
+        assert!((width(&after) - 500.0).abs() < 1e-6);
+        assert_eq!(before.source, after.source);
+        assert_eq!(before.lines.len(), after.lines.len());
     }
     #[test]
     fn globe_mesh_clips_hidden_side_and_fan_adds_geometry() {

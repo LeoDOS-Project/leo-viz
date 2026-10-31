@@ -1,11 +1,13 @@
 //! Map tile caching and quadtree management.
 //!
 //! Implements a quadtree-based tile cache for high-resolution Earth imagery
-//! with LRU eviction. Supports background tile fetching and disk caching.
+//! with LRU eviction. Uses native workers and disk caching, or asynchronous
+//! browser requests with the browser's HTTP cache.
 
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
 use std::sync::mpsc;
+use web_time::Instant;
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq, Debug, serde::Serialize)]
 pub struct TileCoord {
@@ -274,7 +276,7 @@ impl AtlasLayout {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DetailAtlas {
     pub layout: Option<AtlasLayout>,
     sources: HashMap<TileCoord, TileCoord>,
@@ -397,6 +399,7 @@ impl TileFetchResult {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn fetch_tile(request: &TileFetchRequest, agent: &ureq::Agent) -> TileFetchResult {
     fetch_tile_from(
         request,
@@ -405,6 +408,7 @@ pub fn fetch_tile(request: &TileFetchRequest, agent: &ureq::Agent) -> TileFetchR
     )
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn fetch_tile_from(
     request: &TileFetchRequest,
     agent: &ureq::Agent,
@@ -687,32 +691,106 @@ pub struct TileOverlayState {
     #[cfg(not(target_arch = "wasm32"))]
     pub disk_cache_dir: std::path::PathBuf,
     pub detail_texture: Option<DetailTexture>,
-    #[cfg(not(target_arch = "wasm32"))]
     pub fetch_tx: mpsc::Sender<TileFetchRequest>,
     pub result_rx: mpsc::Receiver<TileFetchResult>,
+    #[cfg(target_arch = "wasm32")]
+    fetch_rx: mpsc::Receiver<TileFetchRequest>,
+    #[cfg(target_arch = "wasm32")]
+    result_tx: mpsc::Sender<TileFetchResult>,
+    #[cfg(target_arch = "wasm32")]
+    in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub last_zoom: u8,
     pub pending_tiles: HashSet<TileCoord>,
-    pub missing_tiles: HashMap<TileCoord, std::time::Instant>,
+    pub missing_tiles: HashMap<TileCoord, Instant>,
     pub needed_tiles: Vec<TileCoord>,
     pub dirty: bool,
-    #[cfg(not(target_arch = "wasm32"))]
     pub fetch_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub generation: u64,
     pub tile_x_origin: u32,
     pub base_fetched: bool,
     pub atlas: DetailAtlas,
+    #[cfg(not(target_arch = "wasm32"))]
     pub diagnostics: Option<std::sync::Arc<crate::tile_diagnostics::Trace>>,
 }
 
 pub struct TileFetchRequest {
     pub coord: TileCoord,
+    #[cfg(not(target_arch = "wasm32"))]
     pub cache_dir: std::path::PathBuf,
     pub generation: u64,
     pub cancel_if_stale: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     pub trace: Option<crate::tile_diagnostics::RequestTrace>,
 }
 
+impl TileFetchRequest {
+    pub fn is_stale(&self, generation: u64) -> bool {
+        self.cancel_if_stale && self.coord.z > 6 && self.generation != generation
+    }
+}
+
 impl TileOverlayState {
+    #[cfg(target_arch = "wasm32")]
+    pub fn new_browser() -> Self {
+        let (fetch_tx, fetch_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        Self {
+            enabled: true,
+            tile_tree: TileQuadTree::new(1024),
+            detail_texture: None,
+            fetch_tx,
+            fetch_rx,
+            result_rx,
+            result_tx,
+            in_flight: Default::default(),
+            last_zoom: 0,
+            pending_tiles: HashSet::new(),
+            missing_tiles: HashMap::new(),
+            needed_tiles: Vec::new(),
+            dirty: false,
+            fetch_generation: Default::default(),
+            generation: 0,
+            tile_x_origin: 0,
+            base_fetched: false,
+            atlas: DetailAtlas::default(),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn start_browser_fetches(&mut self, ctx: &eframe::egui::Context) {
+        use std::sync::atomic::Ordering;
+        if !self.enabled {
+            return;
+        }
+        while self.in_flight.load(Ordering::Relaxed) < 4 {
+            let Ok(request) = self.fetch_rx.try_recv() else {
+                break;
+            };
+            if request.is_stale(self.generation) {
+                let _ = self.result_tx.send(TileFetchResult::empty(&request));
+                ctx.request_repaint();
+                continue;
+            }
+            let coord = request.coord;
+            let url = format!(
+                "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{}/{}/{}?blankTile=false",
+                coord.z, coord.y, coord.x
+            );
+            let mut http = ehttp::Request::get(url);
+            http.timeout = Some(std::time::Duration::from_secs(8));
+            let result_tx = self.result_tx.clone();
+            let in_flight = self.in_flight.clone();
+            let ctx = ctx.clone();
+            in_flight.fetch_add(1, Ordering::Relaxed);
+            // Default Fetch caching honors ESRI's Cache-Control/ETag headers.
+            ehttp::fetch(http, move |response| {
+                let _ = result_tx.send(browser_tile_result(&request, response));
+                in_flight.fetch_sub(1, Ordering::Relaxed);
+                ctx.request_repaint();
+            });
+        }
+    }
+
     pub fn queue_tile(&mut self, coord: TileCoord) {
         self.queue_tile_request(coord, true);
     }
@@ -730,7 +808,7 @@ impl TileOverlayState {
                 self.missing_tiles.remove(&oldest);
             }
         }
-        self.missing_tiles.insert(coord, std::time::Instant::now());
+        self.missing_tiles.insert(coord, Instant::now());
     }
 
     pub fn queue_tile_request(&mut self, mut coord: TileCoord, cancel_if_stale: bool) {
@@ -747,15 +825,43 @@ impl TileOverlayState {
         }
         let _ = self.fetch_tx.send(TileFetchRequest {
             coord,
+            #[cfg(not(target_arch = "wasm32"))]
             cache_dir: self.disk_cache_dir.clone(),
             generation: self.generation,
             cancel_if_stale,
+            #[cfg(not(target_arch = "wasm32"))]
             trace: self
                 .diagnostics
                 .as_ref()
                 .map(|trace| trace.request(coord, self.generation)),
         });
     }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn browser_tile_result(
+    request: &TileFetchRequest,
+    response: ehttp::Result<ehttp::Response>,
+) -> TileFetchResult {
+    let mut result = TileFetchResult::empty(request);
+    let Ok(response) = response else {
+        return result;
+    };
+    result.missing = response.status == 404
+        || response
+            .headers
+            .get("blank-tile")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+    if response.ok && !result.missing && response.bytes.len() <= 2 * 1024 * 1024 {
+        if let Some((pixels, width, height)) = crate::texture::decode_jpeg_pixels(&response.bytes)
+            .filter(|(_, width, height)| *width == TILE_SIZE && *height == TILE_SIZE)
+        {
+            result.pixels = pixels;
+            result.width = width;
+            result.height = height;
+        }
+    }
+    result
 }
 
 pub fn lon_lat_to_tile(lon: f64, lat: f64, z: u8) -> TileCoord {
@@ -934,6 +1040,96 @@ mod tests {
             .build();
         let result = fetch_tile_from(&request, &agent, &service);
         (result, server.join().unwrap())
+    }
+
+    fn browser_response(
+        status: u16,
+        headers: &[(&str, &str)],
+        bytes: Vec<u8>,
+    ) -> ehttp::Result<ehttp::Response> {
+        Ok(ehttp::Response {
+            url: "https://server.arcgisonline.com/tile".into(),
+            ok: (200..300).contains(&status),
+            status,
+            status_text: String::new(),
+            headers: ehttp::Headers::new(headers),
+            bytes,
+        })
+    }
+
+    #[test]
+    fn browser_tile_responses_distinguish_missing_imagery_from_failures() {
+        let (mut overlay, requests) = overlay();
+        let coord = lon_lat_to_tile(25.5, 48.7, 23);
+        overlay.queue_tile_request(coord, false);
+        let request = requests.try_recv().unwrap();
+        for response in [
+            browser_response(404, &[], Vec::new()),
+            browser_response(200, &[("blank-tile", "true")], vec![1, 2, 3]),
+        ] {
+            let result = browser_tile_result(&request, response);
+            assert!(result.missing);
+            assert!(result.pixels.is_empty());
+            assert_eq!(result.coord, coord);
+            assert!(!result.cancel_if_stale);
+        }
+        for response in [
+            Err("Network unavailable".into()),
+            browser_response(403, &[], Vec::new()),
+            browser_response(429, &[], Vec::new()),
+            browser_response(500, &[], Vec::new()),
+            browser_response(200, &[], b"Not an image".to_vec()),
+        ] {
+            let result = browser_tile_result(&request, response);
+            assert!(
+                !result.missing,
+                "transient failures must not poison the missing-tile cache"
+            );
+            assert!(result.pixels.is_empty());
+        }
+    }
+
+    #[test]
+    fn browser_decodes_valid_tiles_and_rejects_invalid_sizes() {
+        let (mut overlay, requests) = overlay();
+        overlay.queue_tile(lon_lat_to_tile(25.5, 48.7, 18));
+        let request = requests.try_recv().unwrap();
+        for size in [256, 128] {
+            let image = image::RgbImage::from_pixel(size, size, image::Rgb([20, 40, 60]));
+            let mut jpeg = Vec::new();
+            image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+                .encode_image(&image)
+                .unwrap();
+            let result = browser_tile_result(&request, browser_response(200, &[], jpeg.clone()));
+            assert!(!result.missing);
+            assert!(result.cancel_if_stale);
+            if size == TILE_SIZE {
+                assert_eq!((result.width, result.height), (size, size));
+                assert_eq!(result.pixels.len(), (size * size) as usize);
+                jpeg.resize(2 * 1024 * 1024 + 1, 0);
+                assert!(
+                    browser_tile_result(&request, browser_response(200, &[], jpeg))
+                        .pixels
+                        .is_empty()
+                );
+            } else {
+                assert!(result.pixels.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn stale_requests_skip_old_detail_but_keep_base_tiles_and_camera_imagery() {
+        let (mut overlay, requests) = overlay();
+        overlay.generation = 1;
+        overlay.queue_tile(lon_lat_to_tile(25.5, 48.7, 18));
+        let request = requests.try_recv().unwrap();
+        assert!(!request.is_stale(1));
+        assert!(request.is_stale(2));
+        overlay.queue_tile(lon_lat_to_tile(25.5, 48.7, 6));
+        assert!(!requests.try_recv().unwrap().is_stale(2));
+        overlay.queue_tile_request(lon_lat_to_tile(25.5, 48.7, 23), false);
+        assert!(!requests.try_recv().unwrap().is_stale(2));
     }
 
     #[test]
