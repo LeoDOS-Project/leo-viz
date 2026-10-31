@@ -255,6 +255,7 @@ fn clicking_a_satellite_over_an_aoi_opens_and_closes_its_camera() {
     assert!(state.jobs.is_empty());
     assert!(state.label.is_none());
     let camera = state.pending.pop().unwrap();
+    assert_eq!(camera.label, "P0:S0");
     let id = camera.id;
     state.cameras.push(camera);
     click(&ctx, 2.0, pos, &data, &preview, &mut state, false);
