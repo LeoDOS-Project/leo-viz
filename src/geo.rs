@@ -10,11 +10,13 @@ pub struct CityLabel {
     pub population: f64,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct GeoOverlayData {
     pub borders: Vec<Vec<(f64, f64)>>,
     pub cities: Vec<CityLabel>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub enum GeoLoadState {
     NotLoaded,
     Loading,
@@ -22,6 +24,7 @@ pub enum GeoLoadState {
     Failed,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn parse_geojson_borders(json: &str) -> Result<Vec<Vec<(f64, f64)>>, String> {
     let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("{}", e))?;
     let features = v["features"].as_array().ok_or("no features")?;
@@ -49,6 +52,7 @@ pub fn parse_geojson_borders(json: &str) -> Result<Vec<Vec<(f64, f64)>>, String>
     Ok(polylines)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn extract_coord_line(arr: &serde_json::Value) -> Option<Vec<(f64, f64)>> {
     let points = arr.as_array()?;
     let coords: Vec<(f64, f64)> = points
@@ -65,6 +69,7 @@ fn extract_coord_line(arr: &serde_json::Value) -> Option<Vec<(f64, f64)>> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn parse_geojson_cities(json: &str) -> Result<Vec<CityLabel>, String> {
     let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("{}", e))?;
     let features = v["features"].as_array().ok_or("no features")?;

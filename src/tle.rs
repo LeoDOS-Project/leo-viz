@@ -437,6 +437,7 @@ pub fn datetime_to_minutes(dt: &sgp4::chrono::NaiveDateTime) -> f64 {
     dt.and_utc().timestamp() as f64 / 60.0
 }
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub fn parse_tle_data(data: &str) -> Result<Vec<TleSatellite>, String> {
     let lines: Vec<&str> = data.lines().collect();
     let mut satellites = Vec::new();
@@ -480,6 +481,7 @@ pub fn parse_tle_data(data: &str) -> Result<Vec<TleSatellite>, String> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_fallback_tle_data(preset: TlePreset, reason: String) -> Result<Vec<TleSatellite>, String> {
     let Some(data) = preset.fallback_tle() else {
         return Err(reason);

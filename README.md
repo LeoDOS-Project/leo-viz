@@ -13,6 +13,121 @@ A satellite constellation visualization tool built with Rust and egui.
 - Inter-satellite link routing visualization
 - Coverage analysis
 
+## Satellite view
+
+Choose **Display > View > Satellite**, or **Add satellite view** in the tab menu,
+to inspect original NASA models of Sentinel-6, Aqua, Landsat 8, ICESat-2, SMAP,
+the MiRaTa CubeSat, GOES-R series, SWOT, GRACE-FO, OCO-2, Aura, GPM Core Observatory
+and Suomi NPP. Models load on demand. The individual view has an
+orbit/pan/zoom camera, original model materials and textures, selectable source
+components, an exploded layout and selection isolation. Material primitives are
+grouped into hand-reviewed assemblies, with source mesh names available under
+**Source meshes**. Hovering geometry or a component-list entry highlights the assembly without selecting it.
+A label beside the cursor identifies the part a click will select. Clicking keeps
+that assembly blue until another selectable assembly is hovered. Hover takes
+priority over selection, so only one assembly is highlighted at a time. The
+isolated part preview retains the original materials, and selection does not animate.
+A fixed panel above the
+parts list shows the hovered or selected mesh in isolation, with its original
+materials and component description. Two-finger scrolling orbits the upright
+model; pinching zooms without also rotating it.
+Descriptions explain what each identified assembly does. Review caveats and raw
+material information are inside **Source meshes**. Aqua's mixed material layers
+are separated into whole connected surfaces for educational selections, including
+the small communications dish, CERES heads, sensor housings, sounding heads and
+fittings. Visually inferred assignments are labelled; remaining unknown hardware
+is not given invented identities. The original triangles, winding and materials
+are retained without changing the downloaded GLB files.
+SMAP's reflector uses a simplified shaded gold surface and perimeter truss instead
+of the original asset's dense triangular web. This is a display-only change;
+the source geometry, textures and physical scale are retained.
+The additional NASA illustrations retain their original materials. Aura includes
+the retired HIRDLS and TES instruments, labelled as such. Where source geometry
+mixes several instruments by material, the descriptions state the limitation
+rather than inventing component boundaries. Suomi NPP's approximate ruler scale
+uses its 4.2 m body height, not its much longer deployed solar wing.
+Terra remains table-only: NASA's current GLB and FBX package omit two referenced
+texture files. PACE is a candidate for a later educational model; NASA's
+[integration paper](https://ntrs.nasa.gov/api/citations/20190032036/downloads/20190032036.pdf#page=4)
+contains dimensioned drawings and labelled assemblies, but depicts an earlier
+design and must be checked against the flight configuration.
+The details panel shows a small preview of the whole satellite and published
+mission and design statistics when no component is being inspected. These are
+reference figures, not live spacecraft telemetry. Hovering or selecting a
+component replaces them with its preview and description, without
+moving the component list. Click the model background to clear a selection.
+Hover **[?]** beside the satellite name for a mission description. Statistics stay
+on one line; long values are truncated with the full text available on hover.
+The satellite name is also shown in the view heading.
+Auto-rotation starts enabled; **Space** pauses or resumes it in the active satellite
+view. **Isolate selection** can stay enabled without a selection: the whole model
+is shown until a component is selected. Clicking the model background clears the
+selection without disabling isolation.
+Switching spacecraft preserves the physical ruler scale and camera orientation.
+The previous spacecraft stays visible while the new model loads, and previously
+loaded models are reused within the tab. **Reset camera** fits the selected model.
+Published size references distinguish deployed, stowed and bus dimensions.
+**Scale** toggles full-width and full-height rulers labelled **X (m)** and **Y (m)** and a light reference
+grid at the camera's target plane. Rulers use the stated size reference: Landsat 8
+is calibrated to its reviewed bus mesh, rather than inventing a deployed envelope.
+GOES-R uses its magnetometer boom as the size reference; SWOT uses the complete
+solar-array span. Splitting an original mesh for selection retains its full scale reference.
+These illustration scales are approximate, not CAD measurements; geometry is not
+stretched to force every dimension to match.
+The inspector is not yet connected
+to simulated spacecraft resources or orbital attitude.
+
+Choose **Display > View > Satellite Table**, or **Add satellite table**
+in the tab menu, to compare the catalogue in a table with original model thumbnails,
+launch dates, mass, orbit, power, payload, dimensions and source links. Mass and
+power qualifiers are retained rather than treating bus mass as launch mass or
+average demand as solar generation. Thumbnails fit each model individually; their
+apparent sizes are not a physical comparison. Click a satellite name or thumbnail
+to open its inspector. Only visible rows allocate GPU thumbnail targets.
+Columns share the available width, with wrapped text and row heights sized to
+their contents. Narrower views group related fields without reducing the text
+size or requiring horizontal scrolling.
+Click a column header to sort; click it again to reverse the direction. The sort
+selector provides all fields even when columns are grouped in a narrow view.
+Dates sort chronologically and numeric fields use consistent units. Missing values
+remain last in either direction. Mass and power sort by the first published value,
+without changing their qualifiers; dimensions sort by the largest published span.
+
+The catalogue is independent of the model library. It bundles an operational-only
+snapshot from [WMO OSCAR/Space](https://space.oscar.wmo.int/satellites), dated in the
+view, including spacecraft without a 3D model. Search by name, agency, orbit or
+instrument. Missing specifications remain unspecified; dry mass, launch mass and
+published power figures retain their qualifiers. Active and degraded payloads are
+distinguished from inactive instruments. Operator retirement notices override
+known stale database flags. Hosted ISS instruments are not separate spacecraft
+entries. Some source records represent operating constellations rather than
+individual spacecraft. This is a sourced snapshot, not live health telemetry.
+
+The **Satellite** view contains only spacecraft with
+downloaded models. Each pane has a satellite dropdown and a **+** button to add
+another pane, following the planet-view layout. Comparison panes share a physical
+scale and camera: rotating, panning or zooming in any pane updates all models
+together. Auto-rotation is also shared. Each pane shows the main model and
+satellite statistics, without miniature previews or a component list. The
+individual view retains component controls and previews. The view starts with
+one pane; use **+** to compare additional satellites.
+The arrow buttons beside each dropdown switch to the previous or next satellite
+in that dropdown's order, wrapping at either end without changing other panes.
+Narrow windows stack the panes. Satellites without models remain in the table.
+Opening a model from the table shows **Back** at the top left of its rendered
+grid, returning to the same table search, sort and scroll position.
+
+Refresh the bundled metadata using Rust (requires network access):
+`cargo test satellite_catalogue::tests::refresh_operational_catalogue -- --ignored --nocapture`.
+This regenerates `assets/satellite-catalogue.json`; ordinary native and browser
+builds use the bundled snapshot without contacting WMO. The HTML parser is only
+a dependency of the native maintenance tests, not the application.
+
+The original GLB files are retained unchanged in Git LFS. Fetch them with
+`git lfs pull --include="assets/satellite-*.glb"`. Browser builds fetch the selected
+asset on demand. Credits and source links are in the inspector and
+[`assets/satellite-models-LICENSE.txt`](assets/satellite-models-LICENSE.txt).
+
 ## Infrastructure experiments
 
 The modular [`leo-sim`](crates/leo-sim/README.md) crate runs deterministic orbital,
@@ -23,10 +138,8 @@ and the boundary between infrastructure actions and the future job layer.
 
 ## Spatial workloads
 
-The offline [`leo-aoi`](tools/leo-aoi/README.md) pipeline ingests GDP or other
-weighted rasters and generates reproducible, overlapping AOIs as rectangles
-or connected rectangular mosaics. It supports compact continent-scale geometry, dataset
-mixtures, masks and adjustable clustering, without application categories.
+The Rust AOI generator creates reproducible, overlapping AOIs as rectangles
+or environmental patches and corridors, using weighted geographic data or uniform sampling.
 In the right **Earth Observation** sidebar, open **AOI Generator → Default Jobs → Load preset** to display the bundled
 50,000 AOIs without Python or external data files. Generation defaults are an
 expected mean area of 100 km², a 1,000× max/min area ratio, seed 42, 600 hotspots,
@@ -39,23 +152,45 @@ The adjacent manifest records provenance, library versions, statistics and hashe
 The preset menu also retains **Legacy rectangles (1,000 km²)** for existing saved
 workloads. Geometry changes require assigning a new set of jobs.
 
-For new samples, tune the parameters and click **Generate**. See the tool
-documentation for Python setup, dataset ingestion and preset reproduction.
+For new samples, tune the parameters and click **Generate**. Generation runs in
+Rust on desktop and in the browser, with no Python installation or subprocess.
+The 2024 GDP demand field is distributed with Git LFS; **Uniform globe** requires no dataset.
+Custom prepared datasets can be loaded from a local file on desktop, a URL, or
+by dropping a `.aoi-data.json.gz` file onto the selected AOI source page.
+The optional [dataset exporter](tools/leo-aoi/README.md) is also written in Rust.
 Job parameters are assigned in the **Jobs** pane described below; acquisition scheduling remains a later stage.
 
 The AOI panel also has independent **Forests**, **Rivers** and **Coasts** pages,
-using ESA WorldCover, HydroRIVERS and OpenStreetMap coastlines. They generate
-connected forest patches with varied elongation, lobes and retained clearings, or
-buffered river/coast paths, with source-specific controls and
-independent overlays. Global source caches live outside Git and are prepared on
-first use if absent. WorldCover uses a coarse 0.025° tree-cover proxy; sensor GSD
-is independent. See the [source assumptions and setup](tools/leo-aoi/README.md#environmental-sources).
+using compact ESA WorldCover, RiverATLAS and Natural Earth snapshots. They generate
+connected forest patches with varied elongation, lobes and retained clearings, or buffered paths, with source-specific controls and
+independent overlays. Fetch the prepared snapshots for desktop or local web builds:
 
-AOI rendering uses a spatial visibility hierarchy, zoom-dependent outline detail,
-and grouped distant dots. All layers have a 10% fill by default, adjustable with
-**Fill opacity** independently of their outline opacity. Fills preserve holes and
-are triangulated once during loading. These display approximations do not alter
-stored AOIs. Forest patches and river/coast corridors keep their geographic alignment.
+```sh
+git lfs pull --include="assets/aois/*.aoi-data.json.gz"
+```
+
+In the browser, each source is fetched only when generating AOIs and cached for
+the session, rather than embedded in WebAssembly. The four snapshots total about
+26 MiB compressed. WorldCover uses a coarse 0.05-degree tree-cover proxy; sensor
+GSD is independent. See the [dataset notes](assets/aois/DATASETS.md) and
+[Rust workflow](tools/leo-aoi/README.md).
+
+Generated AOIs use persistent GPU buffers by default. Camera transforms, horizon
+clipping, outline detail selection, and distant-dot rendering run in shaders;
+moving the globe does not rebuild AOI meshes on the CPU. Globe polygon fills also
+use persistent GPU triangles, preserve holes, and keep the independent **Fill opacity**
+control (10% by default). Buffers are shared
+between globe views, with independent camera uniforms per view. Exact picking
+and the selection highlight still use the original geographic boundaries.
+
+Rendering uses the GPU whenever a GPU context is available. Display
+approximations do not alter stored AOIs. To run the native GPU pixel tests and
+the release benchmark with the bundled 50,000 AOIs:
+
+```sh
+cargo test --release aoi::gpu::tests -- --ignored --nocapture
+```
+
 
 
 ## Job configurations and steady workload totals
@@ -285,7 +420,8 @@ compute profiles remain editable.
 
 ## Pushbroom observation preview
 
-Open **Observation model** in the right **Earth Observation** sidebar and enable **Pushbroom sweeps**. Each displayed satellite
+Enable **Display > Constellations > Pushbroom sweeps**, or use **Observation model**
+in the right **Earth Observation** sidebar. Each displayed satellite
 leaves a fading, ground-fixed strip with a bright current cross-track scanline.
 The default swath is 20 km and the trail covers the last 60 simulation seconds;
 both are adjustable. **Show sensor fan** adds faint rays from the satellite to
@@ -298,6 +434,25 @@ acceptance constraints. Animate to accumulate the first two position samples.
 Trails reset on reverse time, large time jumps and position discontinuities.
 The physical swath stays to scale; line strokes remain visible at small zoom.
 
+On desktop, enable **Pushbroom images** and click a satellite to open its image
+window. The image follows its recorded swept ground, clipped to **Image length**
+(50 km by default) and the available trail history. The newest scanline is at
+the top. Width and along-track length retain their physical proportions.
+**Freeze image** holds the current image; closing the window deselects that
+satellite. Up to four image windows can be open at once.
+
+The preview is textured on the GPU every frame, independently of tile loading.
+Source detail follows the window size and display density rather than a fixed
+320-pixel bitmap. It has a separate 512-tile RAM cache and a persistent
+`leo-viz/pushbroom-tiles` cache in the system cache directory, so moving the globe
+does not evict its imagery or compete for the same download queue. It uses
+cached parents while sharper tiles load, keeps overlapping atlas regions on the
+GPU, and stops fetching when disabled. Requests are limited to 256 tiles per
+strip, with five-second retries on failures and 24-hour caching of missing tiles.
+This is an ESRI basemap preview, not a live satellite feed or a sensor-quality
+product. Imagery is unavailable beyond Web Mercator's polar limit. Like the
+existing ESRI globe overlay, the image windows are currently desktop-only.
+
 The existing **Rendering → Texture → 21K** option uses
 `textures/earth/Earth_Diffuse_21k.jpg`. Large textures are Git LFS assets; fetching
 and checking out an existing LFS object restores its local pixels without
@@ -308,12 +463,30 @@ reduce the texture to its supported maximum dimension.
 
 The resizable right **Earth Observation** sidebar contains **AOI Generator**,
 **Observation model** (swath width, sweep visibility, coverage and a point sampler),
-and **Data**. Collapse it with **−** and reopen it with **EO** on the right edge or
-the **Earth Observation** toggle on the left. Its sections scroll independently of
+and **Data**. With **Display** set to **Planet**, select **Application → Earth Observation** to open it;
+select **None** or close it with **−** to restore the full view width. The application
+is available only when the active planet view contains exactly one Earth.
+Its sections scroll independently of
 the constellation settings on the left. Width remains editable when the sweep
 preview is hidden. Choose an Earth view, click **Sampler**, then click its 3D
 globe. A yellow marker and coordinates identify the point; the calculation runs
 in the background. Dragging still rotates the globe; Escape cancels picking.
+
+With **Display** set to **Planet**, **Rendering** contains Projection, Texture and ESRI Tiles.
+**Clock** is nested under **Display** for Planet and Solar System views only;
+it contains simulation speed, date, time and synchronization controls.
+ESRI imagery is enabled by default in native and browser builds and applies only to
+Earth; other planets and missing imagery use the selected base texture. Both builds
+use the same GPU tile renderer, parent fallbacks and fading across projections.
+The browser downloads at most four tiles concurrently, keeps up to 1,024 decoded
+tiles in memory and uses normal HTTP caching; native builds retain their disk cache.
+Browser cache retention is controlled by the browser, not an offline download guarantee.
+The sun/moon button beside **?** changes the global theme.
+Sidebar icons hide and reopen the settings. When collapsed, the reopen icon sits at
+the top-left with space in the view header, leaving the canvas at full width.
+The presentation icon hides controls. **Sim** in the Earth Observation pane opens
+the separate infrastructure simulation window.
+The tabs menu contains **Auto cycle tabs**, immediately above **Cycle interval**.
 
 `leo-sim::observation` uses the shared orbital elements for visible circular
 Keplerian constellations. It expresses the ground-point dot product as three
@@ -460,11 +633,143 @@ This is spherical-Earth, continuous-nadir geometry: it excludes daylight,
 clouds, scheduling, resource limits, maneuvers and debris, and does not estimate
 complete AOI/mosaic coverage. Simultaneous events within 1 ms are coalesced.
 
+## Location Search
+
+Press **Cmd+F** or **Ctrl+F** to reveal a search field at the top left of each
+Earth view. Enter a place or address, press Enter, and select a result to navigate
+that view. Globe and flat map projections are supported; other planets do not
+show location search. Escape closes the focused search field.
+
+The first result is highlighted automatically. Press Enter again to select it.
+Ctrl+J / Ctrl+K, Tab / Shift+Tab, or the down/up arrows cycle through results
+in the focused search field without changing the query. The highlighted result
+scrolls into view. Provider links and attribution are in the **[?]** Info window.
+
+Selecting a result also fetches its actual mapped boundary through Nominatim's
+OSM-object lookup. Polygons retain holes and separate islands and use the same
+cached GPU renderer as other AOIs, in every projection. Bounding rectangles are
+used only to fit the camera, never as a substitute for a mapped area. Results
+mapped only as points or lines retain just their location marker. For example,
+a city label may be a point even when a separately named municipality has a
+mapped boundary. The selected highlight remains when the search field is closed
+and is cleared when a new query is typed. Hovering previews the location and any
+boundary already cached, without making geometry requests.
+
+Searches use [Photon](https://github.com/komoot/photon), based on OpenStreetMap.
+An internet connection is required, but no API key is needed. Addresses are sent
+only when submitted, not while typing. Successful queries are cached in memory;
+requests across views are limited to one per second. The public service has no
+availability guarantee and may throttle heavy use.
+
+Boundary lookups use public Nominatim by default, after explicit selection only.
+Requests are deduplicated across views, serialized with at least 1.1 seconds
+between starts, identified on desktop, and cached in memory (up to 32 results).
+Large boundaries use topology-preserving simplification with a 0.00001-degree
+tolerance. Loading and errors are shown in the search panel; failed requests can
+be retried. A completed lookup fits the boundary unless the user has already
+moved the camera while it was loading.
+
+The [public Nominatim usage policy](https://operations.osmfoundation.org/policies/nominatim/)
+requires attribution, application identification, caching, and a maximum of one
+request per second **across all users of the application**, not per installation.
+The client limiter covers one running app only. Distributed or busier deployments
+must use a shared limiting/caching proxy or another provider; the public endpoint
+has no availability guarantee. It can be changed without rebuilding: set
+`LEO_VIZ_NOMINATIM_URL` on desktop, supply `?nominatim_url=...` in the browser, or
+edit **Boundary Service** in the **[?]** Info window.
+The in-app endpoint setting is persisted; an existing setting takes precedence
+over the environment variable or URL parameter. Browser endpoints must allow CORS.
+
 ## Building
 
 ```bash
 cargo build --release
 ```
+
+### ESRI Diagnostics
+
+Desktop ESRI imagery is supported in every Earth projection, with detail selected
+from the visible map area and display resolution. All projections share the same
+tile cache, parent fallbacks, and fades. Imagery supports levels up to 23 where
+coverage exists. The globe
+can zoom down to a displayed altitude of 0.01 km. Missing tiles fall back to the
+nearest available parent without replacing imagery with a placeholder. Missing
+tile responses are cached for 24 hours, including across app restarts. Existing
+tile reuse and fades also apply to the higher levels and pushbroom image windows.
+
+Run an automatic native replay without manually moving the camera:
+
+```bash
+LEO_VIZ_TILE_DIAGNOSTICS=1 cargo run --release
+```
+
+It exercises 3000/1000/2000 km transitions, repeats them with warm caches,
+and moves to a nearby location. It saves `target/esri-diagnostics.json` and
+`target/esri-diagnostics-*.png`, then closes the diagnostic window automatically.
+The existing disk cache is not cleared. Optional
+`LEO_VIZ_TILE_DIAGNOSTICS_LAT` and `LEO_VIZ_TILE_DIAGNOSTICS_LON` override the
+default location of 48.7 N, 25.5 E.
+
+Set `LEO_VIZ_TILE_DIAGNOSTICS_PROJECTIONS=1` along with
+`LEO_VIZ_TILE_DIAGNOSTICS=1` to automatically render all twelve flat projections
+with Esri imagery. This writes `target/esri-projections-diagnostics.json` and
+matching screenshots.
+
+AOI overlays also render in every projection. Generated layers retain their colors,
+opacity, holes, and selection; manual AOI circles retain their fills and labels.
+Projected geometry is cached and drawn on the GPU, with preparation off the desktop
+UI thread. Add `LEO_VIZ_TILE_DIAGNOSTICS_AOIS=1` to the projection replay to include
+the bundled 50,000 AOIs and a manual circle. Results and screenshots are written
+to `target/aoi-projections-diagnostics*`.
+
+The report separates RAM reuse, disk hits, actual HTTP requests, cancellations,
+queue delays, RAM/GPU evictions, GPU tile reuse, and atlas upload frames. The native
+GPU cache retains up to 512 geographic tiles (128 MiB, allocated as needed),
+independently of the displayed atlas, so returning to a level or nearby area does
+not require uploading those tiles again. Cached parent tiles can also fill a new
+detail level on the GPU while sharper tiles load. It replaces the least recently used
+tiles outside the requested area when full. Atlas CPU timings include
+conversion and queue submission, not GPU execution. Settle time includes the
+existing 150 ms fade and a 250 ms quiet-period check. Diagnostic HTTP requests
+have an eight-second timeout; each view has a fifteen-second deadline.
+
+To exercise a moving satellite and the live image window in the same automatic
+replay, also set `LEO_VIZ_PUSHBROOM_DIAGNOSTICS=1`. This writes
+`target/pushbroom-diagnostics.json` and matching screenshots, including image
+preview resolution, rendered frames, tile uploads, and CPU timings in the trace.
+The regular GPU tests also compare
+maximum-zoom panning with double-precision Mercator coordinates and check the
+per-frame budget for parent-tile preparation.
+Set `LEO_VIZ_TILE_DIAGNOSTICS_CLOSEUP=1` to append three real 0.5 km views with
+small north/south movements to the native replay.
+Set `LEO_VIZ_TILE_DIAGNOSTICS_HIGH_RESOLUTION=1` instead to exercise levels 19-23
+in Ukraine, Stockholm, and Los Angeles, including missing coverage and returns
+to cached views. This saves `target/esri-high-resolution-diagnostics.json` and
+matching screenshots. Each step reports the source levels used for fallback.
+
+## Ground Terminals
+
+Choose **Display > View > Ground Terminals**, or **Add ground terminals** in the
+tab menu. The sortable table contains twelve antenna/station configurations;
+its checkboxes select traces in the downlink-rate chart. Published G/T, receive
+bands and system rate limits are separate from the calculated useful rates and
+decimal GB per pass. Each configuration links to its specification source.
+
+The Rust calculation uses a nominal overhead circular LEO pass, without Earth
+rotation, site weather, scheduling or acquisition delays. Reference G/T stays
+constant. Editable assumptions cover satellite EIRP, RF bandwidth, spectral
+efficiency, required Eb/N0, losses, margin, framing overhead and backhaul.
+The adaptive rate is bounded by the link budget, Shannon capacity, bandwidth,
+satellite, receiver and any published station ceiling. Unknown ceilings are not
+verified unlimited throughput. VHR 3200 is limited to 4,050 Mbit/s for the one
+channel modelled here, not its two-channel 8,100 Mbit/s aggregate. This view does
+not change simulation ground stations or guarantee a real modem operating point.
+
+Sources, checked 2026-10-30: [Safran catalogue](https://www.safran-group.com/download/media/2010),
+[VISION datasheet](https://www.safran-group.com/sites/default/files/2022-02/DS-VISION-A4.pdf),
+[NASA Table 11-8](https://www.nasa.gov/smallsat-institute/sst-soa/ground-data-systems-and-mission-operations/),
+[TUBITAK UZAY](https://uzay.tubitak.gov.tr/en/satellite-ground-station-and-operations/ground-station/),
+and [Viasat receiver datasheet](https://www.viasat.com/content/dam/us-site/government/antenna-systems/documents/High_Rate_Receiver_VHR3200_Datasheet_3_30_22.pdf).
 
 ## TODO
 

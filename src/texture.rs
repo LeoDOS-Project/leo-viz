@@ -240,6 +240,7 @@ pub struct RingTexture {
 }
 
 impl RingTexture {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         use std::io::Cursor;
         let cursor = Cursor::new(bytes);
@@ -266,7 +267,6 @@ pub(crate) fn asset_path(relative: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn decode_jpeg_pixels(bytes: &[u8]) -> Option<(Vec<[u8; 3]>, u32, u32)> {
     use std::io::Cursor;
     let img = image::load(Cursor::new(bytes), image::ImageFormat::Jpeg).ok()?;

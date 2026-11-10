@@ -6,7 +6,7 @@ use nalgebra::{Matrix3, Vector3};
 use serde::{Deserialize, Serialize};
 use std::{
     ops::RangeInclusive,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 #[derive(Deserialize)]
@@ -22,24 +22,24 @@ pub(super) struct Config {
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub source_seeds: std::collections::BTreeMap<String, u32>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub(super) struct Record {
     #[serde(default)]
     pub id: String,
-    anchor_lon: f64,
-    anchor_lat: f64,
-    area_km2: f64,
-    geometry: Geometry,
+    pub anchor_lon: f64,
+    pub anchor_lat: f64,
+    pub area_km2: f64,
+    pub geometry: Geometry,
     #[serde(default)]
     pub source_kind: String,
     #[serde(default)]
-    path_truncated: bool,
+    pub path_truncated: bool,
     #[serde(default)]
-    path_length_km: Option<f64>,
+    pub path_length_km: Option<f64>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(tag = "type", content = "coordinates")]
-enum Geometry {
+pub(super) enum Geometry {
     Polygon(Vec<Vec<[f64; 2]>>),
     MultiPolygon(Vec<Vec<Vec<[f64; 2]>>>),
 }
@@ -50,8 +50,13 @@ struct Detail {
 
 impl Detail {
     fn new(points: Vec<Vector3<f64>>) -> Self {
+        Self::with_unit(points, 1.0)
+    }
+
+    fn with_unit(points: Vec<Vector3<f64>>, unit: f64) -> Self {
         let mut levels = vec![];
         for tolerance in [1e-6, 1e-5, 1e-4, 1e-3] {
+            let tolerance = tolerance * unit;
             let simplified = simplify(&points, tolerance);
             let previous = levels
                 .last()
@@ -136,6 +141,10 @@ pub(crate) struct Preview {
     boundaries: Vec<Boundary>,
     spatial: super::spatial::Index,
     mesh_cache: Mutex<Vec<(Vec<f64>, Arc<Mesh>)>>,
+    gpu_geometry: OnceLock<Arc<super::gpu::Geometry>>,
+    projected_geometry: Mutex<Vec<(i32, Arc<super::gpu::Geometry>)>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_projections: Mutex<std::collections::HashSet<i32>>,
 }
 
 pub(super) fn unit([lon, lat]: [f64; 2]) -> Vector3<f64> {
@@ -143,7 +152,7 @@ pub(super) fn unit([lon, lat]: [f64; 2]) -> Vector3<f64> {
     Vector3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin())
 }
 
-fn ring(points: Vec<[f64; 2]>) -> Result<Vec<Vector3<f64>>, String> {
+fn validate_ring(points: &[[f64; 2]]) -> Result<(), String> {
     if points.len() < 4
         || points.first() != points.last()
         || points.iter().any(|p| {
@@ -152,18 +161,24 @@ fn ring(points: Vec<[f64; 2]>) -> Result<Vec<Vector3<f64>>, String> {
     {
         return Err("Invalid AOI boundary returned by generator".into());
     }
+    Ok(())
+}
+
+fn ring(points: Vec<[f64; 2]>) -> Result<Vec<Vector3<f64>>, String> {
+    validate_ring(&points)?;
     let mut result = Vec::new();
     for edge in points.windows(2) {
         let a = edge[0];
         let b = edge[1];
+        let longitude_delta = (b[0] - a[0] + 180.0).rem_euclid(360.0) - 180.0;
         // GeoJSON is already split at the dateline. Interpolate lon/lat along
         // parallels/meridians, not a great circle across a rectangular AOI.
-        let steps = ((b[0] - a[0]).abs().max((b[1] - a[1]).abs()) / 0.5)
+        let steps = (longitude_delta.abs().max((b[1] - a[1]).abs()) / 0.5)
             .ceil()
             .max(1.0) as usize;
         for i in 0..steps {
             let t = i as f64 / steps as f64;
-            result.push(unit([a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]));
+            result.push(unit([a[0] + t * longitude_delta, a[1] + t * (b[1] - a[1])]));
         }
     }
     result.push(result[0]);
@@ -221,6 +236,132 @@ impl Preview {
             .collect()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn from_areas(
+        areas: &[crate::config::AreaOfInterest],
+        radius: f64,
+    ) -> Result<Self, String> {
+        let mut preview = Self::empty(areas.len(), 0);
+        for (index, area) in areas.iter().enumerate() {
+            let lat = area.lat.to_radians();
+            let lon = area.lon.to_radians();
+            let angle = area.radius_km / radius;
+            let mut points: Vec<_> = (0..64)
+                .map(|i| {
+                    let bearing = std::f64::consts::TAU * i as f64 / 64.0;
+                    let y = (lat.sin() * angle.cos() + lat.cos() * angle.sin() * bearing.cos())
+                        .clamp(-1.0, 1.0)
+                        .asin();
+                    let x = lon
+                        + (angle.sin() * bearing.sin()).atan2(
+                            lat.cos() * angle.cos() - lat.sin() * angle.sin() * bearing.cos(),
+                        );
+                    [
+                        (x.to_degrees() + 180.0).rem_euclid(360.0) - 180.0,
+                        y.to_degrees(),
+                    ]
+                })
+                .collect();
+            points.push(points[0]);
+            preview.push_record(Record {
+                id: format!("manual-{index}"),
+                anchor_lon: area.lon,
+                anchor_lat: area.lat,
+                area_km2: std::f64::consts::PI * area.radius_km.powi(2),
+                geometry: Geometry::Polygon(vec![points]),
+                source_kind: "manual".into(),
+                path_truncated: false,
+                path_length_km: None,
+            })?;
+            preview.boundaries.last_mut().unwrap().color =
+                [area.color.r(), area.color.g(), area.color.b()];
+        }
+        Ok(preview.finish())
+    }
+
+    pub fn from_geojson(
+        geometry: serde_json::Value,
+        anchor: [f64; 2],
+        color: [u8; 3],
+    ) -> Result<Self, String> {
+        use geo::GeodesicArea;
+        let geometry: Geometry = serde_json::from_value(geometry)
+            .map_err(|e| format!("Invalid mapped boundary: {e}"))?;
+        let polygons = match &geometry {
+            Geometry::Polygon(polygon) => std::slice::from_ref(polygon),
+            Geometry::MultiPolygon(polygons) => polygons.as_slice(),
+        };
+        let count: usize = polygons.iter().flatten().map(Vec::len).sum();
+        if count > 250_000 || polygons.is_empty() || polygons.iter().any(Vec::is_empty) {
+            return Err("Mapped boundary is empty or too detailed.".into());
+        }
+        for points in polygons.iter().flatten() {
+            validate_ring(points)?;
+        }
+        let dense_count: usize = polygons
+            .iter()
+            .flatten()
+            .flat_map(|points| points.windows(2))
+            .map(|edge| {
+                let longitude = (edge[1][0] - edge[0][0] + 180.0).rem_euclid(360.0) - 180.0;
+                (longitude.abs().max((edge[1][1] - edge[0][1]).abs()) / 0.5)
+                    .ceil()
+                    .max(1.0) as usize
+            })
+            .sum();
+        if dense_count > 1_000_000 {
+            return Err("Mapped boundary is too detailed.".into());
+        }
+        let mut shapes = Vec::with_capacity(polygons.len());
+        for polygon in polygons {
+            let line = |points: &Vec<[f64; 2]>| {
+                geo::LineString::new(points.iter().map(|&[x, y]| geo::Coord { x, y }).collect())
+            };
+            shapes.push(geo::Polygon::new(
+                line(&polygon[0]),
+                polygon[1..].iter().map(line).collect(),
+            ));
+        }
+        let area_km2 = shapes
+            .iter()
+            .map(|polygon| polygon.geodesic_area_signed().abs())
+            .sum::<f64>()
+            / 1e6;
+        let mut preview = Self::empty(1, 0);
+        preview.push_record(Record {
+            id: "mapped-search-boundary".into(),
+            anchor_lon: anchor[0],
+            anchor_lat: anchor[1],
+            area_km2,
+            geometry,
+            source_kind: "osm".into(),
+            path_truncated: false,
+            path_length_km: None,
+        })?;
+        preview.boundaries[0].color = color;
+        Ok(preview.finish())
+    }
+
+    pub fn geographic_bounds(&self) -> Option<[f64; 4]> {
+        let mut bounds = [
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+        ];
+        for [lon, lat] in self
+            .boundaries
+            .iter()
+            .flat_map(|b| b.polygons.iter().flatten().flatten())
+        {
+            bounds[0] = bounds[0].min(*lon);
+            bounds[1] = bounds[1].max(*lat);
+            bounds[2] = bounds[2].max(*lon);
+            bounds[3] = bounds[3].min(*lat);
+        }
+        bounds.iter().all(|v| v.is_finite()).then_some(bounds)
+    }
+
     pub fn from_json(bytes: &[u8]) -> Result<Self, String> {
         let doc: Document =
             serde_json::from_slice(bytes).map_err(|e| format!("Invalid AOI response: {e}"))?;
@@ -235,19 +376,38 @@ impl Preview {
         {
             return Err("Invalid AOI response version or count".into());
         }
-        let mut preview = Self {
-            aois: Vec::with_capacity(doc.aois.len()),
-            count: doc.aois.len(),
+        let mut preview = Self::empty(doc.config.count, doc.config.seed);
+        let mut identifiers = std::collections::HashSet::new();
+        for aoi in doc.aois {
+            preview.push_record(aoi)?;
+            if !identifiers.insert(preview.aois.last().unwrap().key()) {
+                return Err("Duplicate AOI identifier".into());
+            }
+        }
+        Ok(preview.finish())
+    }
+
+    pub(super) fn empty(count: usize, seed: u32) -> Self {
+        Self {
+            aois: Vec::with_capacity(count),
+            count,
             mean_area: 0.0,
             min_area: f64::INFINITY,
             max_area: 0.0,
-            seed: doc.config.seed,
+            seed,
             truncated_paths: 0,
             mean_path_length: None,
-            boundaries: Vec::with_capacity(doc.aois.len()),
+            boundaries: Vec::with_capacity(count),
             spatial: super::spatial::Index::default(),
             mesh_cache: Mutex::new(Vec::new()),
-        };
+            gpu_geometry: OnceLock::new(),
+            projected_geometry: Mutex::new(Vec::new()),
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_projections: Mutex::new(std::collections::HashSet::new()),
+        }
+    }
+
+    pub(super) fn push_record(&mut self, aoi: Record) -> Result<(), String> {
         const COLORS: [[u8; 3]; 6] = [
             [61, 222, 230],
             [255, 190, 86],
@@ -256,82 +416,83 @@ impl Preview {
             [244, 142, 189],
             [235, 226, 136],
         ];
-        let mut identifiers = std::collections::HashSet::new();
-        for (index, aoi) in doc.aois.into_iter().enumerate() {
-            if !aoi.area_km2.is_finite()
-                || aoi.area_km2 <= 0.0
-                || !aoi.anchor_lon.is_finite()
-                || !aoi.anchor_lat.is_finite()
-                || aoi.anchor_lon.abs() > 180.0
-                || aoi.anchor_lat.abs() > 90.0
-            {
-                return Err("Invalid AOI area or anchor".into());
-            }
-            let anchor = unit([aoi.anchor_lon, aoi.anchor_lat]);
-            let polygons = match aoi.geometry {
-                Geometry::Polygon(p) => vec![p],
-                Geometry::MultiPolygon(p) => p,
-            };
-            let rings = polygons
-                .iter()
-                .flatten()
-                .cloned()
-                .map(ring)
-                .collect::<Result<Vec<_>, _>>()?;
-            if rings.is_empty() {
-                return Err("AOI has no boundary".into());
-            }
-            let radius = rings
-                .iter()
-                .flatten()
-                .map(|p| (p - anchor).norm())
-                .fold(0.0, f64::max);
-            let metadata = crate::jobs::model::AoiRef {
-                source: if aoi.source_kind.is_empty() {
-                    "gdp".into()
-                } else {
-                    aoi.source_kind.clone()
-                },
-                id: if aoi.id.is_empty() {
-                    format!("aoi-{index:08}")
-                } else {
-                    aoi.id
-                },
-                area_km2: aoi.area_km2,
-                longitude: aoi.anchor_lon,
-                latitude: aoi.anchor_lat,
-                geometry_hash: crate::jobs::model::hash(&serde_json::to_vec(&polygons).unwrap()),
-            };
-            if !identifiers.insert(metadata.key()) {
-                return Err("Duplicate AOI identifier".into());
-            }
-            preview.aois.push(metadata);
-            preview.boundaries.push(Boundary {
-                anchor,
-                radius,
-                rings: rings.into_iter().map(Detail::new).collect(),
-                fill: super::fill::Fill::new(&polygons)?,
-                path_truncated: aoi.path_truncated,
-                path_length_km: aoi.path_length_km,
-                polygons,
-                color: match aoi.source_kind.as_str() {
-                    "forest" => [130, 231, 158],
-                    "river" => [61, 222, 230],
-                    "coast" => [255, 190, 86],
-                    _ => COLORS[index % COLORS.len()],
-                },
-            });
-            preview.truncated_paths += usize::from(aoi.path_truncated);
-            if let Some(length) = aoi.path_length_km {
-                if !length.is_finite() || length <= 0.0 {
-                    return Err("Invalid AOI path length".into());
-                }
-                *preview.mean_path_length.get_or_insert(0.0) += length / preview.count as f64;
-            }
-            preview.mean_area += aoi.area_km2 / preview.count as f64;
-            preview.min_area = preview.min_area.min(aoi.area_km2);
-            preview.max_area = preview.max_area.max(aoi.area_km2);
+        let index = self.aois.len();
+        let preview = &mut *self;
+        if !aoi.area_km2.is_finite()
+            || aoi.area_km2 <= 0.0
+            || !aoi.anchor_lon.is_finite()
+            || !aoi.anchor_lat.is_finite()
+            || aoi.anchor_lon.abs() > 180.0
+            || aoi.anchor_lat.abs() > 90.0
+        {
+            return Err("Invalid AOI area or anchor".into());
         }
+        let anchor = unit([aoi.anchor_lon, aoi.anchor_lat]);
+        let polygons = match aoi.geometry {
+            Geometry::Polygon(p) => vec![p],
+            Geometry::MultiPolygon(p) => p,
+        };
+        let rings = polygons
+            .iter()
+            .flatten()
+            .cloned()
+            .map(ring)
+            .collect::<Result<Vec<_>, _>>()?;
+        if rings.is_empty() {
+            return Err("AOI has no boundary".into());
+        }
+        let radius = rings
+            .iter()
+            .flatten()
+            .map(|p| (p - anchor).norm())
+            .fold(0.0, f64::max);
+        let metadata = crate::jobs::model::AoiRef {
+            source: if aoi.source_kind.is_empty() {
+                "gdp".into()
+            } else {
+                aoi.source_kind.clone()
+            },
+            id: if aoi.id.is_empty() {
+                format!("aoi-{index:08}")
+            } else {
+                aoi.id
+            },
+            area_km2: aoi.area_km2,
+            longitude: aoi.anchor_lon,
+            latitude: aoi.anchor_lat,
+            geometry_hash: crate::jobs::model::hash(&serde_json::to_vec(&polygons).unwrap()),
+        };
+        preview.aois.push(metadata);
+        preview.boundaries.push(Boundary {
+            anchor,
+            radius,
+            rings: rings.into_iter().map(Detail::new).collect(),
+            fill: super::fill::Fill::new(&polygons)?,
+            path_truncated: aoi.path_truncated,
+            path_length_km: aoi.path_length_km,
+            polygons,
+            color: match aoi.source_kind.as_str() {
+                "forest" => [130, 231, 158],
+                "river" => [61, 222, 230],
+                "coast" => [255, 190, 86],
+                _ => COLORS[index % COLORS.len()],
+            },
+        });
+        preview.truncated_paths += usize::from(aoi.path_truncated);
+        if let Some(length) = aoi.path_length_km {
+            if !length.is_finite() || length <= 0.0 {
+                return Err("Invalid AOI path length".into());
+            }
+            *preview.mean_path_length.get_or_insert(0.0) += length / preview.count as f64;
+        }
+        preview.mean_area += aoi.area_km2 / preview.count as f64;
+        preview.min_area = preview.min_area.min(aoi.area_km2);
+        preview.max_area = preview.max_area.max(aoi.area_km2);
+        Ok(())
+    }
+
+    pub(super) fn finish(mut self) -> Self {
+        let preview = &mut self;
         preview.spatial = super::spatial::Index::build(
             &preview
                 .boundaries
@@ -342,8 +503,206 @@ impl Preview {
                 })
                 .collect::<Vec<_>>(),
         );
-        Ok(preview)
+        // Build render data while generation/loading still runs off the native UI thread.
+        self.gpu_geometry();
+        self
     }
+
+    pub(super) fn gpu_geometry(&self) -> Arc<super::gpu::Geometry> {
+        Arc::clone(self.gpu_geometry.get_or_init(|| {
+            let mut segments = Vec::new();
+            let mut triangles = Vec::new();
+            let mut dots = Vec::with_capacity(self.boundaries.len());
+            for boundary in &self.boundaries {
+                let pack = |p: Vector3<f64>| [p.x as f32, p.y as f32, p.z as f32, 0.0];
+                let anchor = pack(boundary.anchor);
+                let color = [boundary.color[0], boundary.color[1], boundary.color[2], 255];
+                triangles.extend(
+                    boundary
+                        .fill
+                        .triangles
+                        .iter()
+                        .map(|t| super::gpu::Triangle {
+                            points: t.map(pack),
+                            anchor,
+                            radius: boundary.radius as f32,
+                            color,
+                        }),
+                );
+                dots.push(super::gpu::Dot {
+                    anchor,
+                    radius: boundary.radius as f32,
+                    color,
+                });
+                for detail in &boundary.rings {
+                    for (level, (error, points)) in detail.levels.iter().enumerate() {
+                        let min_scale = detail
+                            .levels
+                            .get(level + 1)
+                            .map_or(0.0, |(next_error, _)| (0.7 / next_error) as f32);
+                        let max_scale = if *error > 0.0 {
+                            (0.7 / error) as f32
+                        } else {
+                            f32::MAX
+                        };
+                        for edge in points.windows(2) {
+                            segments.push(super::gpu::Segment {
+                                start: pack(edge[0]),
+                                end: pack(edge[1]),
+                                anchor,
+                                radius: boundary.radius as f32,
+                                color,
+                                scales: [min_scale, max_scale],
+                            });
+                        }
+                    }
+                }
+            }
+            let mut geometry = super::gpu::Geometry::new(segments, dots);
+            geometry.triangles = triangles;
+            Arc::new(geometry)
+        }))
+    }
+
+    pub(super) fn projected_geometry(
+        &self,
+        projection: crate::projection::ProjectionKind,
+    ) -> Arc<super::gpu::Geometry> {
+        let key = projection.shader_id();
+        if let Some(geometry) = self.cached_projected_geometry(projection) {
+            return geometry;
+        }
+        let mut segments = Vec::new();
+        let mut dots = Vec::new();
+        for boundary in &self.boundaries {
+            let paths = projected_boundary(boundary, projection);
+            let Some(first) = paths.first().and_then(|path| path.first()) else {
+                continue;
+            };
+            let lon = (-boundary.anchor.z).atan2(boundary.anchor.x).to_degrees();
+            let lat = boundary.anchor.y.clamp(-1.0, 1.0).asin().to_degrees();
+            let anchor = projection
+                .instance()
+                .project(lat, lon)
+                .map_or([first.x, first.y], |(x, y)| [x, y]);
+            let radius = paths
+                .iter()
+                .flatten()
+                .map(|p| (p.x - anchor[0]).hypot(p.y - anchor[1]))
+                .fold(0.0_f64, f64::max)
+                .max(1e-9) as f32;
+            let anchor = super::gpu::split_point(anchor);
+            let color = [boundary.color[0], boundary.color[1], boundary.color[2], 255];
+            dots.push(super::gpu::Dot {
+                anchor,
+                radius,
+                color,
+            });
+            for path in paths {
+                let detail = Detail::with_unit(path, 180.0 / std::f64::consts::PI);
+                for (level, (error, points)) in detail.levels.iter().enumerate() {
+                    let min_scale = detail
+                        .levels
+                        .get(level + 1)
+                        .map_or(0.0, |(next_error, _)| (0.7 / next_error) as f32);
+                    let max_scale = if *error > 0.0 {
+                        (0.7 / error) as f32
+                    } else {
+                        f32::MAX
+                    };
+                    for edge in points.windows(2) {
+                        segments.push(super::gpu::Segment {
+                            start: super::gpu::split_point([edge[0].x, edge[0].y]),
+                            end: super::gpu::split_point([edge[1].x, edge[1].y]),
+                            anchor,
+                            radius,
+                            color,
+                            scales: [min_scale, max_scale],
+                        });
+                    }
+                }
+            }
+        }
+        let geometry = Arc::new(super::gpu::Geometry::new(segments, dots));
+        let mut cache = self.projected_geometry.lock().unwrap();
+        if cache.len() >= 4 {
+            cache.remove(0);
+        }
+        cache.push((key, Arc::clone(&geometry)));
+        geometry
+    }
+
+    fn cached_projected_geometry(
+        &self,
+        projection: crate::projection::ProjectionKind,
+    ) -> Option<Arc<super::gpu::Geometry>> {
+        let mut cache = self.projected_geometry.lock().unwrap();
+        let index = cache
+            .iter()
+            .position(|(id, _)| *id == projection.shader_id())?;
+        let entry = cache.remove(index);
+        let geometry = Arc::clone(&entry.1);
+        cache.push(entry);
+        Some(geometry)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn projected_geometry_ready(
+        &self,
+        projection: crate::projection::ProjectionKind,
+    ) -> bool {
+        self.projected_geometry
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(id, _)| *id == projection.shader_id())
+    }
+
+    pub(super) fn projected_geometry_for_view(
+        self: &Arc<Self>,
+        projection: crate::projection::ProjectionKind,
+        _ctx: &egui::Context,
+    ) -> Option<Arc<super::gpu::Geometry>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(geometry) = self.cached_projected_geometry(projection) {
+                return Some(geometry);
+            }
+            let key = projection.shader_id();
+            let mut pending = self.pending_projections.lock().unwrap();
+            if pending.len() < 2 && pending.insert(key) {
+                let preview = Arc::clone(self);
+                let ctx = _ctx.clone();
+                std::thread::spawn(move || {
+                    preview.projected_geometry(projection);
+                    preview.pending_projections.lock().unwrap().remove(&key);
+                    ctx.request_repaint();
+                });
+            }
+            None
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Some(self.projected_geometry(projection))
+        }
+    }
+}
+
+fn projected_boundary(
+    boundary: &Boundary,
+    projection: crate::projection::ProjectionKind,
+) -> Vec<Vec<Vector3<f64>>> {
+    boundary
+        .polygons
+        .iter()
+        .flat_map(|polygon| polygon.iter())
+        .flat_map(|ring| crate::projection::project_path(projection.instance(), ring))
+        .map(|path| {
+            path.into_iter()
+                .map(|[x, y]| Vector3::new(x, y, 0.0))
+                .collect()
+        })
+        .collect()
 }
 
 #[derive(Clone)]
@@ -353,6 +712,26 @@ pub(crate) struct Hit {
 }
 
 fn contains_ring(points: &[[f64; 2]], x: f64, y: f64) -> bool {
+    if points
+        .windows(2)
+        .any(|edge| (edge[1][0] - edge[0][0]).abs() > 180.0)
+    {
+        let Some(first) = points.first() else {
+            return false;
+        };
+        let x = x + ((first[0] - x) / 360.0).round() * 360.0;
+        let mut ax = first[0];
+        let mut inside = false;
+        for edge in points.windows(2) {
+            let (ay, by) = (edge[0][1], edge[1][1]);
+            let bx = ax + (edge[1][0] - edge[0][0] + 180.0).rem_euclid(360.0) - 180.0;
+            if (ay > y) != (by > y) && x < ax + (y - ay) * (bx - ax) / (by - ay) {
+                inside = !inside;
+            }
+            ax = bx;
+        }
+        return inside;
+    }
     let mut inside = false;
     for edge in points.windows(2) {
         let ([ax, ay], [bx, by]) = (edge[0], edge[1]);
@@ -382,6 +761,8 @@ pub(crate) struct Overlay {
     opacity: f32,
     fill_opacity: f32,
     selected: Option<usize>,
+    use_gpu: bool,
+    projection: Option<crate::projection::ProjectionKind>,
 }
 
 impl Overlay {
@@ -401,6 +782,8 @@ impl Overlay {
             opacity,
             fill_opacity: 0.1,
             selected: None,
+            use_gpu: false,
+            projection: None,
         }
     }
 
@@ -409,14 +792,32 @@ impl Overlay {
         self
     }
 
+    pub fn projected(
+        preview: Arc<Preview>,
+        projection: crate::projection::ProjectionKind,
+        opacity: f32,
+    ) -> Self {
+        let mut overlay = Self::new(preview, Matrix3::identity(), 1.0, 0.0, opacity);
+        overlay.projection = Some(projection);
+        overlay
+    }
+
     pub fn with_selection(mut self, selected: Option<usize>) -> Self {
         self.selected = selected;
+        self
+    }
+
+    pub fn with_gpu(mut self, enabled: bool) -> Self {
+        self.use_gpu = enabled;
         self
     }
 
     /// Exact polygon picking (including holes), with a small screen-space
     /// fallback for AOIs represented by dots. Uses the existing spatial index.
     pub fn pick(&self, pos: egui::Pos2, transform: &PlotTransform) -> Vec<Hit> {
+        if let Some(projection) = self.projection {
+            return self.pick_projected(pos, transform, projection);
+        }
         let point = transform.value_from_position(pos);
         let Some((lat, lon)) = crate::globe_overlay::pick_surface(
             point.x,
@@ -468,6 +869,21 @@ impl Overlay {
             return mesh;
         };
         let color = Color32::YELLOW;
+        if let Some(projection) = self.projection {
+            for path in projected_boundary(boundary, projection) {
+                for edge in path.windows(2) {
+                    let a = transform.position_from_point(&PlotPoint::new(edge[0].x, edge[0].y));
+                    let b = transform.position_from_point(&PlotPoint::new(edge[1].x, edge[1].y));
+                    if transform
+                        .frame()
+                        .intersects(Rect::from_two_pos(a, b).expand(2.0))
+                    {
+                        line_quad(&mut mesh, a, b, color, 2.5);
+                    }
+                }
+            }
+            return mesh;
+        }
         for detail in &boundary.rings {
             let ring = &detail.levels[0].1;
             for edge in ring.windows(2) {
@@ -495,7 +911,122 @@ impl Overlay {
         project_surface(p, &self.rotation, self.radius, self.polar_scale)
     }
 
+    fn pick_projected(
+        &self,
+        pos: egui::Pos2,
+        transform: &PlotTransform,
+        projection: crate::projection::ProjectionKind,
+    ) -> Vec<Hit> {
+        let proj = projection.instance();
+        let cursor = transform.value_from_position(pos);
+        let Some((lat, lon)) = proj.inverse(cursor.x, cursor.y) else {
+            return Vec::new();
+        };
+        let point = unit([lon, lat]);
+        let mut margin = 0.0_f64;
+        for offset in [
+            egui::vec2(6.0, 0.0),
+            egui::vec2(-6.0, 0.0),
+            egui::vec2(0.0, 6.0),
+            egui::vec2(0.0, -6.0),
+        ] {
+            let nearby = transform.value_from_position(pos + offset);
+            if let Some((lat, lon)) = proj.inverse(nearby.x, nearby.y) {
+                margin = margin.max((unit([lon, lat]) - point).norm());
+            }
+        }
+        let scale = transform
+            .dpos_dvalue_x()
+            .abs()
+            .max(transform.dpos_dvalue_y().abs())
+            * 180.0
+            / std::f64::consts::PI;
+        let mut found = Vec::new();
+        for index in self
+            .preview
+            .spatial
+            .query(|sphere| (sphere.center - point).norm() <= sphere.radius + margin + 1e-5)
+        {
+            let boundary = &self.preview.boundaries[index];
+            let exact = contains(&boundary.polygons, lon, lat);
+            let anchor_lon = (-boundary.anchor.z).atan2(boundary.anchor.x).to_degrees();
+            let anchor_lat = boundary.anchor.y.clamp(-1.0, 1.0).asin().to_degrees();
+            let dot = boundary.radius * scale < 3.0
+                && proj.project(anchor_lat, anchor_lon).is_some_and(|(x, y)| {
+                    transform
+                        .position_from_point(&PlotPoint::new(x, y))
+                        .distance(pos)
+                        <= 6.0
+                });
+            if exact || dot {
+                found.push(Hit {
+                    preview: Arc::clone(&self.preview),
+                    index,
+                });
+            }
+        }
+        found.sort_by(|a, b| {
+            self.preview.aois[a.index]
+                .area_km2
+                .total_cmp(&self.preview.aois[b.index].area_km2)
+        });
+        found
+    }
+
+    pub(super) fn projected_mesh(
+        &self,
+        transform: &PlotTransform,
+        projection: crate::projection::ProjectionKind,
+    ) -> Mesh {
+        let geometry = self.preview.projected_geometry(projection);
+        let scale = transform
+            .dpos_dvalue_x()
+            .abs()
+            .max(transform.dpos_dvalue_y().abs());
+        let screen = |p| {
+            let [x, y] = super::gpu::join_point(p);
+            transform.position_from_point(&PlotPoint::new(x, y))
+        };
+        let color = |c: [u8; 4]| {
+            Color32::from_rgba_unmultiplied(
+                c[0],
+                c[1],
+                c[2],
+                (c[3] as f32 * self.opacity).round() as u8,
+            )
+        };
+        let mut mesh = Mesh::default();
+        for edge in &geometry.segments {
+            if f64::from(edge.radius) * scale < 3.0
+                || scale <= f64::from(edge.scales[0])
+                || scale > f64::from(edge.scales[1])
+            {
+                continue;
+            }
+            let (a, b) = (screen(edge.start), screen(edge.end));
+            if transform
+                .frame()
+                .intersects(Rect::from_two_pos(a, b).expand(1.0))
+            {
+                line_quad(&mut mesh, a, b, color(edge.color), 1.2);
+            }
+        }
+        for dot in &geometry.dots {
+            let anchor = screen(dot.anchor);
+            if f64::from(dot.radius) * scale < 3.0 && transform.frame().contains(anchor) {
+                mesh.add_colored_rect(
+                    Rect::from_center_size(anchor, egui::vec2(2.5, 2.5)),
+                    color(dot.color),
+                );
+            }
+        }
+        mesh
+    }
+
     fn cached_mesh(&self, transform: &PlotTransform) -> Arc<Mesh> {
+        if let Some(projection) = self.projection {
+            return Arc::new(self.projected_mesh(transform, projection));
+        }
         let mut key = self.rotation.as_slice().to_vec();
         let frame = transform.frame();
         key.extend([
@@ -546,7 +1077,7 @@ impl Overlay {
         mesh
     }
 
-    fn mesh(&self, transform: &PlotTransform) -> Mesh {
+    pub(super) fn mesh(&self, transform: &PlotTransform) -> Mesh {
         let mut mesh = Mesh::default();
         let scale = transform
             .dpos_dvalue_x()
@@ -706,8 +1237,33 @@ impl Overlay {
 }
 
 impl PlotItem for Overlay {
-    fn shapes(&self, _ui: &egui::Ui, transform: &PlotTransform, shapes: &mut Vec<Shape>) {
-        shapes.push(Shape::Mesh(self.cached_mesh(transform)));
+    fn shapes(&self, ui: &egui::Ui, transform: &PlotTransform, shapes: &mut Vec<Shape>) {
+        if self.use_gpu {
+            let callback = if let Some(projection) = self.projection {
+                let Some(geometry) = self
+                    .preview
+                    .projected_geometry_for_view(projection, ui.ctx())
+                else {
+                    return;
+                };
+                super::gpu::PaintCallback::projected(ui.id(), geometry, self.opacity, transform)
+            } else {
+                super::gpu::PaintCallback::new(
+                    ui.id(),
+                    self.preview.gpu_geometry(),
+                    &self.rotation,
+                    self.radius,
+                    self.polar_scale,
+                    self.opacity,
+                    transform,
+                )
+            }
+            .with_fill(self.fill_opacity);
+            shapes
+                .push(egui_wgpu::Callback::new_paint_callback(*transform.frame(), callback).into());
+        } else {
+            shapes.push(Shape::Mesh(self.cached_mesh(transform)));
+        }
         if self.selected.is_some() {
             shapes.push(Shape::Mesh(Arc::new(self.selection_mesh(transform))));
         }
@@ -737,6 +1293,78 @@ impl PlotItem for Overlay {
 mod tests {
     use super::*;
     use egui::Pos2;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn manual_areas_keep_their_spherical_boundaries_and_colors() {
+        use crate::config::{AoiJobMode, AreaOfInterest, SpaceCompReducerPlacement};
+        for (lat, lon) in [(0.0, 0.0), (60.0, 179.99), (-70.0, -179.99)] {
+            let area = AreaOfInterest {
+                name: "Test".into(),
+                lat,
+                lon,
+                radius_km: 10.0,
+                color: Color32::from_rgb(255, 70, 90),
+                ground_station_idx: None,
+                job_mode: AoiJobMode::Route,
+                job_n: 3,
+                reducer_placement: SpaceCompReducerPlacement::NearMappers,
+                show_spacecomp_flow: false,
+                selected: false,
+            };
+            let preview = Preview::from_areas(&[area], 6371.0).unwrap();
+            assert_eq!(preview.count, 1);
+            let boundary = &preview.boundaries[0];
+            assert_eq!(boundary.color, [255, 70, 90]);
+            for point in &boundary.rings[0].levels[0].1 {
+                let distance = boundary
+                    .anchor
+                    .cross(point)
+                    .norm()
+                    .atan2(boundary.anchor.dot(point))
+                    * 6371.0;
+                assert!((distance - 10.0).abs() < 1e-7);
+            }
+            assert!(!preview
+                .projected_geometry(crate::projection::ProjectionKind::Mercator)
+                .segments
+                .is_empty());
+        }
+    }
+    #[test]
+    fn gpu_geometry_is_cached_and_keeps_the_cpu_fallback_and_picking() {
+        let preview = Arc::new(Preview::from_json(br#"{"schema_version":1,"config":{"seed":42,"count":1},"aois":[{"area_km2":100,"anchor_lon":-90,"anchor_lat":0,"geometry":{"type":"Polygon","coordinates":[[[-91,-1],[-89,-1],[-89,1],[-91,1],[-91,-1]]]}}]}"#).unwrap());
+        let geometry = preview.gpu_geometry();
+        let transform = PlotTransform::new(
+            Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)),
+            PlotBounds::new_symmetrical(7000.0),
+            [false, false],
+        );
+        let context = egui::Context::default();
+        let mut output = context.run_ui(Default::default(), |ui| {
+            for angle in [0.0, 0.2, 0.5] {
+                let overlay = Overlay::new(
+                    preview.clone(),
+                    crate::math::rotation_from_drag(angle, 0.0),
+                    6371.0,
+                    0.0,
+                    0.8,
+                );
+                let mut shapes = Vec::new();
+                overlay.with_gpu(true).shapes(ui, &transform, &mut shapes);
+                assert_eq!(shapes.len(), 1);
+                assert!(matches!(shapes[0], Shape::Callback(_)));
+                assert!(Arc::ptr_eq(&geometry, &preview.gpu_geometry()));
+            }
+            let overlay = Overlay::new(preview.clone(), Matrix3::identity(), 6371.0, 0.0, 0.8);
+            let mut shapes = Vec::new();
+            overlay.shapes(ui, &transform, &mut shapes);
+            assert!(matches!(shapes[0], Shape::Mesh(_)));
+            let center = transform.position_from_point(&PlotPoint::new(0.0, 0.0));
+            assert_eq!(overlay.pick(center, &transform).len(), 1);
+        });
+        output.textures_delta.clear();
+    }
     #[test]
     fn fill_opacity_is_independent_cached_and_clipped_at_the_horizon() {
         let preview = Arc::new(Preview::from_json(br#"{"schema_version":1,"config":{"seed":42,"count":1},"aois":[{"area_km2":100,"anchor_lon":-90,"anchor_lat":0,"geometry":{"type":"Polygon","coordinates":[[[-91,-1],[-89,-1],[-89,1],[-91,1],[-91,-1]]]}}]}"#).unwrap());
@@ -846,6 +1474,76 @@ mod tests {
         assert!((points[1].y - 0.5).abs() < 1e-12);
         assert!((points[1].norm() - 1.0).abs() < 1e-12);
     }
+
+    #[test]
+    fn projected_overlays_render_pick_holes_and_reuse_geometry() {
+        use crate::projection::ProjectionKind::*;
+        let preview = Arc::new(
+            Preview::from_json(
+                &serde_json::to_vec(&serde_json::json!({
+                    "schema_version": 1, "config": {"count": 1, "seed": 42},
+                    "aois": [{"area_km2": 1000, "anchor_lon": 25.5, "anchor_lat": 48.7,
+                        "geometry": {"type": "Polygon", "coordinates": [
+                            [[22,45],[29,45],[29,52],[22,52],[22,45]],
+                            [[25,48],[26,48],[26,49],[25,49],[25,48]]
+                        ]}}]
+                }))
+                .unwrap(),
+            )
+            .unwrap(),
+        );
+        for projection in [
+            Equirectangular,
+            Mercator,
+            Mollweide,
+            Sinusoidal,
+            AzimuthalEquidistant,
+            Hammer,
+            HEALPix,
+            Cassini,
+            TransverseMercator,
+            LambertAzimuthalEqualArea,
+            GallPeters,
+            PeirceQuincuncial,
+        ] {
+            let proj = projection.instance();
+            let (x, y) = proj.project(48.7, 25.5).unwrap();
+            let transform = PlotTransform::new(
+                Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
+                PlotBounds::from_min_max([x - 10.0, y - 10.0], [x + 10.0, y + 10.0]),
+                [false, false],
+            );
+            let overlay = Overlay::projected(Arc::clone(&preview), projection, 0.3);
+            let geometry = preview.projected_geometry(projection);
+            assert!(Arc::ptr_eq(
+                &geometry,
+                &preview.projected_geometry(projection)
+            ));
+            let mesh = overlay.projected_mesh(&transform, projection);
+            assert!(!mesh.vertices.is_empty(), "{}", projection.label());
+            assert!(mesh.is_valid());
+            assert!(mesh.vertices.iter().all(|v| v.color.a() <= 77));
+            let screen = |lat, lon| {
+                let (x, y) = proj.project(lat, lon).unwrap();
+                transform.position_from_point(&PlotPoint::new(x, y))
+            };
+            assert!(
+                overlay.pick(screen(48.7, 25.5), &transform).is_empty(),
+                "{} must preserve holes",
+                projection.label()
+            );
+            assert_eq!(
+                overlay.pick(screen(48.0, 24.0), &transform).len(),
+                1,
+                "{}",
+                projection.label()
+            );
+            let selection = overlay.with_selection(Some(0)).selection_mesh(&transform);
+            assert!(!selection.vertices.is_empty());
+            assert!(selection.is_valid());
+        }
+        assert!(preview.projected_geometry.lock().unwrap().len() <= 4);
+    }
     #[test]
     fn invalid_response_and_open_rings_are_rejected() {
         assert!(Preview::from_json(
@@ -875,16 +1573,30 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    #[ignore = "requires the leo-aoi Python environment and ingested GDP example"]
     fn real_gdp_generation_and_batched_render() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/leo-aoi");
-        let request = serde_json::json!({"schema_version":1, "demand_path":root.join("data/gdp-demand.npz"),
-            "mean_area_km2":1000, "size_ratio":100,
-            "generation":{"count":10000,"seed":42,"hotspot_count":256,"hotspot_spread_km":10,"hotspot_fraction":0.8}});
         let start = std::time::Instant::now();
-        let preview =
-            super::super::worker::run(root.join(".venv/bin/python").to_str().unwrap(), &request)
-                .unwrap();
+        let mut job = super::super::generate::Job::new(
+            super::super::generate::Settings::Gdp(super::super::generate::Gdp {
+                count: 10000,
+                seed: 42,
+                mean_area: 1000.0,
+                size_ratio: 100.0,
+                uniform: false,
+                hotspot_count: 256,
+                hotspot_spread: 10.0,
+                hotspot_fraction: 0.8,
+                shape: "oriented_rectangle".into(),
+                random_rotation: true,
+                max_aspect: 3.0,
+            }),
+            Some(super::super::data::load(&super::super::data::Input::default(), "gdp").unwrap()),
+        )
+        .unwrap();
+        let preview = loop {
+            if let Some(preview) = job.step().unwrap() {
+                break preview;
+            }
+        };
         assert_eq!(preview.count, 10000);
         assert!((preview.mean_area - 1000.0).abs() < 50.0);
         let generation_time = start.elapsed();

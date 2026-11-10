@@ -289,7 +289,7 @@ pub(crate) fn compute_passes(
         let c = &constellations[ci];
         let wc = &wcs[ci];
         let inc = c.inclination.to_radians();
-        let omega = c.arg_periapsis.to_radians();
+        let omega = c.arg_periapsis.to_radians() + c.orbital_phase[1];
         let ecc = c.eccentricity;
 
         if inc.abs() < 1e-10 {
@@ -308,7 +308,7 @@ pub(crate) fn compute_passes(
         let spp = c.sats_per_plane;
         let sat_step_angle = 2.0 * PI / spp as f64;
         let phase_step = c.phasing * 2.0 * PI / c.total_sats() as f64;
-        let m0 = sat_step_angle * sat_idx as f64 + phase_step * plane as f64;
+        let m0 = sat_step_angle * sat_idx as f64 + phase_step * plane as f64 + c.orbital_phase[2];
 
         let u_checks: Vec<f64> = if k.abs() <= 1.0 {
             vec![k.asin(), PI - k.asin()]

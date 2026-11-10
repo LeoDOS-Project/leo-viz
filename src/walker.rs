@@ -27,6 +27,7 @@ pub struct WalkerConstellation {
     pub propagator: Propagator,
     pub eccentricity: f64,
     pub arg_periapsis_deg: f64,
+    pub orbital_phase: [f64; 3],
     pub planet_radius: f64,
     pub planet_mu: f64,
     pub planet_j2: f64,
@@ -52,6 +53,40 @@ pub struct SatelliteState {
 }
 
 impl WalkerConstellation {
+    pub(crate) fn phase_advance(&self, time: f64) -> [f64; 3] {
+        #[cfg(not(target_arch = "wasm32"))]
+        let lib42 = self.propagator == Propagator::Lib42;
+        #[cfg(target_arch = "wasm32")]
+        let lib42 = false;
+        if self.altitude_km < 100.0 && !lib42 {
+            return [0.0; 3];
+        }
+        let e = self.orbital_elements(0, 0);
+        let n = (e.mu / e.semi_major_km.powi(3)).sqrt();
+        let inc = e.inclination_rad;
+        let j2 = self.propagator != Propagator::Keplerian && self.altitude_km >= 100.0;
+        let coeff = if j2 {
+            1.5 * e.j2 * (e.radius_km / e.semi_major_km).powi(2) * n
+                / (1.0 - e.eccentricity.powi(2)).powi(2)
+        } else {
+            0.0
+        };
+        let mean_rate = if lib42 {
+            n
+        } else {
+            n + 0.5
+                * coeff
+                * (3.0 * inc.cos().powi(2) - 1.0)
+                * (1.0 - e.eccentricity.powi(2)).sqrt()
+        };
+        [
+            coeff * inc.cos() * if lib42 { -1.0 } else { 1.0 },
+            coeff * (2.0 - 2.5 * inc.sin().powi(2)),
+            mean_rate,
+        ]
+        .map(|rate| rate * time)
+    }
+
     pub fn sats_per_plane(&self) -> usize {
         self.total_sats / self.num_planes
     }
@@ -119,10 +154,12 @@ impl WalkerConstellation {
             eccentricity: self.eccentricity,
             inclination_rad: self.inclination_deg.to_radians(),
             raan_rad: -self.raan_offset_deg.to_radians() + self.raan_step() * plane as f64
-                - plane_center,
-            argument_rad: self.arg_periapsis_deg.to_radians(),
+                - plane_center
+                + self.orbital_phase[0],
+            argument_rad: self.arg_periapsis_deg.to_radians() + self.orbital_phase[1],
             mean_anomaly_rad: self.sat_step() * sat as f64 - sat_center
-                + self.phasing * 2.0 * PI / self.total_sats as f64 * plane as f64,
+                + self.phasing * 2.0 * PI / self.total_sats as f64 * plane as f64
+                + self.orbital_phase[2],
             mu: self.planet_mu,
             radius_km: self.planet_equatorial_radius,
             j2: self.planet_j2,
@@ -286,20 +323,9 @@ impl WalkerConstellation {
     pub fn orbit_points_3d(&self, plane: usize, time: f64) -> Vec<(f64, f64, f64)> {
         let ecc = self.eccentricity;
         let semi_major = (self.planet_radius + self.altitude_km) / (1.0 - ecc);
-        let period = 2.0 * PI * (semi_major.powi(3) / self.planet_mu).sqrt();
-        let mean_motion = 2.0 * PI / period;
-        let r_ratio = self.planet_equatorial_radius / semi_major;
         let inc = self.inclination_deg.to_radians();
-        let use_j2 = self.propagator == Propagator::J2;
-        let raan_drift_rate = if use_j2 {
-            let e2 = ecc * ecc;
-            let one_minus_e2 = 1.0 - e2;
-            let p_factor = one_minus_e2 * one_minus_e2;
-            1.5 * self.planet_j2 * r_ratio * r_ratio * mean_motion * inc.cos() / p_factor
-        } else {
-            0.0
-        };
-        let omega = self.arg_periapsis_deg.to_radians();
+        let advance = self.phase_advance(time);
+        let omega = self.arg_periapsis_deg.to_radians() + self.orbital_phase[1] + advance[1];
 
         let raan_step = self.raan_step();
         let center_offset = if self.partial_coverage() {
@@ -307,9 +333,10 @@ impl WalkerConstellation {
         } else {
             0.0
         };
-        let raan_initial =
-            -self.raan_offset_deg.to_radians() + raan_step * plane as f64 - center_offset;
-        let raan = raan_initial + raan_drift_rate * time;
+        let raan_initial = -self.raan_offset_deg.to_radians() + raan_step * plane as f64
+            - center_offset
+            + self.orbital_phase[0];
+        let raan = raan_initial + advance[0];
         let inc_cos = inc.cos();
         let inc_sin = inc.sin();
         let raan_cos = raan.cos();
@@ -349,9 +376,9 @@ impl WalkerConstellation {
         let inc_cos = inc.cos();
         let inc_sin = inc.sin();
         let raan_step = self.raan_step();
-        let raan_offset = -self.raan_offset_deg.to_radians();
+        let raan_offset = -self.raan_offset_deg.to_radians() + self.orbital_phase[0];
         let sat_step = self.sat_step();
-        let omega = self.arg_periapsis_deg.to_radians();
+        let omega = self.arg_periapsis_deg.to_radians() + self.orbital_phase[1];
         let phase_step = self.phasing * 2.0 * PI / self.total_sats as f64;
         let mu = self.planet_mu;
         let p = semi_major * (1.0 - ecc * ecc);
@@ -396,7 +423,8 @@ impl WalkerConstellation {
             for sat in 0..sats_per_plane {
                 let raw_mean_anomaly = sat_step * sat as f64 - sat_center_offset
                     + if dead { 0.0 } else { m_dot * time }
-                    + phase_offset;
+                    + phase_offset
+                    + self.orbital_phase[2];
                 let mean_anomaly = raw_mean_anomaly.rem_euclid(2.0 * PI);
 
                 let true_anomaly = if ecc < 1e-8 {

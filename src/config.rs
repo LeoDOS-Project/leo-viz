@@ -123,6 +123,8 @@ pub struct ConstellationConfig {
     pub sat_spacing_km: Option<f64>,
     pub eccentricity: f64,
     pub arg_periapsis: f64,
+    /// Radian offsets for RAAN, argument of periapsis, and mean anomaly.
+    pub orbital_phase: [f64; 3],
     pub isl_neighbors: usize,
     pub propagator: Propagator,
     pub drag_enabled: bool,
@@ -148,7 +150,7 @@ impl ConstellationConfig {
             sats_per_plane: 30,
             num_planes: 30,
             altitude_km: 200.0,
-            inclination: 90.0,
+            inclination: 60.0,
             sso: false,
             walker_type: WalkerType::Delta,
             phasing: 0.0,
@@ -157,6 +159,7 @@ impl ConstellationConfig {
             sat_spacing_km: None,
             eccentricity: 0.0,
             arg_periapsis: 0.0,
+            orbital_phase: [0.0; 3],
             isl_neighbors: 4,
             propagator: Propagator::Keplerian,
             drag_enabled: false,
@@ -193,7 +196,55 @@ impl ConstellationConfig {
             .wrapping_add(self.arg_periapsis.to_bits());
         h = h.wrapping_mul(31).wrapping_add(self.phasing.to_bits());
         h = h.wrapping_mul(31).wrapping_add(self.raan_offset.to_bits());
+        for phase in self.orbital_phase {
+            h = h.wrapping_mul(31).wrapping_add(phase.to_bits());
+        }
         h
+    }
+
+    pub fn preserve_phase_after_altitude_change(
+        &mut self,
+        previous_altitude: f64,
+        time: f64,
+        body: CelestialBody,
+    ) {
+        if self.altitude_km == previous_altitude {
+            return;
+        }
+        let mut old = self.constellation(
+            body.radius_km(),
+            body.mu(),
+            body.j2(),
+            body.equatorial_radius_km(),
+        );
+        old.altitude_km = previous_altitude;
+        let before = old.phase_advance(time);
+        let after = self
+            .constellation(
+                body.radius_km(),
+                body.mu(),
+                body.j2(),
+                body.equatorial_radius_km(),
+            )
+            .phase_advance(time);
+        for axis in 0..3 {
+            self.orbital_phase[axis] = (self.orbital_phase[axis] + before[axis] - after[axis])
+                .rem_euclid(std::f64::consts::TAU);
+        }
+        if let Some(spacing) = &mut self.sat_spacing_km {
+            *spacing *=
+                (body.radius_km() + self.altitude_km) / (body.radius_km() + previous_altitude);
+        }
+        let hash = self.orbital_config_hash();
+        if let Some(state) = &mut self.numerical {
+            let scale =
+                (body.radius_km() + self.altitude_km) / (body.radius_km() + previous_altitude);
+            for sat in &mut state.sats {
+                sat.pos = sat.pos.map(|value| value * scale);
+                sat.vel = sat.vel.map(|value| value / scale.sqrt());
+            }
+            state.config_hash = hash;
+        }
     }
 
     pub fn sso_inclination(
@@ -241,6 +292,7 @@ impl ConstellationConfig {
             propagator: self.propagator,
             eccentricity: self.eccentricity,
             arg_periapsis_deg: self.arg_periapsis,
+            orbital_phase: self.orbital_phase,
             planet_radius,
             planet_mu,
             planet_j2,
@@ -458,6 +510,8 @@ pub struct PlanetConfig {
     /// Optional per-planet projection override. When `None`, the tab's
     /// `TabSettings.planet_projection` is used.
     pub projection_override: Option<crate::projection::ProjectionKind>,
+    pub location_search: crate::location_search::Search,
+    pub map_tile_view: Option<crate::tile::MapTileView>,
 }
 
 impl PlanetConfig {
@@ -522,6 +576,8 @@ impl PlanetConfig {
             ground_track_history: HashMap::new(),
             pushbroom_history: crate::pushbroom::History::default(),
             projection_override: None,
+            location_search: crate::location_search::Search::default(),
+            map_tile_view: None,
         }
     }
 
@@ -572,7 +628,6 @@ pub struct View3DFlags {
     pub show_eclipse: bool,
     pub show_sun: bool,
     pub earth_fixed_camera: bool,
-    pub use_gpu_rendering: bool,
     pub show_clouds: bool,
     pub show_day_night: bool,
     pub show_city_lights: bool,
@@ -604,14 +659,28 @@ pub enum ViewMode {
     Planet,
     SolarSystem,
     PlanetSizes,
+    Satellite,
+    SatelliteTable,
+    GroundTerminals,
 }
 
 impl ViewMode {
+    pub fn is_reference_view(self) -> bool {
+        self.is_satellite() || self == Self::GroundTerminals
+    }
+
+    pub fn is_satellite(self) -> bool {
+        matches!(self, Self::Satellite | Self::SatelliteTable)
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             ViewMode::Planet => "Planet",
             ViewMode::SolarSystem => "Solar System",
             ViewMode::PlanetSizes => "Planet Sizes",
+            ViewMode::Satellite => "Satellite",
+            ViewMode::SatelliteTable => "Satellite Table",
+            ViewMode::GroundTerminals => "Ground Terminals",
         }
     }
 }
@@ -715,11 +784,11 @@ impl Default for TabSettings {
             animate: true,
             zoom: 1.0,
             rotation: lat_lon_to_matrix(0.0, 0.0),
-            earth_fixed_camera: false,
+            earth_fixed_camera: true,
             camera_mode: CameraMode::Unlocked,
             show_camera_windows: false,
             show_orbits: true,
-            show_links: true,
+            show_links: false,
             show_gs_links: false,
             show_coverage: false,
             coverage_angle: 50.0,
@@ -805,8 +874,9 @@ pub struct TabConfig {
     pub planet_counter: usize,
     pub show_stats: bool,
     pub show_sat_list: bool,
-    pub show_fps: bool,
     pub settings: TabSettings,
+    pub satellite_view: crate::satellite_view::View,
+    pub ground_terminals: crate::ground_terminals::View,
     pub slides: Option<crate::slides::SlideDeck>,
     pub presentation_slide_number: Option<usize>,
 }
@@ -846,7 +916,7 @@ pub fn description_layout_job(
                     font_id: bold.clone(),
                     color: bold_color,
                     italics: false,
-                    underline: egui::Stroke::new(1.5, bold_color),
+                    underline: egui::Stroke::new(1.5_f32, bold_color),
                     ..Default::default()
                 },
             );
@@ -901,8 +971,9 @@ impl TabConfig {
             planet_counter: 0,
             show_stats: false,
             show_sat_list: false,
-            show_fps: false,
             settings: TabSettings::default(),
+            satellite_view: crate::satellite_view::View::default(),
+            ground_terminals: crate::ground_terminals::View::default(),
             slides: None,
             presentation_slide_number: None,
         }
@@ -1192,6 +1263,8 @@ mod shareable {
         pub e: f64,
         #[serde(default)]
         pub ap: f64,
+        #[serde(default)]
+        pub phase: [f64; 3],
     }
 
     #[derive(serde::Serialize, serde::Deserialize)]
@@ -1219,6 +1292,7 @@ mod shareable {
                         ss: c.sat_spacing_km,
                         e: c.eccentricity,
                         ap: c.arg_periapsis,
+                        phase: c.orbital_phase,
                     })
                     .collect(),
             }
@@ -1242,6 +1316,7 @@ mod shareable {
                 c.sat_spacing_km = shell.ss;
                 c.eccentricity = shell.e;
                 c.arg_periapsis = shell.ap;
+                c.orbital_phase = shell.phase;
                 planet.constellations.push(c);
             }
         }
@@ -1266,3 +1341,153 @@ mod shareable {
 
 #[cfg(target_arch = "wasm32")]
 pub use shareable::ShareableConfig;
+
+#[cfg(test)]
+mod tests {
+    use super::{TabConfig, TabSettings};
+
+    #[test]
+    fn new_constellations_default_to_sixty_degree_inclination() {
+        assert_eq!(super::ConstellationConfig::new(0).inclination, 60.0);
+        let mut planet = super::PlanetConfig::new("Earth".into());
+        planet.add_constellation();
+        assert!(planet.constellations.iter().all(|c| c.inclination == 60.0));
+    }
+
+    #[test]
+    fn editing_altitude_preserves_direction_but_changes_orbital_speed() {
+        use super::{ConstellationConfig, Propagator};
+        use crate::celestial::CelestialBody;
+        let body = CelestialBody::Earth;
+        let constellation = |config: &ConstellationConfig| {
+            config.constellation(
+                body.radius_km(),
+                body.mu(),
+                body.j2(),
+                body.equatorial_radius_km(),
+            )
+        };
+        let propagators = vec![Propagator::Keplerian, Propagator::J2];
+        #[cfg(not(target_arch = "wasm32"))]
+        let propagators = {
+            let mut values = propagators;
+            values.push(Propagator::Lib42);
+            values
+        };
+        for propagator in propagators {
+            for eccentricity in [0.0, 0.3] {
+                let mut config = ConstellationConfig::new(0);
+                config.num_planes = 3;
+                config.sats_per_plane = 4;
+                config.phasing = 1.0;
+                config.inclination = 53.0;
+                config.eccentricity = eccentricity;
+                config.propagator = propagator;
+                let time = 123_456.7;
+                for altitude in [1200.0, 550.0, 50.0, 900.0] {
+                    let before = constellation(&config).satellite_positions(time);
+                    let old_altitude = config.altitude_km;
+                    config.altitude_km = altitude;
+                    config.preserve_phase_after_altitude_change(old_altitude, time, body);
+                    let after = constellation(&config).satellite_positions(time);
+                    for (a, b) in before.iter().zip(&after) {
+                        assert!(
+                            (a.lat - b.lat).abs() < 1e-7,
+                            "latitude: model {}, e={eccentricity}, altitude={altitude}: {} vs {}",
+                            propagator as u8,
+                            a.lat,
+                            b.lat
+                        );
+                        let lon = (a.lon - b.lon + 180.0).rem_euclid(360.0) - 180.0;
+                        assert!(
+                            lon.abs() < 1e-7,
+                            "longitude: model {}, e={eccentricity}, altitude={altitude}: {lon}",
+                            propagator as u8
+                        );
+                        assert!(
+                            (a.x * a.x + a.y * a.y + a.z * a.z - b.x * b.x - b.y * b.y - b.z * b.z)
+                                .abs()
+                                > 1.0
+                        );
+                    }
+                    if altitude >= 100.0 {
+                        let later = constellation(&config).satellite_positions(time + 1.0);
+                        assert!((later[0].lat - after[0].lat).abs() > 1e-5);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn altitude_edits_preserve_custom_spacing_and_numerical_positions() {
+        use super::{ConstellationConfig, Propagator};
+        use crate::celestial::CelestialBody;
+        let body = CelestialBody::Earth;
+        let mut config = ConstellationConfig::new(0);
+        config.sats_per_plane = 4;
+        config.num_planes = 2;
+        config.sat_spacing_km = Some(100.0);
+        config.propagator = Propagator::Numerical;
+        let wc = config.constellation(
+            body.radius_km(),
+            body.mu(),
+            body.j2(),
+            body.equatorial_radius_km(),
+        );
+        let old_spacing = config.sat_spacing_km.unwrap() / (body.radius_km() + config.altitude_km);
+        config.numerical =
+            Some(wc.initialize_numerical_state(10_000.0, config.orbital_config_hash()));
+        let before = config.numerical.as_ref().unwrap().sats.clone();
+        let previous = config.altitude_km;
+        config.altitude_km = 1200.0;
+        config.preserve_phase_after_altitude_change(previous, 10_000.0, body);
+        let new_spacing = config.sat_spacing_km.unwrap() / (body.radius_km() + config.altitude_km);
+        assert!((new_spacing - old_spacing).abs() < 1e-12);
+        let state = config.numerical.as_ref().unwrap();
+        assert_eq!(state.time, 10_000.0);
+        assert_eq!(state.config_hash, config.orbital_config_hash());
+        for (before, after) in before.iter().zip(&state.sats) {
+            let scale = after.pos[0] / before.pos[0];
+            for axis in 0..3 {
+                assert!((after.pos[axis] - before.pos[axis] * scale).abs() < 1e-8);
+                assert!((after.vel[axis] - before.vel[axis] / scale.sqrt()).abs() < 1e-8);
+            }
+        }
+        let wc = config.constellation(
+            body.radius_km(),
+            body.mu(),
+            body.j2(),
+            body.equatorial_radius_km(),
+        );
+        let regenerated = wc.initialize_numerical_state(10_000.0, config.orbital_config_hash());
+        for (before, after) in before.iter().zip(&regenerated.sats) {
+            let radius = |p: [f64; 3]| p.iter().map(|v| v * v).sum::<f64>().sqrt();
+            for axis in 0..3 {
+                assert!(
+                    (before.pos[axis] / radius(before.pos) - after.pos[axis] / radius(after.pos))
+                        .abs()
+                        < 1e-8
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn new_views_hide_isl_links_by_default() {
+        assert!(!TabSettings::default().show_links);
+        assert!(!TabConfig::new("View 1".into()).settings.show_links);
+        assert!(!TabConfig::new_empty("View 2".into()).settings.show_links);
+    }
+
+    #[test]
+    fn new_views_default_to_fixed_lat_lon() {
+        assert!(TabSettings::default().earth_fixed_camera);
+        assert!(TabConfig::new("View 1".into()).settings.earth_fixed_camera);
+        assert!(
+            TabConfig::new_empty("View 2".into())
+                .settings
+                .earth_fixed_camera
+        );
+    }
+}

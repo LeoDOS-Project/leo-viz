@@ -1,5 +1,5 @@
 //! Independent settings and overlays for geographic sampling sources.
-use super::preview::Preview;
+use super::{data, generate, preview::Preview};
 use eframe::egui;
 use std::sync::Arc;
 
@@ -24,7 +24,7 @@ pub(super) struct Source {
     forest_adherence: f64,
     latitude: f64,
     tile_edge: f64,
-    data_dir: String,
+    dataset: data::Input,
 }
 
 impl Source {
@@ -50,44 +50,65 @@ impl Source {
             forest_adherence: 0.8,
             latitude: 70.0,
             tile_edge: 0.1,
-            data_dir: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tools/leo-aoi/data/environment")
-                .to_string_lossy()
-                .into_owned(),
+            dataset: data::Input::default(),
         }
     }
 
-    fn request(&self) -> serde_json::Value {
-        serde_json::json!({"schema_version":1, "environment": {
-            "kind":self.kind, "count":self.count, "seed":self.seed,
-            "mean_area_km2":self.mean_area, "size_ratio":self.size_ratio,
-            "mean_length_km":self.mean_length, "length_ratio":self.length_ratio,
-            "buffer_km":self.buffer, "inland_km":self.inland, "offshore_km":self.offshore,
-            "min_discharge":self.flow, "max_elongation":self.max_elongation,
-            "outline_variation":self.outline_variation, "forest_adherence":self.forest_adherence,
-            "max_latitude":self.latitude, "tile_edge_km":self.tile_edge,
-            "data_dir":self.data_dir}})
+    pub fn accept_drop(&mut self, file: &egui::DroppedFile) {
+        self.dataset.accept_drop(file);
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, busy: bool) -> Option<serde_json::Value> {
+    fn request(&self) -> (generate::Settings, data::Input) {
+        (
+            generate::Settings::Environment(generate::Environment {
+                kind: self.kind,
+                count: self.count,
+                seed: self.seed,
+                mean_area: self.mean_area,
+                size_ratio: self.size_ratio,
+                mean_length: self.mean_length,
+                length_ratio: self.length_ratio,
+                buffer: self.buffer,
+                inland: self.inland,
+                offshore: self.offshore,
+                flow: self.flow,
+                max_elongation: self.max_elongation,
+                outline_variation: self.outline_variation,
+                forest_adherence: self.forest_adherence,
+                latitude: self.latitude,
+                tile_edge: self.tile_edge,
+            }),
+            self.dataset.clone(),
+        )
+    }
+
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        busy: bool,
+    ) -> Option<(generate::Settings, data::Input)> {
+        let bundled = self.dataset.is_default();
+        if bundled && self.kind == "river" {
+            self.flow = self.flow.max(10.0);
+        }
         let mut request = None;
         ui.push_id(self.kind, |ui| {
             ui.heading(self.name);
             match self.kind {
                 "forest" => {
                     ui.hyperlink_to("ESA WorldCover 2021", "https://esa-worldcover.org/en/data-access");
-                    ui.label("Area-weighted tree-cover locations. Connected patches grow to a sampled area with varied directions, lobes and clearings.");
-                    ui.small("Coarse tree-cover proxy: 0.025° cells (about 2.8 km north–south). This does not set imagery resolution.");
+                    ui.label("Area-weighted tree-cover locations. Connected patches grow with varied elongation, lobes and clearings.");
+                    if bundled { ui.label("Tree-cover grid: 0.05 degrees"); }
                 }
                 "river" => {
-                    ui.hyperlink_to("HydroRIVERS v1.0", "https://www.hydrosheds.org/products/hydrorivers");
+                    ui.hyperlink_to(if bundled {"RiverATLAS v1.0 (compact)"} else {"River network"}, "https://www.hydrosheds.org/hydroatlas");
                     ui.label("Length-weighted river locations. Follow connected reaches downstream and buffer both banks.");
                     ui.small("Paths end at outlets or missing connections. The buffer is a monitoring corridor, not a flood prediction.");
                 }
                 _ => {
-                    ui.hyperlink_to("OpenStreetMap coastlines", "https://osmdata.openstreetmap.de/data/coastlines.html");
+                    ui.hyperlink_to(if bundled {"Natural Earth 1:10 million"} else {"Coastline network"}, "https://www.naturalearthdata.com/downloads/10m-physical-vectors/10m-land/");
                     ui.label("Length-weighted coastline locations. Follow connected shoreline segments with land and sea buffers.");
-                    ui.small("Paths stop at gaps or after one circuit of an island. © OpenStreetMap contributors, ODbL.");
+                    if bundled { ui.label("Made with Natural Earth. Public domain."); }
                 }
             }
             ui.add_enabled_ui(!busy, |ui| {
@@ -112,7 +133,7 @@ impl Source {
                         ui.label("Length range (max/min)"); ui.add(egui::DragValue::new(&mut self.length_ratio).range(1.0..=100.0).suffix("×")); ui.end_row();
                         if self.kind == "river" {
                             ui.label("Buffer on each bank"); ui.add(egui::DragValue::new(&mut self.buffer).range(0.1..=50.0).speed(0.1).suffix(" km")); ui.end_row();
-                            ui.label("Minimum discharge"); ui.add(egui::DragValue::new(&mut self.flow).range(1.0..=1e6).speed(1.0).suffix(" m³/s")); ui.end_row();
+                            ui.label("Minimum discharge"); ui.add(egui::DragValue::new(&mut self.flow).range(if bundled {10.0..=1e6} else {1.0..=1e6}).speed(1.0).suffix(" m³/s")); ui.end_row();
                         } else {
                             ui.label("Inland buffer"); ui.add(egui::DragValue::new(&mut self.inland).range(0.1..=50.0).speed(0.1).suffix(" km")); ui.end_row();
                             ui.label("Offshore buffer"); ui.add(egui::DragValue::new(&mut self.offshore).range(0.1..=50.0).speed(0.1).suffix(" km")); ui.end_row();
@@ -122,18 +143,11 @@ impl Source {
                 });
                 ui.small("Sizes are log-uniform; averages are expected values. Overlapping jobs are retained.");
                 ui.collapsing("Dataset cache and geometry", |ui| {
-                    ui.label("Local geographic datasets");
-                    ui.text_edit_singleline(&mut self.data_dir);
+                    self.dataset.ui(ui);
                     ui.horizontal(|ui| { ui.label("Projected tile edge");
                         ui.add(egui::DragValue::new(&mut self.tile_edge).range(0.05..=10.0).speed(0.05).suffix(" km")); });
-                    ui.small("Downloads are cached outside Git. Generation reuses the local cache; finer tiles cost more time and memory.");
                 });
-                let ready = std::path::Path::new(&self.data_dir).join(format!("{}.npz", self.kind)).is_file();
-                ui.small(if ready { "Geographic dataset is ready locally." } else { "First generation downloads and prepares this global dataset." });
-                #[cfg(not(target_arch = "wasm32"))]
                 if ui.button(format!("Generate {}", self.name.to_lowercase())).clicked() { request = Some(self.request()); }
-                #[cfg(target_arch = "wasm32")]
-                ui.label("Generation requires the native app.");
             });
             if let Some(preview) = &self.preview {
                 ui.separator();
@@ -151,13 +165,12 @@ impl Source {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    #[ignore = "requires prepared environmental datasets and the Python environment"]
     fn environmental_generate_buttons_keep_independent_layers() {
         let ctx = egui::Context::default();
         let mut panel = super::super::AoiGenerator::default();
@@ -187,14 +200,21 @@ mod tests {
             panel.page = index + 1;
             panel.sources[index].count = 3;
             panel.sources[index].seed = 42 + index as u32;
+            panel.sources[index].dataset = data::fixture(panel.sources[index].kind);
             let _ = frame(&mut panel, vec![]);
             let _ = frame(&mut panel, vec![]);
             let out = frame(&mut panel, vec![]);
             if index == 0 {
                 for label in ["Elongation", "Outline variation", "Forest adherence"] {
-                    assert!(out.shapes.iter().any(|s| text(&s.shape, label).is_some()), "{label} is visible");
+                    assert!(
+                        out.shapes.iter().any(|s| text(&s.shape, label).is_some()),
+                        "{label} is visible"
+                    );
                 }
-                assert!(!out.shapes.iter().any(|s| text(&s.shape, "Compactness").is_some()));
+                assert!(!out
+                    .shapes
+                    .iter()
+                    .any(|s| text(&s.shape, "Compactness").is_some()));
             }
             let label = format!("Generate {}", panel.sources[index].name.to_lowercase());
             let pos = out

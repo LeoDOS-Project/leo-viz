@@ -1,0 +1,90 @@
+Satellite models are unmodified downloads from NASA 3D Resources and NASA/JPL mission sites.
+
+Sentinel-6 (Jason Continuity of Service)
+  Credit: NASA/Matthew J. Garcia
+  Source: https://science.nasa.gov/3d-resources/jason-continuity-of-service-sentinel-6/
+  Download: https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Jason%20Continuity%20of%20Service%20(Sentinel-6)/Jason%20Continuity%20of%20Service%20(Sentinel-6).glb
+
+Aqua (A)
+  Credit: NASA/Kevin K. Lane
+  Source: https://science.nasa.gov/3d-resources/aqua-a/
+  Download: https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Aqua%20(A)/Aqua%20(A).glb
+  The NASA page's embedded viewer links to Aquarius rather than Aqua; this file
+  is the Aqua (A) asset from NASA's linked repository.
+
+NASA media usage guidelines:
+  https://www.nasa.gov/nasa-brand-center/images-and-media/
+
+NASA 3D Resources:
+  https://science.nasa.gov/3d-resources/
+
+NASA attribution is retained. These visual assets do not imply endorsement or
+provide verified internal component layouts or spacecraft performance data.
+
+Landsat 8
+  Credit: NASA/Christopher R. Meaney
+  Source: https://science.nasa.gov/3d-resources/landsat-8/
+  Download: https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Landsat%208/Landsat%208.glb
+
+ICESat-2 (B)
+  Credit: NASA/Brian E. Kumanchik
+  Source: https://science.nasa.gov/3d-resources/ice-clouds-and-land-elevation-satellite-2-icesat-2-b/
+  Download: https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Ice,%20Clouds,%20and%20Land%20Elevation%20Satellite-2%20(ICESat-2)%20(B)/Ice,%20Clouds,%20and%20Land%20Elevation%20Satellite-2%20(ICESat-2)%20(B).glb
+
+SMAP
+  Credit: NASA Visualization Technology Applications and Development (VTAD)
+  Source: https://smap.jpl.nasa.gov/resources/99/smap-3d-model/
+  Download: The original SMAP.glb linked under glTF File on that page.
+  NASA/JPL-Caltech usage: https://www.jpl.nasa.gov/jpl-image-use-policy/
+
+MiRaTa
+  Credit: NASA/Christopher R. Meaney
+  Source: https://science.nasa.gov/3d-resources/cubesat-mirata/
+  Download: https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/CubeSat%20-%20MiRaTa/CubeSat%20-%20MiRaTa.glb
+
+GOES-R series
+  Credit: NASA/NOAA
+  Source: https://science.nasa.gov/mission/goes-spacecraft-3d-model/
+  Download: https://assets.science.nasa.gov/content/dam/science/missions/goes/spacecraft/3dmodel/GOES-R.glb
+  This is the original GOES-R/S/T illustration, not a claim of an exact GOES-U
+  configuration. GOES-U's additional CCOR-1 instrument is not represented.
+
+SWOT
+  Credit: Courtesy NASA/JPL-Caltech
+  Source: https://swot.jpl.nasa.gov/resources/86/swot-3d-model/
+  Download: The original SWOT.glb linked under glTF File on that page.
+  NASA/JPL-Caltech usage: https://www.jpl.nasa.gov/jpl-image-use-policy/
+
+GRACE-FO
+  Credit: Courtesy NASA/JPL-Caltech; model by NASA VTAD
+  Source: https://gracefo.jpl.nasa.gov/resources/86/grace-fo-3d-model/
+  Download: The original GRACE-FO.glb linked under glTF File on that page.
+  NASA/JPL-Caltech usage: https://www.jpl.nasa.gov/jpl-image-use-policy/
+
+OCO-2
+  Credit: NASA/Christopher R. Meaney
+  Source: https://science.nasa.gov/3d-resources/orbiting-carbon-observatory-oco-2/
+  Download: https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Orbiting%20Carbon%20Observatory%20%28OCO%29%202/Orbiting%20Carbon%20Observatory%20%28OCO%29%202.glb
+
+Aura (D)
+  Credit: NASA/Christopher R. Meaney
+  Source: https://science.nasa.gov/3d-resources/aura-d/
+  Download: https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Aura%20%28D%29/Aura%20%28D%29.glb
+  Original four-instrument configuration; HIRDLS and TES are no longer operating.
+
+Global Precipitation Measurement Core Observatory
+  Credit: NASA/Christopher R. Meaney
+  Source: https://science.nasa.gov/3d-resources/global-precipitation-measurement/
+  Download: https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Global%20Precipitation%20Measurement/Global%20Precipitation%20Measurement.glb
+
+Suomi NPP
+  Credit: NASA/Brian E. Kumanchik; NASA/Christian A. Lopez
+  Source: https://science.nasa.gov/3d-resources/suomi-national-polar-orbiting-partnership-suomi-npp/
+  Download: https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Suomi%20National%20Polar-orbiting%20Partnership%20%28Suomi%20NPP%29/Suomi%20National%20Polar-orbiting%20Partnership%20%28Suomi%20NPP%29.glb
+  Original payload illustration, not a current instrument-status diagram.
+
+Educational assignments are in src/satellite_parts.rs. Splitting connected
+surfaces for selection does not alter the GLB downloads or the triangles and
+materials they contain. Visual identifications are not manufacturer-verified
+engineering disassemblies. Published statistics and their sources are in
+src/satellite_facts.rs; none are live spacecraft telemetry.

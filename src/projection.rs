@@ -8,6 +8,66 @@ pub(crate) trait Projection {
     fn y_range(&self) -> (f64, f64);
 }
 
+pub(crate) fn project_path(projection: &dyn Projection, points: &[[f64; 2]]) -> Vec<Vec<[f64; 2]>> {
+    fn edge(
+        projection: &dyn Projection,
+        a: [f64; 2],
+        b: [f64; 2],
+        depth: u8,
+        paths: &mut Vec<Vec<[f64; 2]>>,
+    ) {
+        let (xmin, xmax) = projection.x_range();
+        let (ymin, ymax) = projection.y_range();
+        let project = |p: [f64; 2]| {
+            projection
+                .project(p[1], p[0])
+                .filter(|&(x, y)| {
+                    x.is_finite()
+                        && y.is_finite()
+                        && x >= xmin
+                        && x <= xmax
+                        && y >= ymin
+                        && y <= ymax
+                })
+                .map(|(x, y)| [x, y])
+        };
+        let delta = (b[0] - a[0] + 180.0).rem_euclid(360.0) - 180.0;
+        let mut lon = a[0] + delta / 2.0;
+        if lon > 180.0 {
+            lon -= 360.0;
+        }
+        if lon < -180.0 {
+            lon += 360.0;
+        }
+        let midpoint = [lon, (a[1] + b[1]) / 2.0];
+        let (pa, pb, pm) = (project(a), project(b), project(midpoint));
+        if let (Some(pa), Some(pb), Some(pm)) = (pa, pb, pm) {
+            let error = ((pa[0] + pb[0]) / 2.0 - pm[0]).hypot((pa[1] + pb[1]) / 2.0 - pm[1]);
+            if error <= 0.0001 {
+                if let Some(path) = paths.last_mut().filter(|path| path.last() == Some(&pa)) {
+                    path.push(pb);
+                } else {
+                    paths.push(vec![pa, pb]);
+                }
+                return;
+            }
+        } else if pa.is_none() && pb.is_none() && pm.is_none() {
+            return;
+        }
+        // Subdivide curved edges and approach projection cuts from each side;
+        // never connect the remaining discontinuity across the map.
+        if depth < 12 {
+            edge(projection, a, midpoint, depth + 1, paths);
+            edge(projection, midpoint, b, depth + 1, paths);
+        }
+    }
+    let mut paths = Vec::new();
+    for pair in points.windows(2) {
+        edge(projection, pair[0], pair[1], 0, &mut paths);
+    }
+    paths
+}
+
 pub(crate) struct Equirectangular;
 pub(crate) struct Mercator;
 pub(crate) struct Mollweide;
@@ -678,6 +738,9 @@ impl Projection for PeirceQuincuncial {
     }
     fn inverse(&self, x0: f64, y0: f64) -> Option<(f64, f64)> {
         let c = peirce_const();
+        if x0.abs() > c.extent || y0.abs() > c.extent {
+            return None;
+        }
         let sqrt1_2 = (0.5_f64).sqrt();
 
         let x0 = x0 * c.inv_scale;
@@ -706,7 +769,7 @@ impl Projection for PeirceQuincuncial {
             let gy2 = (x1 - y1) * sqrt1_2;
 
             let (lam, phi) = guyou_inv(gx2, gy2, c.k_, c.m, c.big_k);
-            let lon = lam.to_degrees() + if gx2 > 0.0 { 180.0 } else { -180.0 };
+            let lon = lam.to_degrees() + if gx2 > 0.0 { -180.0 } else { 180.0 };
             let lat = phi.to_degrees();
             if lat.abs() <= 90.0 && lon.abs() <= 180.0 {
                 Some((lat, lon))
@@ -792,6 +855,49 @@ impl ProjectionKind {
             ProjectionKind::LambertAzimuthalEqualArea => "Lambert Azimuthal",
             ProjectionKind::GallPeters => "Gall-Peters",
             ProjectionKind::PeirceQuincuncial => "Peirce Quincuncial",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn projected_paths_split_the_dateline_and_interrupted_polar_lobes() {
+        for projection in [
+            ProjectionKind::Equirectangular,
+            ProjectionKind::Mercator,
+            ProjectionKind::Mollweide,
+            ProjectionKind::Sinusoidal,
+            ProjectionKind::Hammer,
+        ] {
+            let paths = project_path(projection.instance(), &[[179.0, 10.0], [-179.0, 10.0]]);
+            assert_eq!(paths.len(), 2, "{}", projection.label());
+            assert!(paths
+                .iter()
+                .flatten()
+                .all(|point| point.iter().all(|v| v.is_finite())));
+            assert!(paths.iter().all(|path| path
+                .windows(2)
+                .all(|edge| (edge[1][0] - edge[0][0]).abs() < 2.0)));
+        }
+        let paths = project_path(&HEALPix, &[[-1.0, 70.0], [1.0, 70.0]]);
+        assert_eq!(paths.len(), 2);
+        assert!(paths.iter().all(|path| path
+            .windows(2)
+            .all(|edge| (edge[1][0] - edge[0][0]).abs() < 2.0)));
+    }
+
+    #[test]
+    fn peirce_inverse_matches_both_hemispheres_and_dateline() {
+        for lat in [-70.0, -30.0, 30.0, 70.0] {
+            for lon in [-179.0, -120.0, -45.0, 25.5, 120.0, 179.0] {
+                let (x, y) = PeirceQuincuncial.project(lat, lon).unwrap();
+                let (actual_lat, actual_lon) = PeirceQuincuncial.inverse(x, y).unwrap();
+                assert!((actual_lat - lat).abs() < 1e-7, "{lat},{lon}: {actual_lat}");
+                assert!((actual_lon - lon).abs() < 1e-7, "{lat},{lon}: {actual_lon}");
+            }
         }
     }
 }

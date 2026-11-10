@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use crate::celestial::{CelestialBody, Skin, TextureResolution};
 use crate::texture::{EarthTexture, RingTexture};
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests;
+
 fn profile_render_section(name: &str, start: web_time::Instant) {
     if std::env::var_os("LEO_VIZ_RENDER_PROF").is_some() {
         let ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -16,6 +19,54 @@ fn profile_render_section(name: &str, start: web_time::Instant) {
         if ms > threshold_ms {
             eprintln!("leo-viz render {name}={ms:.1} ms");
         }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct DetailLayer {
+    pub bounds: [f64; 4],
+    pub previous_bounds: [f64; 4],
+    pub blend: f32,
+}
+
+impl DetailLayer {
+    pub fn camera_coordinates(&self, inverse: &Matrix3<f64>, flattening: f64) -> [[f32; 4]; 3] {
+        let b = 1.0 - flattening;
+        let direction = inverse.column(2);
+        let length = (direction.x.powi(2) + (direction.y / b).powi(2) + direction.z.powi(2)).sqrt();
+        let centre = direction / length;
+        let sin_lat = (centre.y / b).clamp(-1.0, 1.0);
+        let cos_squared = centre.x.powi(2) + centre.z.powi(2);
+        let mercator = sin_lat.atanh();
+        let longitude = (-centre.z).atan2(centre.x);
+        let coordinates = |bounds: [f64; 4]| {
+            let width = (bounds[1] - bounds[0]).to_radians();
+            let height = bounds[3] - bounds[2];
+            if width <= 0.0 || height <= 0.0 || !mercator.is_finite() {
+                return [0.0; 4];
+            }
+            let midpoint = ((bounds[0] + bounds[1]) / 2.0).to_radians();
+            let delta = (longitude - midpoint + std::f64::consts::PI)
+                .rem_euclid(std::f64::consts::TAU)
+                - std::f64::consts::PI;
+            [
+                0.5 + delta / width,
+                (bounds[3] - mercator) / height,
+                1.0 / width,
+                1.0 / height,
+            ]
+            .map(|value| value as f32)
+        };
+        [
+            [
+                centre.x as f32,
+                centre.y as f32,
+                centre.z as f32,
+                cos_squared as f32,
+            ],
+            coordinates(self.bounds),
+            coordinates(self.previous_bounds),
+        ]
     }
 }
 
@@ -30,7 +81,13 @@ pub struct PlanetUniforms {
     pub star_rot_2: [f32; 4],
     pub sun_dir_flat: [f32; 4],
     pub bg_aspect: [f32; 4],
+    /// West/east longitude in degrees, south/north Web Mercator ordinate.
     pub detail_bounds: [f32; 4],
+    pub detail_previous_bounds: [f32; 4],
+    pub detail_blend: [f32; 4],
+    pub detail_center: [f32; 4],
+    pub detail_current_uv: [f32; 4],
+    pub detail_previous_uv: [f32; 4],
     pub uv_etc: [f32; 4],
     pub flags_a: [f32; 4],
     pub flags_b: [f32; 4],
@@ -62,10 +119,122 @@ pub struct HeatmapUniforms {
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MapUniforms {
     pub bounds: [f32; 4],
+    pub domain: [f32; 4],
     pub peirce: [f32; 4],
     pub proj_invscale: [f32; 4],
+    pub origin: [f32; 4],
+    pub detail_bounds: [f32; 4],
+    pub detail_previous_bounds: [f32; 4],
+    pub detail_current_uv: [f32; 4],
+    pub detail_previous_uv: [f32; 4],
+    pub detail_derivatives: [f32; 4],
 }
 
+impl MapUniforms {
+    fn new(
+        projection: crate::projection::ProjectionKind,
+        bounds: [f64; 4],
+        detail: Option<DetailLayer>,
+    ) -> Self {
+        let [west, east, south, north] = bounds;
+        let (cx, cy) = ((west + east) / 2.0, (south + north) / 2.0);
+        let mut uniforms: Self = bytemuck::Zeroable::zeroed();
+        let proj = projection.instance();
+        let (xmin, xmax) = proj.x_range();
+        let (ymin, ymax) = proj.y_range();
+        uniforms.domain = [xmin, xmax, ymin, ymax].map(|v| v as f32);
+        uniforms.bounds = [west - cx, east - cx, south - cy, north - cy].map(|v| v as f32);
+        uniforms.origin = [cx as f32, cy as f32, 0.0, 0.0];
+        uniforms.proj_invscale = [projection.shader_id() as f32, 1.0, 1.0, 0.0];
+        if projection == crate::projection::ProjectionKind::PeirceQuincuncial {
+            let c = crate::projection::peirce_const();
+            uniforms.peirce = [c.m as f32, c.k_ as f32, c.big_k as f32, c.dx as f32];
+            uniforms.proj_invscale[1] = c.inv_scale as f32;
+        }
+        let Some(detail) = detail else {
+            return uniforms;
+        };
+        uniforms.proj_invscale[2] = detail.blend;
+        uniforms.proj_invscale[3] = 1.0;
+        uniforms.detail_bounds = detail.bounds.map(|v| v as f32);
+        uniforms.detail_previous_bounds = detail.previous_bounds.map(|v| v as f32);
+
+        // At close zoom, inverse-project around a double-precision reference.
+        // Absolute f32 map coordinates otherwise lose sub-metre tile motion.
+        let Some((lat, lon)) = proj.inverse(cx, cy) else {
+            return uniforms;
+        };
+        if lat.abs() >= 85.05112878 || (east - west).max(north - south) > 0.001 {
+            return uniforms;
+        }
+        let mercator = lat.to_radians().sin().atanh();
+        let relative = |x, y| -> Option<[f64; 2]> {
+            let (lat, longitude) = proj.inverse(x, y)?;
+            let delta = (longitude - lon + 180.0).rem_euclid(360.0) - 180.0;
+            Some([
+                delta.to_radians(),
+                lat.to_radians().sin().atanh() - mercator,
+            ])
+        };
+        let step = 1e-5;
+        let derivatives = (|| {
+            let xp = relative(cx + step, cy)?;
+            let xm = relative(cx - step, cy)?;
+            let yp = relative(cx, cy + step)?;
+            let ym = relative(cx, cy - step)?;
+            Some([
+                (xp[0] - xm[0]) / (2.0 * step),
+                (xp[1] - xm[1]) / (2.0 * step),
+                (yp[0] - ym[0]) / (2.0 * step),
+                (yp[1] - ym[1]) / (2.0 * step),
+            ])
+        })();
+        let Some(d) = derivatives else {
+            return uniforms;
+        };
+        for x in [west, cx, east] {
+            for y in [south, cy, north] {
+                let Some(exact) = relative(x, y) else {
+                    return uniforms;
+                };
+                let estimate = [
+                    d[0] * (x - cx) + d[2] * (y - cy),
+                    d[1] * (x - cx) + d[3] * (y - cy),
+                ];
+                if !exact.iter().all(|v| v.is_finite())
+                    || (exact[0] - estimate[0])
+                        .abs()
+                        .max((exact[1] - estimate[1]).abs())
+                        > 1e-9
+                {
+                    return uniforms;
+                }
+            }
+        }
+        let coordinates = |b: [f64; 4]| {
+            let width = (b[1] - b[0]).to_radians();
+            let height = b[3] - b[2];
+            if width <= 0.0 || height <= 0.0 {
+                return [0.0; 4];
+            }
+            let delta = (lon - (b[0] + b[1]) / 2.0 + 180.0).rem_euclid(360.0) - 180.0;
+            [
+                0.5 + delta.to_radians() / width,
+                (b[3] - mercator) / height,
+                1.0 / width,
+                1.0 / height,
+            ]
+            .map(|v| v as f32)
+        };
+        uniforms.origin[2] = 1.0;
+        uniforms.detail_current_uv = coordinates(detail.bounds);
+        uniforms.detail_previous_uv = coordinates(detail.previous_bounds);
+        uniforms.detail_derivatives = d.map(|v| v as f32);
+        uniforms
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub struct RttRequest {
     pub key: (CelestialBody, Skin, TextureResolution),
     pub inv_rotation: Matrix3<f64>,
@@ -83,8 +252,321 @@ pub struct PlanetBindGroupSlot {
     pub texture_gen: u64,
 }
 
+pub struct MapBindGroupSlot {
+    pub ub: wgpu::Buffer,
+    pub bg: wgpu::BindGroup,
+    pub texture_gen: u64,
+}
+
+struct GpuTile {
+    texture: wgpu::Texture,
+    source: crate::tile::TileCoord,
+    last_used: u64,
+}
+
+struct GpuTileCache {
+    tiles: HashMap<crate::tile::TileCoord, GpuTile>,
+    clock: u64,
+    max_tiles: usize,
+    resampler: TileResampler,
+}
+
+impl GpuTileCache {
+    fn new(device: &wgpu::Device) -> Self {
+        Self {
+            tiles: HashMap::new(),
+            clock: 0,
+            max_tiles: crate::tile::GPU_TILE_CACHE_LIMIT,
+            resampler: TileResampler::new(device),
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct DetailUploadStats {
+    pub uploaded_tiles: usize,
+    pub reused_tiles: usize,
+    pub resampled_tiles: usize,
+    pub evicted_tiles: usize,
+    pub cached_tiles: usize,
+}
+
+struct TileResampler {
+    layout: wgpu::BindGroupLayout,
+    pipeline: wgpu::ComputePipeline,
+}
+
+impl TileResampler {
+    fn new(device: &wgpu::Device) -> Self {
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("esri_parent_tile"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("esri_parent_tile"),
+            source: wgpu::ShaderSource::Wgsl(
+                r#"
+struct Region { offset: vec2<u32>, shift: u32, padding: u32 }
+@group(0) @binding(0) var parent: texture_2d<f32>;
+@group(0) @binding(1) var child: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(2) var<uniform> region: Region;
+
+@compute @workgroup_size(8, 8)
+fn resample(@builtin(global_invocation_id) id: vec3<u32>) {
+    let source = (region.offset + id.xy) >> vec2<u32>(region.shift);
+    textureStore(child, vec2<i32>(id.xy), textureLoad(parent, vec2<i32>(source), 0));
+}
+"#
+                .into(),
+            ),
+        });
+        let pipeline =
+            create_compute_pipeline(device, &layout, &shader, "resample", "esri_parent_tile");
+        Self { layout, pipeline }
+    }
+}
+
+pub struct DetailAtlasWriter<'a> {
+    target: &'a wgpu::Texture,
+    cache: &'a mut GpuTileCache,
+    device: &'a wgpu::Device,
+    queue: &'a wgpu::Queue,
+    encoder: wgpu::CommandEncoder,
+    protected: std::collections::HashSet<crate::tile::TileCoord>,
+    stats: DetailUploadStats,
+}
+
+impl DetailAtlasWriter<'_> {
+    fn store_tile(
+        &mut self,
+        coord: crate::tile::TileCoord,
+        source: crate::tile::TileCoord,
+        texture: wgpu::Texture,
+    ) {
+        self.cache.tiles.remove(&coord);
+        if self.cache.tiles.len() >= self.cache.max_tiles {
+            let oldest = self
+                .cache
+                .tiles
+                .iter()
+                .filter(|(coord, _)| !self.protected.contains(coord))
+                .min_by_key(|(_, tile)| tile.last_used)
+                .map(|(coord, _)| *coord)
+                .expect("GPU tile cache must fit the requested atlas");
+            self.cache.tiles.remove(&oldest);
+            self.stats.evicted_tiles += 1;
+        }
+        self.cache.clock += 1;
+        self.cache.tiles.insert(
+            coord,
+            GpuTile {
+                texture,
+                source,
+                last_used: self.cache.clock,
+            },
+        );
+    }
+
+    fn reuse_parent(
+        &mut self,
+        coord: crate::tile::TileCoord,
+        source: crate::tile::TileCoord,
+        origin: [u32; 2],
+    ) -> crate::tile::TileReuse {
+        use wgpu::util::DeviceExt;
+        let ancestor = (source.z..coord.z).rev().find_map(|z| {
+            let shift = coord.z - z;
+            let key = crate::tile::TileCoord {
+                x: coord.x >> shift,
+                y: coord.y >> shift,
+                z,
+            };
+            self.cache
+                .tiles
+                .get(&key)
+                .filter(|tile| tile.source == source)
+                .map(|_| key)
+        });
+        let Some(ancestor) = ancestor else {
+            return crate::tile::TileReuse::Missing;
+        };
+        if self.stats.resampled_tiles >= crate::tile::TILE_RESAMPLES_PER_FRAME {
+            return crate::tile::TileReuse::Deferred;
+        }
+        let parent = self.cache.tiles.get_mut(&ancestor).unwrap();
+        self.cache.clock += 1;
+        parent.last_used = self.cache.clock;
+        let parent_view = parent.texture.create_view(&Default::default());
+        let texture = GpuResources::new_detail_texture(self.device, [crate::tile::TILE_SIZE; 2]);
+        let child_view = texture.create_view(&Default::default());
+        let shift = coord.z - ancestor.z;
+        let mask = (1 << shift) - 1;
+        let region = [
+            (coord.x & mask) * crate::tile::TILE_SIZE,
+            (coord.y & mask) * crate::tile::TILE_SIZE,
+            u32::from(shift),
+            0,
+        ];
+        let buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("esri_parent_region"),
+                contents: bytemuck::cast_slice(&region),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let resampler = &self.cache.resampler;
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("esri_parent_region"),
+            layout: &resampler.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&parent_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&child_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffer.as_entire_binding(),
+                },
+            ],
+        });
+        {
+            let mut pass = self
+                .encoder
+                .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("reuse_esri_parent"),
+                    timestamp_writes: None,
+                });
+            pass.set_pipeline(&resampler.pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(crate::tile::TILE_SIZE / 8, crate::tile::TILE_SIZE / 8, 1);
+        }
+        Self::copy_tile(&mut self.encoder, &texture, self.target, origin);
+        self.store_tile(coord, source, texture);
+        self.stats.reused_tiles += 1;
+        self.stats.resampled_tiles += 1;
+        crate::tile::TileReuse::Reused
+    }
+
+    fn copy_tile(
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::Texture,
+        target: &wgpu::Texture,
+        origin: [u32; 2],
+    ) {
+        encoder.copy_texture_to_texture(
+            source.as_image_copy(),
+            wgpu::TexelCopyTextureInfo {
+                texture: target,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: origin[0],
+                    y: origin[1],
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: crate::tile::TILE_SIZE,
+                height: crate::tile::TILE_SIZE,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    pub fn finish(mut self) -> DetailUploadStats {
+        if self.stats.uploaded_tiles + self.stats.reused_tiles > 0 {
+            self.queue.submit([self.encoder.finish()]);
+        }
+        self.stats.cached_tiles = self.cache.tiles.len();
+        self.stats
+    }
+}
+
+impl crate::tile::TileAtlasWriter for &mut DetailAtlasWriter<'_> {
+    fn reuse(
+        &mut self,
+        coord: crate::tile::TileCoord,
+        source: crate::tile::TileCoord,
+        origin: [u32; 2],
+    ) -> crate::tile::TileReuse {
+        let Some(tile) = self
+            .cache
+            .tiles
+            .get_mut(&coord)
+            .filter(|tile| tile.source == source)
+        else {
+            return self.reuse_parent(coord, source, origin);
+        };
+        self.cache.clock += 1;
+        tile.last_used = self.cache.clock;
+        DetailAtlasWriter::copy_tile(&mut self.encoder, &tile.texture, self.target, origin);
+        self.stats.reused_tiles += 1;
+        crate::tile::TileReuse::Reused
+    }
+
+    fn upload(
+        &mut self,
+        coord: crate::tile::TileCoord,
+        source: crate::tile::TileCoord,
+        origin: [u32; 2],
+        rgba: &[[u8; 4]],
+    ) {
+        // Keep geographic tiles across atlas/zoom changes, not whole camera snapshots.
+        let texture = GpuResources::new_detail_texture(self.device, [crate::tile::TILE_SIZE; 2]);
+        self.queue.write_texture(
+            texture.as_image_copy(),
+            bytemuck::cast_slice(rgba),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(crate::tile::TILE_SIZE * 4),
+                rows_per_image: None,
+            },
+            texture.size(),
+        );
+        DetailAtlasWriter::copy_tile(&mut self.encoder, &texture, self.target, origin);
+        self.store_tile(coord, source, texture);
+        self.stats.uploaded_tiles += 1;
+    }
+}
+
 pub struct GpuResources {
     pub planet_pipeline: wgpu::RenderPipeline,
+    #[cfg(not(target_arch = "wasm32"))]
     pub rtt_pipeline: wgpu::RenderPipeline,
     pub sun_pipeline: wgpu::RenderPipeline,
     pub heatmap_pipeline: wgpu::RenderPipeline,
@@ -110,6 +592,11 @@ pub struct GpuResources {
     pub map_texture_view: Option<wgpu::TextureView>,
     pub map_texture_key: Option<(CelestialBody, Skin, TextureResolution)>,
     pub detail_view: Option<wgpu::TextureView>,
+    pub detail_previous_view: Option<wgpu::TextureView>,
+    detail_texture: Option<wgpu::Texture>,
+    detail_spare: Option<wgpu::Texture>,
+    detail_pending: bool,
+    detail_tiles: GpuTileCache,
 
     pub igrf_coeffs_buf: wgpu::Buffer,
     pub dummy_view: wgpu::TextureView,
@@ -118,13 +605,10 @@ pub struct GpuResources {
     pub _target_format: wgpu::TextureFormat,
 
     pub sun_ub: wgpu::Buffer,
-    pub planet_bg_queue: Vec<PlanetBindGroupSlot>,
-    pub planet_bg_prepare_idx: usize,
-    pub planet_bg_paint_idx: std::sync::atomic::AtomicUsize,
+    pub planet_bind_groups: HashMap<egui::Id, PlanetBindGroupSlot>,
     pub heatmap_bg_queue: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     pub heatmap_bg_paint_idx: std::sync::atomic::AtomicUsize,
-    pub map_bg_queue: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
-    pub map_bg_paint_idx: std::sync::atomic::AtomicUsize,
+    pub map_bind_groups: HashMap<egui::Id, MapBindGroupSlot>,
     pub sun_bg: Option<wgpu::BindGroup>,
     pub texture_gen: u64,
 
@@ -314,6 +798,7 @@ impl GpuResources {
                 bgl_texture(6),
                 bgl_texture(7),
                 bgl_texture(8),
+                bgl_texture(9),
             ],
         });
         let sun_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -341,7 +826,14 @@ impl GpuResources {
         });
         let map_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("map_bgl"),
-            entries: &[bgl_uniform(0), bgl_sampler(1), bgl_texture(2)],
+            entries: &[
+                bgl_uniform(0),
+                bgl_sampler(1),
+                bgl_texture(2),
+                bgl_sampler(3),
+                bgl_texture(4),
+                bgl_texture(5),
+            ],
         });
 
         let planet_pipeline = create_pipeline(
@@ -352,6 +844,7 @@ impl GpuResources {
             "planet",
             Some(wgpu::BlendState::ALPHA_BLENDING),
         );
+        #[cfg(not(target_arch = "wasm32"))]
         let rtt_pipeline = create_pipeline(
             device,
             wgpu::TextureFormat::Rgba8Unorm,
@@ -650,6 +1143,7 @@ impl GpuResources {
 
         Self {
             planet_pipeline,
+            #[cfg(not(target_arch = "wasm32"))]
             rtt_pipeline,
             sun_pipeline,
             heatmap_pipeline,
@@ -673,17 +1167,19 @@ impl GpuResources {
             map_texture_view: None,
             map_texture_key: None,
             detail_view: None,
+            detail_previous_view: None,
+            detail_texture: None,
+            detail_spare: None,
+            detail_pending: false,
+            detail_tiles: GpuTileCache::new(device),
             dummy_view,
             _dummy_view_rgba: dummy_view_rgba,
             _target_format: format,
             sun_ub,
-            planet_bg_queue: Vec::new(),
-            planet_bg_prepare_idx: 0,
-            planet_bg_paint_idx: std::sync::atomic::AtomicUsize::new(0),
+            planet_bind_groups: HashMap::new(),
             heatmap_bg_queue: Vec::new(),
             heatmap_bg_paint_idx: std::sync::atomic::AtomicUsize::new(0),
-            map_bg_queue: Vec::new(),
-            map_bg_paint_idx: std::sync::atomic::AtomicUsize::new(0),
+            map_bind_groups: HashMap::new(),
             sun_bg,
             texture_gen: 0,
             rad_trace_pipeline,
@@ -879,6 +1375,7 @@ impl GpuResources {
         self.texture_gen += 1;
     }
 
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub fn upload_detail_texture(
         &mut self,
         device: &wgpu::Device,
@@ -887,8 +1384,172 @@ impl GpuResources {
         height: u32,
         rgba: &[u8],
     ) {
-        self.detail_view = Some(upload_rgba_texture(device, queue, width, height, rgba));
+        if self
+            .detail_texture
+            .as_ref()
+            .is_none_or(|t| t.width() != width || t.height() != height)
+        {
+            let texture = Self::new_detail_texture(device, [width, height]);
+            self.detail_view = Some(texture.create_view(&Default::default()));
+            self.detail_texture = Some(texture);
+            self.texture_gen += 1;
+        }
+        self.write_detail_region(queue, [0, 0], [width, height], rgba);
+    }
+
+    fn new_detail_texture(device: &wgpu::Device, size: [u32; 2]) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("esri_tile_atlas"),
+            size: wgpu::Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+    }
+
+    pub fn move_detail_atlas(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        old: Option<crate::tile::AtlasLayout>,
+        layout: crate::tile::AtlasLayout,
+    ) {
+        let size = layout.size();
+        let spare = self.detail_spare.take();
+        let texture = spare
+            .filter(|_| !self.detail_pending)
+            .filter(|t| [t.width(), t.height()] == size)
+            .unwrap_or_else(|| Self::new_detail_texture(device, size));
+        let view = texture.create_view(&Default::default());
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            // A reused atlas must not expose imagery left in newly visible cells.
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("clear_esri_atlas"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+        }
+        if let (Some(old), Some(source)) = (old, self.detail_texture.as_ref()) {
+            for region in layout.copies_from(old) {
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: source,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: region.source[0],
+                            y: region.source[1],
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: region.destination[0],
+                            y: region.destination[1],
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: region.size[0],
+                        height: region.size[1],
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+        }
+        queue.submit([encoder.finish()]);
+        self.detail_spare = self.detail_texture.replace(texture);
+        self.detail_pending = true;
+    }
+
+    pub fn detail_atlas_pending(&self) -> bool {
+        self.detail_pending
+    }
+
+    pub fn publish_detail_atlas(&mut self) {
+        self.detail_previous_view = self.detail_view.replace(
+            self.detail_texture
+                .as_ref()
+                .unwrap()
+                .create_view(&Default::default()),
+        );
+        self.detail_pending = false;
         self.texture_gen += 1;
+    }
+
+    pub fn detail_atlas_writer<'a>(
+        &'a mut self,
+        device: &'a wgpu::Device,
+        queue: &'a wgpu::Queue,
+        needed: &[crate::tile::TileCoord],
+    ) -> DetailAtlasWriter<'a> {
+        DetailAtlasWriter {
+            target: self.detail_texture.as_ref().unwrap(),
+            cache: &mut self.detail_tiles,
+            device,
+            queue,
+            encoder: device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("reuse_esri_tiles"),
+            }),
+            protected: needed.iter().copied().collect(),
+            stats: DetailUploadStats::default(),
+        }
+    }
+
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub fn write_detail_region(
+        &self,
+        queue: &wgpu::Queue,
+        origin: [u32; 2],
+        size: [u32; 2],
+        rgba: &[u8],
+    ) {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: self.detail_texture.as_ref().unwrap(),
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: origin[0],
+                    y: origin[1],
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size[0] * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     #[allow(dead_code)]
@@ -1028,6 +1689,11 @@ impl GpuResources {
                 sun_dir_flat: [0.0, 0.0, -1.0, req.flattening as f32],
                 bg_aspect: [0.0, 0.0, 0.0, 1.0],
                 detail_bounds: [0.0; 4],
+                detail_previous_bounds: [0.0; 4],
+                detail_blend: [1.0, 0.0, 0.0, 0.0],
+                detail_center: [0.0; 4],
+                detail_current_uv: [0.0; 4],
+                detail_previous_uv: [0.0; 4],
                 uv_etc: [1.0, 1.0, scale, 0.0],
                 flags_a: [0.0, 0.0, 0.0, 0.0],
                 flags_b: [0.0, 1.0, has_rings_f, ring_inner],
@@ -1081,6 +1747,10 @@ impl GpuResources {
                     wgpu::BindGroupEntry {
                         binding: 8,
                         resource: wgpu::BindingResource::TextureView(self.ring_view(req.key.0)),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: wgpu::BindingResource::TextureView(&self.dummy_view),
                     },
                 ],
             });
@@ -1322,6 +1992,7 @@ pub fn mat3_to_padded_cols(m: &Matrix3<f64>) -> [[f32; 4]; 3] {
 }
 
 pub struct PlanetPaintCallback {
+    pub view_id: egui::Id,
     pub uniforms: PlanetUniforms,
     pub texture_key: (CelestialBody, Skin, TextureResolution),
     pub show_milky_way: bool,
@@ -1330,12 +2001,14 @@ pub struct PlanetPaintCallback {
 
 impl PlanetPaintCallback {
     pub fn new(
+        view_id: egui::Id,
         uniforms: PlanetUniforms,
         texture_key: (CelestialBody, Skin, TextureResolution),
         show_milky_way: bool,
         has_detail: bool,
     ) -> Self {
         Self {
+            view_id,
             uniforms,
             texture_key,
             show_milky_way,
@@ -1355,26 +2028,23 @@ impl CallbackTrait for PlanetPaintCallback {
     ) -> Vec<wgpu::CommandBuffer> {
         let start = web_time::Instant::now();
         let gpu = res.get_mut::<GpuResources>().unwrap();
-        let paint_idx = gpu
-            .planet_bg_paint_idx
-            .load(std::sync::atomic::Ordering::Relaxed);
-        if paint_idx >= gpu.planet_bg_queue.len() {
-            gpu.planet_bg_prepare_idx = 0;
-            gpu.planet_bg_paint_idx
-                .store(0, std::sync::atomic::Ordering::Relaxed);
-        }
-        let slot_idx = gpu.planet_bg_prepare_idx;
-        gpu.planet_bg_prepare_idx += 1;
-
-        let slot_matches = gpu.planet_bg_queue.get(slot_idx).is_some_and(|slot| {
-            slot.texture_key == self.texture_key
-                && slot.show_milky_way == self.show_milky_way
-                && slot.has_detail == self.has_detail
-                && slot.texture_gen == gpu.texture_gen
-        });
+        // Clipped callbacks may be prepared without painting. Never infer a view
+        // from paint order, and release bind groups that retain replaced textures.
+        let generation = gpu.texture_gen;
+        gpu.planet_bind_groups
+            .retain(|_, slot| slot.texture_gen == generation);
+        let slot_matches = gpu
+            .planet_bind_groups
+            .get(&self.view_id)
+            .is_some_and(|slot| {
+                slot.texture_key == self.texture_key
+                    && slot.show_milky_way == self.show_milky_way
+                    && slot.has_detail == self.has_detail
+                    && slot.texture_gen == gpu.texture_gen
+            });
 
         if slot_matches {
-            let slot = &gpu.planet_bg_queue[slot_idx];
+            let slot = &gpu.planet_bind_groups[&self.view_id];
             queue.write_buffer(&slot.ub, 0, bytemuck::bytes_of(&self.uniforms));
         } else {
             let ub = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1437,6 +2107,12 @@ impl CallbackTrait for PlanetPaintCallback {
                             gpu.ring_view(self.texture_key.0),
                         ),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: wgpu::BindingResource::TextureView(
+                            gpu.detail_previous_view.as_ref().unwrap_or(&gpu.dummy_view),
+                        ),
+                    },
                 ],
             });
             let slot = PlanetBindGroupSlot {
@@ -1447,11 +2123,7 @@ impl CallbackTrait for PlanetPaintCallback {
                 has_detail: self.has_detail,
                 texture_gen: gpu.texture_gen,
             };
-            if slot_idx < gpu.planet_bg_queue.len() {
-                gpu.planet_bg_queue[slot_idx] = slot;
-            } else {
-                gpu.planet_bg_queue.push(slot);
-            }
+            gpu.planet_bind_groups.insert(self.view_id, slot);
         }
         profile_render_section("planet.prepare", start);
         Vec::new()
@@ -1465,10 +2137,7 @@ impl CallbackTrait for PlanetPaintCallback {
     ) {
         let start = web_time::Instant::now();
         let gpu = res.get::<GpuResources>().unwrap();
-        let idx = gpu
-            .planet_bg_paint_idx
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if let Some(slot) = gpu.planet_bg_queue.get(idx) {
+        if let Some(slot) = gpu.planet_bind_groups.get(&self.view_id) {
             render_pass.set_pipeline(&gpu.planet_pipeline);
             render_pass.set_bind_group(0, &slot.bg, &[]);
             render_pass.draw(0..4, 0..1);
@@ -1696,18 +2365,24 @@ impl CallbackTrait for HeatmapPaintCallback {
 }
 
 pub struct MapPaintCallback {
-    pub proj_shader_id: i32,
-    pub shared_bounds: std::sync::Arc<egui::mutex::Mutex<[f64; 4]>>,
+    pub view_id: egui::Id,
+    pub projection: crate::projection::ProjectionKind,
+    pub bounds: [f64; 4],
+    pub detail: Option<DetailLayer>,
 }
 
 impl MapPaintCallback {
     pub fn new(
-        proj_shader_id: i32,
-        shared_bounds: std::sync::Arc<egui::mutex::Mutex<[f64; 4]>>,
+        view_id: egui::Id,
+        projection: crate::projection::ProjectionKind,
+        bounds: [f64; 4],
+        detail: Option<DetailLayer>,
     ) -> Self {
         Self {
-            proj_shader_id,
-            shared_bounds,
+            view_id,
+            projection,
+            bounds,
+            detail,
         }
     }
 }
@@ -1723,33 +2398,17 @@ impl CallbackTrait for MapPaintCallback {
     ) -> Vec<wgpu::CommandBuffer> {
         let start = web_time::Instant::now();
         let gpu = res.get_mut::<GpuResources>().unwrap();
-        // Reset the queue when the paint index has caught up (start of a new
-        // frame). Otherwise multiple map views in the same frame would share
-        // a single uniform buffer and all end up rendering with the last
-        // projection that got prepared.
-        let paint_idx = gpu
-            .map_bg_paint_idx
-            .load(std::sync::atomic::Ordering::Relaxed);
-        if paint_idx >= gpu.map_bg_queue.len() {
-            gpu.map_bg_queue.clear();
-            gpu.map_bg_paint_idx
-                .store(0, std::sync::atomic::Ordering::Relaxed);
+        // Prepared callbacks may be clipped without painting. Keep camera
+        // buffers identified by view, never by the order of painted callbacks.
+        let generation = gpu.texture_gen;
+        gpu.map_bind_groups
+            .retain(|_, slot| slot.texture_gen == generation);
+        let uniforms = MapUniforms::new(self.projection, self.bounds, self.detail);
+        if let Some(slot) = gpu.map_bind_groups.get(&self.view_id) {
+            queue.write_buffer(&slot.ub, 0, bytemuck::bytes_of(&uniforms));
+            profile_render_section("map.prepare", start);
+            return Vec::new();
         }
-        let [bx0, bx1, by0, by1] = *self.shared_bounds.lock();
-        let (peirce, inv_scale) = if self.proj_shader_id == 10 {
-            let c = crate::projection::peirce_const();
-            (
-                [c.m as f32, c.k_ as f32, c.big_k as f32, c.dx as f32],
-                c.inv_scale as f32,
-            )
-        } else {
-            ([0.0; 4], 1.0)
-        };
-        let uniforms = MapUniforms {
-            bounds: [bx0 as f32, bx1 as f32, by0 as f32, by1 as f32],
-            peirce,
-            proj_invscale: [self.proj_shader_id as f32, inv_scale, 0.0, 0.0],
-        };
         let ub = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("map_ub_inst"),
             size: std::mem::size_of::<MapUniforms>() as u64,
@@ -1774,9 +2433,30 @@ impl CallbackTrait for MapPaintCallback {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(earth_v),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&gpu.sampler_clamp),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(gpu.detail_view_or_dummy()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(
+                        gpu.detail_previous_view.as_ref().unwrap_or(&gpu.dummy_view),
+                    ),
+                },
             ],
         });
-        gpu.map_bg_queue.push((ub, bg));
+        gpu.map_bind_groups.insert(
+            self.view_id,
+            MapBindGroupSlot {
+                ub,
+                bg,
+                texture_gen: generation,
+            },
+        );
         profile_render_section("map.prepare", start);
         Vec::new()
     }
@@ -1789,12 +2469,9 @@ impl CallbackTrait for MapPaintCallback {
     ) {
         let start = web_time::Instant::now();
         let gpu = res.get::<GpuResources>().unwrap();
-        let idx = gpu
-            .map_bg_paint_idx
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if let Some((_, ref bg)) = gpu.map_bg_queue.get(idx) {
+        if let Some(slot) = gpu.map_bind_groups.get(&self.view_id) {
             render_pass.set_pipeline(&gpu.map_pipeline);
-            render_pass.set_bind_group(0, bg, &[]);
+            render_pass.set_bind_group(0, &slot.bg, &[]);
             render_pass.draw(0..4, 0..1);
         }
         profile_render_section("map.paint", start);
@@ -1809,6 +2486,11 @@ struct Uniforms {
     sun_dir_flat: vec4f,
     bg_aspect: vec4f,
     detail_bounds: vec4f,
+    detail_previous_bounds: vec4f,
+    detail_blend: vec4f,
+    detail_center: vec4f,
+    detail_current_uv: vec4f,
+    detail_previous_uv: vec4f,
     uv_etc: vec4f,
     flags_a: vec4f,
     flags_b: vec4f,
@@ -1823,6 +2505,7 @@ struct Uniforms {
 @group(0) @binding(6) var t_detail: texture_2d<f32>;
 @group(0) @binding(7) var t_stars: texture_2d<f32>;
 @group(0) @binding(8) var t_ring: texture_2d<f32>;
+@group(0) @binding(9) var t_detail_previous: texture_2d<f32>;
 ",
 "
 struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, };
@@ -1836,6 +2519,28 @@ const ATMO_THICKNESS: f32 = 0.06;
 
 fn inv_rot() -> mat3x3f { return mat3x3f(u.inv_rot_0.xyz, u.inv_rot_1.xyz, u.inv_rot_2.xyz); }
 fn star_rot() -> mat3x3f { return mat3x3f(u.star_rot_0.xyz, u.star_rot_1.xyz, u.star_rot_2.xyz); }
+
+fn sample_detail(image: texture_2d<f32>, bounds: vec4f, lon: f32, lat: f32) -> vec4f {
+    let mercator_limit = 1.48442223;
+    if bounds.y <= bounds.x || bounds.w <= bounds.z || abs(lat) > mercator_limit {
+        return vec4f(0.0);
+    }
+    var longitude = lon * 180.0 / PI;
+    if longitude < bounds.x { longitude += 360.0; }
+    let du = (longitude - bounds.x) / (bounds.y - bounds.x);
+    let mercator_y = asinh(tan(clamp(lat, -mercator_limit, mercator_limit)));
+    let dv = (bounds.w - mercator_y) / (bounds.w - bounds.z);
+    if du < 0.0 || du > 1.0 || dv < 0.0 || dv > 1.0 { return vec4f(0.0); }
+    return textureSampleLevel(image, samp_c, vec2f(du, dv), 0.0);
+}
+
+fn sample_relative_detail(image: texture_2d<f32>, coordinates: vec4f, delta: vec2f) -> vec4f {
+    let uv = coordinates.xy + vec2f(delta.x * coordinates.z, -delta.y * coordinates.w);
+    if coordinates.z <= 0.0 || coordinates.w <= 0.0 || any(uv < vec2f(0.0)) || any(uv > vec2f(1.0)) {
+        return vec4f(0.0);
+    }
+    return textureSampleLevel(image, samp_c, uv, 0.0);
+}
 
 @fragment fn fs(in: VsOut) -> @location(0) vec4f {
     let uv_scale = u.uv_etc.xy;
@@ -1994,19 +2699,40 @@ fn star_rot() -> mat3x3f { return mat3x3f(u.star_rot_0.xyz, u.star_rot_1.xyz, u.
     let tex_u = (lon_ortho + PI) / (2.0 * PI);
     let tex_v = (PI / 2.0 - lat_ortho) / PI;
 
-    var day_color: vec3f;
+    let base_color = textureSampleLevel(t_planet, samp_r, vec2f(tex_u, tex_v), 0.0).rgb;
+    var day_color = base_color;
     if use_detail > 0.5 {
-        var lon_deg = lon_ortho * 180.0 / PI;
-        if lon_deg < u.detail_bounds.x { lon_deg += 360.0; }
-        let du = (lon_deg - u.detail_bounds.x) / (u.detail_bounds.y - u.detail_bounds.x);
-        let dv = (u.detail_bounds.w - lat_ortho) / (u.detail_bounds.w - u.detail_bounds.z);
-        if du >= 0.0 && du <= 1.0 && dv >= 0.0 && dv <= 1.0 {
-            day_color = textureSampleLevel(t_detail, samp_c, vec2f(du, dv), 0.0).rgb;
-        } else {
-            day_color = textureSampleLevel(t_planet, samp_r, vec2f(tex_u, tex_v), 0.0).rgb;
+        var detail = sample_detail(t_detail, u.detail_bounds, lon_ortho, lat_ortho);
+        if scale > 64.0 && u.detail_center.w > 0.000001 && abs(lat_ortho) < 1.48442223 {
+            // Solve for a small displacement from the double-precision camera centre.
+            // Avoid subtracting absolute f32 latitude/Mercator values at high zoom.
+            let centre = u.detail_center.xyz;
+            let relative_b = 2.0 * (D.x*(centre.x+O.x) + D.y*(centre.y+O.y)/b2 + D.z*(centre.z+O.z));
+            let relative_c = 2.0 * (centre.x*O.x + centre.y*O.y/b2 + centre.z*O.z) + dot(O, O) + O.y*O.y*(1.0/b2 - 1.0);
+            let relative_t = -2.0*relative_c / (relative_b - sqrt(max(0.0, relative_b*relative_b - 4.0*A*relative_c)));
+            let delta = O + relative_t*D;
+            let longitude_delta = atan2(centre.z*delta.x - centre.x*delta.z, u.detail_center.w + centre.x*delta.x + centre.z*delta.z);
+            let latitude_sine_delta = delta.y / b;
+            let ratio = latitude_sine_delta / (u.detail_center.w - (centre.y/b)*latitude_sine_delta);
+            var mercator_delta: f32;
+            if abs(ratio) < 0.01 {
+                // Native atanh can lose tiny displacements to cancellation at levels 19-23.
+                let squared = ratio * ratio;
+                mercator_delta = ratio * (1.0 + squared * (1.0/3.0 + squared/5.0));
+            } else {
+                mercator_delta = atanh(ratio);
+            }
+            let geographic_delta = vec2f(longitude_delta, mercator_delta);
+            detail = sample_relative_detail(t_detail, u.detail_current_uv, geographic_delta);
+            if u.detail_blend.x < 1.0 {
+                let previous = sample_relative_detail(t_detail_previous, u.detail_previous_uv, geographic_delta);
+                detail = mix(previous, detail, u.detail_blend.x);
+            }
+        } else if u.detail_blend.x < 1.0 {
+            let previous = sample_detail(t_detail_previous, u.detail_previous_bounds, lon_ortho, lat_ortho);
+            detail = mix(previous, detail, u.detail_blend.x);
         }
-    } else {
-        day_color = textureSampleLevel(t_planet, samp_r, vec2f(tex_u, tex_v), 0.0).rgb;
+        day_color = base_color * (1.0 - detail.a) + detail.rgb;
     }
 
     if show_clouds > 0.5 && use_detail < 0.5 {
@@ -2319,12 +3045,22 @@ const MAP_WGSL: &str = concat!(
 "
 struct Uniforms {
     bounds: vec4f,
+    domain: vec4f,
     peirce: vec4f,
     proj_invscale: vec4f,
+    origin: vec4f,
+    detail_bounds: vec4f,
+    detail_previous_bounds: vec4f,
+    detail_current_uv: vec4f,
+    detail_previous_uv: vec4f,
+    detail_derivatives: vec4f,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var samp: sampler;
 @group(0) @binding(2) var t_earth: texture_2d<f32>;
+@group(0) @binding(3) var samp_c: sampler;
+@group(0) @binding(4) var t_detail: texture_2d<f32>;
+@group(0) @binding(5) var t_detail_previous: texture_2d<f32>;
 ",
 "
 struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, };
@@ -2366,14 +3102,15 @@ fn ej(uu: f32, m: f32) -> vec3f {
         twon *= 2.0;
     }
     var phi = twon * aa[i] * uu;
+    var bp = phi;
     for (var iter: i32 = 0; iter < 9; iter++) {
+        bp = phi;
         let t2 = cc[i] * sin(phi) / aa[i];
         phi = (asin(clamp(t2, -1.0, 1.0)) + phi) / 2.0;
         i--;
         if i == 0 { break; }
     }
     let cn = cos(phi);
-    let bp = phi;
     let dc = cos(phi - bp);
     var dn: f32;
     if abs(dc) > 1e-30 { dn = cn / dc; } else { dn = 1.0; }
@@ -2544,7 +3281,7 @@ fn inv_proj(p: i32, x: f32, y: f32) -> vec2f {
         let gy2 = (x1-y1)*s12;
         let ll = guyou_inv(gx2, gy2, pk, pm, pbk);
         var lo: f32;
-        if gx2>0.0 { lo = degrees(ll.x) + 180.0; } else { lo = degrees(ll.x) - 180.0; }
+        if gx2>0.0 { lo = degrees(ll.x) - 180.0; } else { lo = degrees(ll.x) + 180.0; }
         let la = degrees(ll.y);
         if abs(la)<=90.0 && abs(lo)<=180.0 { return vec2f(la, lo); }
         return vec2f(-999.0);
@@ -2552,15 +3289,57 @@ fn inv_proj(p: i32, x: f32, y: f32) -> vec2f {
     return vec2f(-999.0);
 }
 
+fn sample_map_detail(image: texture_2d<f32>, bounds: vec4f, ll: vec2f) -> vec4f {
+    if bounds.y <= bounds.x || bounds.w <= bounds.z || abs(ll.x) > 85.05112878 {
+        return vec4f(0.0);
+    }
+    let midpoint = (bounds.x + bounds.y) * 0.5;
+    let delta = ll.y - midpoint;
+    let longitude = delta - 360.0 * floor((delta + 180.0) / 360.0);
+    let mercator = asinh(tan(radians(ll.x)));
+    let uv = vec2f(0.5 + longitude / (bounds.y - bounds.x), (bounds.w - mercator) / (bounds.w - bounds.z));
+    if any(uv < vec2f(0.0)) || any(uv > vec2f(1.0)) { return vec4f(0.0); }
+    return textureSampleLevel(image, samp_c, uv, 0.0);
+}
+
+fn sample_map_relative(image: texture_2d<f32>, coordinates: vec4f, delta: vec2f) -> vec4f {
+    let uv = coordinates.xy + vec2f(delta.x * coordinates.z, -delta.y * coordinates.w);
+    if coordinates.z <= 0.0 || coordinates.w <= 0.0 || any(uv < vec2f(0.0)) || any(uv > vec2f(1.0)) {
+        return vec4f(0.0);
+    }
+    return textureSampleLevel(image, samp_c, uv, 0.0);
+}
+
 @fragment fn fs(in: VsOut) -> @location(0) vec4f {
     let proj = i32(u.proj_invscale.x);
     let x = mix(u.bounds.x, u.bounds.y, in.uv.x);
     let y = mix(u.bounds.z, u.bounds.w, in.uv.y);
-    let ll = inv_proj(proj, x, y);
+    let absolute = u.origin.xy + vec2f(x, y);
+    if absolute.x < u.domain.x || absolute.x > u.domain.y || absolute.y < u.domain.z || absolute.y > u.domain.w {
+        return vec4f(0.0);
+    }
+    let ll = inv_proj(proj, absolute.x, absolute.y);
     if ll.x < -900.0 { return vec4f(0.0); }
     let tu = (ll.y + 180.0) / 360.0;
     let tv = (90.0 - ll.x) / 180.0;
-    return textureSampleLevel(t_earth, samp, vec2f(tu, tv), 0.0);
+    let base = textureSampleLevel(t_earth, samp, vec2f(tu, tv), 0.0);
+    if u.proj_invscale.w < 0.5 { return base; }
+    var detail: vec4f;
+    var previous = vec4f(0.0);
+    if u.origin.z > 0.5 {
+        let delta = u.detail_derivatives.xy * x + u.detail_derivatives.zw * y;
+        detail = sample_map_relative(t_detail, u.detail_current_uv, delta);
+        if u.proj_invscale.z < 1.0 {
+            previous = sample_map_relative(t_detail_previous, u.detail_previous_uv, delta);
+        }
+    } else {
+        detail = sample_map_detail(t_detail, u.detail_bounds, ll);
+        if u.proj_invscale.z < 1.0 {
+            previous = sample_map_detail(t_detail_previous, u.detail_previous_bounds, ll);
+        }
+    }
+    detail = mix(previous, detail, u.proj_invscale.z);
+    return base * (1.0 - detail.a) + detail;
 }
 ");
 

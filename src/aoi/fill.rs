@@ -5,7 +5,7 @@ use eframe::egui::{Color32, Mesh, Pos2, Rect};
 use nalgebra::Vector3;
 
 pub(super) struct Fill {
-    triangles: Vec<[Vector3<f64>; 3]>,
+    pub(super) triangles: Vec<[Vector3<f64>; 3]>,
 }
 impl Fill {
     pub fn new(polygons: &[Vec<Vec<[f64; 2]>>]) -> Result<Self, String> {

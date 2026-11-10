@@ -4,20 +4,16 @@ use chrono::{DateTime, Utc};
 use eframe::egui;
 
 impl Panel {
+    pub fn available_for(tab: &TabConfig) -> bool {
+        tab.slides.is_none()
+            && tab.settings.view_mode == crate::config::ViewMode::Planet
+            && tab.planets.len() == 1
+            && tab.planets[0].celestial_body == CelestialBody::Earth
+    }
+
     pub(super) fn ensure_earth(&mut self, tab: &TabConfig) -> bool {
-        if tab
-            .planets
-            .get(self.planet)
-            .is_some_and(|p| p.celestial_body == CelestialBody::Earth)
-        {
-            return true;
-        }
-        if let Some(index) = tab
-            .planets
-            .iter()
-            .position(|p| p.celestial_body == CelestialBody::Earth)
-        {
-            self.planet = index;
+        if Self::available_for(tab) {
+            self.planet = 0;
             return true;
         }
         self.suspend();
@@ -40,73 +36,87 @@ impl Panel {
         tab: &mut TabConfig,
         tab_idx: usize,
         epoch: DateTime<Utc>,
+        simulation_open: &mut bool,
     ) -> Option<ForecastRequest> {
+        if !self.ensure_earth(tab) {
+            self.open = false;
+        }
         if !self.open {
             self.suspend();
-            #[allow(deprecated)]
-            egui::Panel::right("observation-sidebar-closed")
-                .exact_size(34.0)
-                .show(ctx, |ui| {
-                    if ui
-                        .small_button("EO")
-                        .on_hover_text("Open Earth Observation sidebar")
-                        .clicked()
-                    {
-                        self.open = true;
-                    }
-                });
             return None;
         }
         let mut request = None;
         #[allow(deprecated)]
-        egui::Panel::right("observation-sidebar").resizable(true).default_size(500.0)
-            .size_range(420.0..=850.0).show(ctx, |ui| {
+        egui::Panel::right("observation-sidebar")
+            .resizable(true)
+            .default_size(500.0)
+            .size_range(420.0..=850.0)
+            .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.heading("Earth Observation");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("−").on_hover_text("Collapse sidebar").clicked() {
+                        if ui
+                            .small_button("−")
+                            .on_hover_text("Close Earth Observation")
+                            .clicked()
+                        {
                             self.open = false;
+                        }
+                        if ui
+                            .button("Sim")
+                            .on_hover_text("Open infrastructure simulation")
+                            .clicked()
+                        {
+                            *simulation_open = true;
+                            ctx.request_repaint();
                         }
                     });
                 });
                 ui.small(format!("Active tab: {}", tab.name));
                 ui.separator();
-                egui::ScrollArea::vertical().id_salt("observation-sidebar-scroll")
-                    .auto_shrink([false, false]).show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("observation-sidebar-scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
-                        egui::CollapsingHeader::new("AOI Generator").id_salt("sidebar-aoi")
+                        egui::CollapsingHeader::new("AOI Generator")
+                            .id_salt("sidebar-aoi")
                             .show(ui, |ui| aoi.ui(ui));
                         ui.separator();
-                        if !self.ensure_earth(tab) {
-                            ui.label("Select a tab with an Earth globe for the observation model and data estimate.");
-                            return;
-                        }
-                        let earths: Vec<_> = tab.planets.iter().enumerate()
-                            .filter(|(_, p)| p.celestial_body == CelestialBody::Earth)
-                            .map(|(i, p)| (i, p.name.clone())).collect();
-                        if earths.len() > 1 {
-                            egui::ComboBox::from_id_salt("observation-earth")
-                                .selected_text(&tab.planets[self.planet].name).show_ui(ui, |ui| {
-                                    for (i, name) in earths { ui.selectable_value(&mut self.planet, i, name); }
-                                });
-                        }
                         let model = egui::CollapsingHeader::new("Observation model")
-                            .id_salt("sidebar-model").default_open(true).show(ui, |ui| {
+                            .id_salt("sidebar-model")
+                            .default_open(true)
+                            .show(ui, |ui| {
                                 request = self.ui(ui, tab, tab_idx, epoch);
                             });
-                        if model.body_returned.is_none() { self.suspend(); }
+                        if model.body_returned.is_none() {
+                            self.suspend();
+                        }
                         ui.separator();
-                        egui::CollapsingHeader::new("Data").id_salt("sidebar-data")
-                            .default_open(true).show(ui, |ui| {
-                                self.data.ui(ui, &mut tab.settings.observation_data,
-                                    &tab.planets[self.planet], tab.settings.pushbroom.swath_km,
-                                    tab.settings.time, epoch);
+                        egui::CollapsingHeader::new("Data")
+                            .id_salt("sidebar-data")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                self.data.ui(
+                                    ui,
+                                    &mut tab.settings.observation_data,
+                                    &tab.planets[self.planet],
+                                    tab.settings.pushbroom.swath_km,
+                                    tab.settings.time,
+                                    epoch,
+                                );
                             });
                         ui.separator();
                         aoi.jobs_ui(ui, &mut tab.settings.observation_data);
                         ui.separator();
-                        aoi.jobs.capture_ui(ui, &tab.planets[self.planet], tab.settings.observation_data,
-                            tab.settings.pushbroom.swath_km, tab.settings.time, epoch);
+                        aoi.jobs.capture_ui(
+                            ui,
+                            &tab.planets[self.planet],
+                            tab.settings.observation_data,
+                            tab.settings.pushbroom.swath_km,
+                            tab.settings.time,
+                            epoch,
+                        );
                     });
             });
         if !self.open {
@@ -119,6 +129,32 @@ impl Panel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn application_requires_exactly_one_earth_in_a_planet_view() {
+        use crate::config::ViewMode;
+        let mut tab = TabConfig::new("Earth".into());
+        assert!(Panel::available_for(&tab));
+        tab.add_planet();
+        assert!(!Panel::available_for(&tab));
+        tab.planets.pop();
+        tab.planets[0].celestial_body = CelestialBody::Mars;
+        assert!(!Panel::available_for(&tab));
+        tab.planets[0].celestial_body = CelestialBody::Earth;
+        for mode in [
+            ViewMode::SolarSystem,
+            ViewMode::PlanetSizes,
+            ViewMode::Satellite,
+            ViewMode::SatelliteTable,
+            ViewMode::GroundTerminals,
+        ] {
+            tab.settings.view_mode = mode;
+            assert!(!Panel::available_for(&tab));
+        }
+        tab.settings.view_mode = ViewMode::Planet;
+        tab.planets.clear();
+        assert!(!Panel::available_for(&tab));
+    }
 
     #[test]
     #[allow(deprecated)] // Exercise the top-level panel API used by the application.
@@ -134,6 +170,7 @@ mod tests {
         let epoch = DateTime::from_timestamp(946728000, 0).unwrap();
         let mut available = egui::Rect::NOTHING;
         let mut shapes = Vec::new();
+        let mut simulation_open = false;
         for _ in 0..3 {
             let out = ctx.run(
                 egui::RawInput {
@@ -144,7 +181,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    panel.sidebar(ctx, &mut aoi, &mut tab, 0, epoch);
+                    panel.sidebar(ctx, &mut aoi, &mut tab, 0, epoch, &mut simulation_open);
                     available = ctx.available_rect();
                 },
             );
@@ -160,6 +197,7 @@ mod tests {
             }
         }
         for label in [
+            "Sim",
             "AOI Generator",
             "Observation model",
             "Data",
@@ -185,6 +223,38 @@ mod tests {
             available.width() >= 900.0 && available.width() <= 1250.0,
             "{available:?}"
         );
+        let sim = shapes
+            .iter()
+            .find_map(|s| text_rect(&s.shape, "Sim"))
+            .unwrap()
+            .center();
+        for pressed in [true, false] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1600.0, 1000.0),
+                    )),
+                    events: vec![
+                        egui::Event::PointerMoved(sim),
+                        egui::Event::PointerButton {
+                            pos: sim,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| {
+                    panel.sidebar(ctx, &mut aoi, &mut tab, 0, epoch, &mut simulation_open);
+                },
+            );
+        }
+        assert!(
+            simulation_open,
+            "Sim opens the infrastructure simulation window"
+        );
         panel.open = false;
         let _ = ctx.run(
             egui::RawInput {
@@ -195,11 +265,30 @@ mod tests {
                 ..Default::default()
             },
             |ctx| {
-                panel.sidebar(ctx, &mut aoi, &mut tab, 0, epoch);
+                panel.sidebar(ctx, &mut aoi, &mut tab, 0, epoch, &mut simulation_open);
                 available = ctx.available_rect();
             },
         );
-        assert!(available.width() > 1500.0);
+        assert_eq!(available.width(), 1600.0);
+        assert!(!panel.armed);
+        panel.open = true;
+        panel.armed = true;
+        tab.add_planet();
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1600.0, 1000.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                panel.sidebar(ctx, &mut aoi, &mut tab, 0, epoch, &mut simulation_open);
+                available = ctx.available_rect();
+            },
+        );
+        assert_eq!(available.width(), 1600.0);
+        assert!(!panel.open);
         assert!(!panel.armed);
     }
 }

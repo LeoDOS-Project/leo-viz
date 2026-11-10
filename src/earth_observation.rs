@@ -1,16 +1,15 @@
 //! Earth observation controls and asynchronous analytical point queries.
 mod data;
-mod sidebar;
 mod designer;
 mod literature;
+mod sidebar;
 use crate::{celestial::CelestialBody, config::TabConfig, projection::ProjectionKind};
 use chrono::{DateTime, Utc};
 use designer::Designer;
 use eframe::egui;
-use leo_sim::{
-    geometry::gmst,
-    observation::{Model, PointReport},
-};
+#[cfg(not(target_arch = "wasm32"))]
+use leo_sim::geometry::gmst;
+use leo_sim::observation::{Model, PointReport};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     mpsc, Arc,
