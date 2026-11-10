@@ -117,9 +117,20 @@ imagery, distinct from the Data pane's continuous full-swath sensor production.
 All sizes are linear in area, so these aggregate estimates do not require a
 choice of observation-unit subdivision or simultaneous whole-AOI acquisitions.
 
+**Earth Observation → Save / load AOIs** saves all loaded GDP, forest, river and
+coast layers, including hidden layers. Set the path and click **Save AOIs**;
+`.json.gz` writes compressed JSON and `.json` writes plain JSON. The file contains
+the original polygon coordinates (including holes and dateline parts), IDs,
+sources, anchors, areas, source seeds and path metadata. It uses the same AOI
+dataset format accepted by the headless capture simulator. Saving and loading
+run in the background; saves replace the destination atomically. **Load AOIs**
+validates the entire file before replacing all AOI layers; failed loads preserve
+the current layers. Loading requires neither Python nor the geographic source
+datasets. Job settings and capture progress are saved separately.
+
 **Save / load workload** writes versioned compressed JSON containing actual
 assignments, generator parameters and shared image settings. The file references
-AOIs rather than duplicating geometry. Load the same AOI datasets first; loading
+AOIs rather than duplicating geometry. Use **Load AOIs** first, then **Load workload**; loading
 verifies IDs, geometry hashes, areas and anchors, and restores the shared Data
 settings. Adding/replacing/removing an AOI dataset hides stale totals until jobs
 are reassigned or a matching workload is loaded. Visibility alone has no effect.
@@ -138,11 +149,21 @@ constellations, current playback time, AOIs, jobs and Data settings. Keplerian, 
 and TLE/SGP4 are supported; unsupported propagators fail explicitly. Setup edits
 apply to the next run, so they never invalidate the active session.
 
-The capture map uses the session's own clock and saved constellation, independent
+The optional **Open capture diagnostic map** uses the session's own clock and saved constellation, independent
 of the setup preview. It shows AOIs, current satellite ground positions, and
 retained crop outlines from the last 10 simulated minutes (latest 2,000). Zoom to
 inspect AOI boundaries. The complete capture ledger remains in the session even
-when its footprints are no longer displayed.
+when its footprints are no longer displayed. Starting or loading a run leaves the
+current globe view intact. That globe remains the setup/orbit preview and does not
+follow capture time. In the diagnostic map, blue points are AOIs, amber points are
+satellite ground positions, and green outlines are recently retained crops—not
+cumulative coverage or the full sensor swath. Closing it returns to the globe.
+
+Preparation reports named stages (read/decompress, validate inputs, build AOI
+geometry, build spatial index, initialize coverage, validate restored state and
+positions), with AOI counts and elapsed time. Its percentage describes only the
+current geometry stage; complex environmental boundaries take more work than
+rectangular AOIs.
 
 - **Run/Pause** and a speed control advance capture time. A new run starts running;
   **Load checkpoint** opens paused. Run horizon defaults to one day (up to 30 days).
@@ -150,10 +171,17 @@ when its footprints are no longer displayed.
   bytes captured in the trailing **24 simulated hours**. Storage bars compare
   cumulative occupancy with each satellite's configured capacity. Each crop is
   credited at its end time; crop-record counts are strip/atlas pieces, not passes.
-- **Failed acquisition updates** counts cadence deadlines without full AOI coverage,
+- **Unfulfilled acquisition updates** counts cadence deadlines without full AOI coverage,
   including partial coverage. Completed, partial and zero-coverage counts and the
   number of distinct affected jobs are separate. Partial independent crops remain
-  usable. These are acquisition shortfalls, not processing failures or job drops.
+  usable. These are acquisition shortfalls, not worker crashes, processing failures or job
+  drops. All cadence slots count, even those outside the allowed local solar-time
+  window. Segment-level daylight/time rejection totals are shown separately;
+  individual failed-deadline causes are not yet classified.
+- **Baseline coverage by job** separates jobs meeting every elapsed deadline,
+  jobs with a shortfall, and jobs with no deadline yet. A one-day run cannot test
+  weekly or monthly deadlines. These results assess full AOI coverage at cadence,
+  even when independent partial crops are usable; they do not certify other dates.
 - **Fast-forward** advances a specified number of hours using the same capture
   calculations, while suspending scene rendering and preview physics. Progress and
   controls remain available. It restores the prior Run/Pause state afterwards;
@@ -163,7 +191,10 @@ when its footprints are no longer displayed.
   polygons, jobs, sensor settings, counters, cropped footprints and shared-job
   associations, and partial mosaics. Loading requires no AOI files or TLE download
   and continues from the saved tick without replay. Invalid loads preserve the
-  previous session. No image pixels are generated or stored.
+  previous session. Save messages identify the simulation timestamp actually saved;
+  later progress is not automatically saved. Worker errors include the operation
+  and failure text, preserve the last completed display, and disable run/save until
+  a session is loaded or restarted. No image pixels are generated or stored.
 
 The job generator and individual inspector now include acquisition requirements:
 
@@ -173,12 +204,27 @@ The job generator and individual inspector now include acquisition requirements:
 - Each interval starts at `run start + phase + n × cadence`; the default phase is
   zero. Captures do not carry over between intervals. Incomplete final intervals
   are reported separately from due updates. This is not a maximum-revisit promise.
-- Preferred **local solar time** follows a normal distribution centred at noon,
-  with default σ = 4 hours, truncated to 00:00–24:00. The editable default
-  acceptance window is ±1 hour; the minimum solar elevation is 0°. Time preference
-  is evaluated at the AOI anchor; illumination is checked across cropped geometry.
-  Cadence intervals outside the allowed daylight/time window still count as
-  unfulfilled demand. Clouds are not modeled.
+- Default cadence profiles explicitly distinguish **every 2 hours**, **daily**,
+  **weekly**, and **monthly (fixed 30 days)**. Subdaily jobs use **any-time** capture:
+  both solar-time and elevation filters are disabled, assuming these jobs can use
+  night acquisitions. Daily and slower generated jobs require daylight.
+- Daylight **local solar time** follows a noon-centred normal (default σ = 4 h),
+  truncated to ±min(tolerance, 6 h) around noon. Thus the default ±1 h tolerance
+  draws preferences between 11:00 and 13:00, with noon in every acceptance window.
+  This replaces the contradictory midnight/daylight draws. The minimum solar
+  elevation defaults to 0°. Time is evaluated at the AOI anchor; illumination is
+  checked across cropped geometry. Polar night, higher minimum elevations and
+  orbital coverage can still prevent acquisition. Clouds are not modeled.
+- **Regenerate capture timing** repairs an existing workload using the current
+  generator seed and solar settings, preserving AOIs, cadences, phases, priorities,
+  fulfilment modes, pipelines and byte profiles. Save the workload and start a new
+  capture run to use these changes. Loading an old workload/checkpoint preserves
+  its original rules; new GUI/CLI runs reject daylight cadences below 24 h and
+  zero-width daylight windows. Historical checkpoint replay remains available.
+- This is a timing-consistency check, not a constellation coverage certificate.
+  The unconstrained baseline tests actual coverage over the chosen dates. A job
+  that fails there needs its requirements or constellation changed before a
+  resource-constrained scheduler could meet all its deadlines.
 - Integer priorities default to uniform 1–5; larger values win. The specified
   future overload policy drops whole jobs strictly from lowest priority, with job
   identity breaking ties. This unconstrained baseline does **not** drop jobs.

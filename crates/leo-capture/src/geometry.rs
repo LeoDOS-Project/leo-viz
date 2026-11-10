@@ -6,7 +6,7 @@ use crate::{
     workload::Job,
 };
 use geo::{
-    Area, BooleanOps, BoundingRect, Coord, LineString, MultiPolygon, Polygon, Rect, Validation,
+    Area, BooleanOps, BoundingRect, Coord, LineString, MultiPolygon, Polygon, Rect,
 };
 use leo_sim::geometry::{dot, ground_position, norm, scale, sub, Vector, EARTH_RADIUS_KM as R};
 use serde::{Deserialize, Serialize};
@@ -204,7 +204,7 @@ impl Atlas {
                     .collect();
                 let shape =
                     MultiPolygon::new(vec![Polygon::new(rings[0].clone(), rings[1..].to_vec())]);
-                if !shape.is_valid() {
+                if !crate::validation::valid_shape(&shape) {
                     return Err(format!("Invalid polygon topology for {}", region.job_key));
                 }
                 let bounds = shape.bounding_rect().ok_or("Empty polygon")?;
@@ -261,6 +261,9 @@ impl Atlas {
         }
         let patches: Vec<_> = patches.into_values().collect();
         let polygon_pieces = patches.iter().map(|p| p.pieces.len()).sum();
+        if !progress(1.0) {
+            return Err("Cancelled.".into());
+        }
         let index = Index::build(&patches.iter().map(|p| p.sphere).collect::<Vec<_>>());
         Ok(Self {
             patches,

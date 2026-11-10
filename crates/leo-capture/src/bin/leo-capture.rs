@@ -59,13 +59,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Document::decode(&std::fs::read(base.join(path))?)?
     } else {
         Document {
-            schema_version: 2,
+            schema_version: 3,
             generator: config.generator.clone(),
             capture: config.capture.unwrap_or_default(),
             jobs: config.generator.generate(aois.clone())?,
         }
     };
     workload.validate()?;
+    leo_capture::workload::TimingSummary::new(&workload.jobs).validate()?;
     let input: std::collections::BTreeMap<_, _> = aois.iter().map(|a| (a.key(), a)).collect();
     if input.len() != aois.len()
         || input.len() != workload.jobs.len()

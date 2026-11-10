@@ -7,6 +7,8 @@ mod presets;
 pub(crate) mod preview;
 mod spatial;
 #[cfg(not(target_arch = "wasm32"))]
+mod storage;
+#[cfg(not(target_arch = "wasm32"))]
 mod worker;
 
 use eframe::egui;
@@ -41,6 +43,8 @@ pub(crate) struct AoiGenerator {
     pending_name: &'static str,
     #[cfg(not(target_arch = "wasm32"))]
     pending: Option<std::sync::mpsc::Receiver<worker::Event>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    storage: storage::Panel,
 }
 
 impl Default for AoiGenerator {
@@ -94,13 +98,26 @@ impl Default for AoiGenerator {
             pending_name: "Generated AOIs",
             #[cfg(not(target_arch = "wasm32"))]
             pending: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            storage: storage::Panel::default(),
         }
     }
 }
 
 impl AoiGenerator {
-    pub fn jobs_ui(&mut self, ui: &mut egui::Ui, capture: &mut leo_sim::acquisition::CaptureProfile) {
-        let layers = self.preview.iter().chain(self.sources.iter().filter_map(|s| s.preview.as_ref())).cloned().collect();
+    pub fn jobs_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        capture: &mut leo_sim::acquisition::CaptureProfile,
+    ) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.storage_ui(ui);
+        let layers = self
+            .preview
+            .iter()
+            .chain(self.sources.iter().filter_map(|s| s.preview.as_ref()))
+            .cloned()
+            .collect();
         self.jobs.ui(ui, layers, capture);
     }
 
@@ -136,7 +153,7 @@ impl AoiGenerator {
         #[cfg(not(target_arch = "wasm32"))]
         self.poll(ui.ctx());
         #[cfg(not(target_arch = "wasm32"))]
-        let busy = self.pending.is_some();
+        let busy = self.pending.is_some() || self.storage.busy();
         #[cfg(target_arch = "wasm32")]
         let busy = false;
         ui.horizontal_wrapped(|ui| {
@@ -189,7 +206,11 @@ impl AoiGenerator {
                 );
             }
         });
-        ui.add(egui::Slider::new(&mut self.fill_opacity, 0.0..=0.3).text("Fill opacity").custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
+        ui.add(
+            egui::Slider::new(&mut self.fill_opacity, 0.0..=0.3)
+                .text("Fill opacity")
+                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+        );
         ui.small("Off-screen regions are skipped. Distant AOIs use simpler outlines or grouped dots; zoom in for detail.");
     }
 
@@ -199,7 +220,7 @@ impl AoiGenerator {
         #[cfg(not(target_arch = "wasm32"))]
         self.poll(ctx);
         #[cfg(not(target_arch = "wasm32"))]
-        let busy = self.pending.is_some();
+        let busy = self.pending.is_some() || self.storage.busy();
         #[cfg(target_arch = "wasm32")]
         let busy = false;
 
@@ -329,7 +350,11 @@ impl AoiGenerator {
             .into_owned();
         self.error = None;
         self.pending_source = None;
-        self.pending_name = if self.legacy_preset { presets::LEGACY_JOBS } else { presets::DEFAULT_JOBS };
+        self.pending_name = if self.legacy_preset {
+            presets::LEGACY_JOBS
+        } else {
+            presets::DEFAULT_JOBS
+        };
         self.progress = format!("Loading {}…", self.pending_name);
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -368,6 +393,7 @@ impl AoiGenerator {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn poll(&mut self, ctx: &egui::Context) {
         use std::sync::mpsc::TryRecvError;
+        self.poll_storage();
         loop {
             let Some(rx) = &self.pending else {
                 return;
@@ -520,7 +546,10 @@ mod tests {
         assert!(preview.min_area >= lo && preview.max_area <= hi);
         assert!(panel.random_rotation);
         assert_eq!(panel.fill_opacity, 0.1);
-        assert_eq!(presets::default_settings().generation.shape, "oriented_rectangle");
+        assert_eq!(
+            presets::default_settings().generation.shape,
+            "oriented_rectangle"
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]

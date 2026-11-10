@@ -296,6 +296,9 @@ fn usable(
     start: f64,
     end: f64,
 ) -> bool {
+    if job.acquisition.illumination == crate::workload::Illumination::AnyTime {
+        return true;
+    }
     // Local-time preference is defined at the job's geographic anchor. Solar
     // elevation is conservatively checked over crop vertices at all three times.
     // Near a boundary this can reject a sub-step valid sliver: halve step/edge
@@ -490,6 +493,7 @@ impl<'a> Baseline<'a> {
                     "No admission or execution: configured finite storage is measured, never enforced in this baseline.".into(),
                     "Only newly useful cropped polygons are retained; all retained crops remain for the full run, without downlink, deletion or processing.".into(),
                     "A physical capture may satisfy multiple jobs only within their acquisition slot and local solar-time/daylight constraints.".into(),
+                    "Any-time jobs bypass solar-time and elevation filters, permitting night capture. Daylight jobs retain both filters; timing consistency alone does not certify coverage or seasonal daylight.".into(),
                     "Slots are [phase+n*cadence, phase+(n+1)*cadence); no pre-run history or carry-over. Incomplete final slots are censored.".into(),
                     "Independent crops become ready incrementally; mosaics require full geometric coverage within a slot, up to the reported area tolerance.".into(),
                     "Spherical Earth, interpolated swept scanlines and densified equal-area polygons. Halve step and edge spacing for convergence.".into(),
@@ -552,7 +556,12 @@ impl<'a> Baseline<'a> {
             if area <= 1e-10 {
                 continue;
             }
-            *covered = covered.union(&new);
+            // A ∪ (B \ A) equals A ∪ B. Union the original crop: feeding the
+            // rounded difference back into the overlay creates nearly coincident
+            // cut edges and can break i_overlay's hole extraction graph.
+            *covered = merge_coverage(covered, &crop.geometry).map_err(|error|format!(
+                "Coverage merge failed for job {} / slot {}, satellite {}, patch {}, {:.3}–{:.3} s: {error}",
+                job.aoi.key(),crop.slot,opportunity.satellite,opportunity.patch,opportunity.start_s,opportunity.end_s))?;
             request.area += area;
             logical += area;
             shared = shared.union(&physical.intersection(&new));
@@ -666,6 +675,20 @@ impl<'a> Baseline<'a> {
     }
 }
 
+/// Keep the unmodified incoming crop for coverage union. `new` remains the
+/// difference used solely for retained-data accounting and job allocations.
+fn merge_coverage(covered: &Shape, crop: &Shape) -> Result<Shape, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| covered.union(crop))).map_err(
+        |payload| {
+            payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "polygon overlay panic".into())
+        },
+    )
+}
+
 /// Optional JSONL output retains actual crop polygons and timing, making the
 /// opportunity stream reusable by a later scheduler without GUI state.
 pub fn opportunity_json(op: &Opportunity, jobs: &[Job], atlas: &Atlas) -> serde_json::Value {
@@ -694,12 +717,12 @@ impl BaselineState {
         satellites: usize,
         now: f64,
     ) -> Result<(), String> {
-        use geo::{CoordsIter, Validation};
+        use geo::CoordsIter;
         let valid_shape = |shape: &Shape| {
             shape
                 .coords_iter()
                 .all(|p| p.x.is_finite() && p.y.is_finite())
-                && shape.is_valid()
+                && crate::validation::valid_shape(shape)
         };
         let invalid = || "Inconsistent capture checkpoint state".to_string();
         if self.report.jobs.len() != jobs.len() || self.report.satellites.len() != satellites {
@@ -783,5 +806,31 @@ impl BaselineState {
             return Err(invalid());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+    #[test]
+    fn river_crop_merges_without_feeding_rounded_difference_back_into_overlay() {
+        #[derive(Deserialize)]
+        struct Fixture {
+            covered: Shape,
+            crop: Shape,
+        }
+        let bytes = include_bytes!("../tests/fixtures/river-coverage-merge.json.gz");
+        let fixture: Fixture =
+            serde_json::from_reader(flate2::read::GzDecoder::new(&bytes[..])).unwrap();
+        // Captured at t=17585–17590 s, satellite 139, patch 391, river-00000478.
+        // The former covered.union(crop.difference(covered)) panics in i_overlay
+        // 4.5.2's OGC extraction on these nearly coincident cut boundaries.
+        let new = fixture.crop.difference(&fixture.covered);
+        let merged = merge_coverage(&fixture.covered, &fixture.crop).unwrap();
+        let expected = fixture.covered.unsigned_area() + new.unsigned_area();
+        assert!((merged.unsigned_area() - expected).abs() < expected * 1e-6);
+        assert!(crate::validation::valid_shape(&merged));
+        let repeated = merge_coverage(&merged, &fixture.crop).unwrap();
+        assert!((repeated.unsigned_area() - merged.unsigned_area()).abs() < expected * 1e-6);
     }
 }

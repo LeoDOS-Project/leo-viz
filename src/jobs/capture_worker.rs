@@ -1,13 +1,13 @@
-//! The worker owns all mutable capture state. UI snapshots are bounded and may
-//! be skipped; capture ticks and checkpoint commands are never skipped.
+//! The worker owns mutable capture state. Reports are published only after a
+//! completed chunk; a worker failure never manufactures acquisition shortfalls.
 use leo_capture::{
     baseline::Report,
     geometry::{Polygons, Region},
-    session::{Inputs, Meters, Session},
+    session::{Inputs, Meters, PreparationProgress, PreparationStage, Session},
 };
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    mpsc, Arc,
+    atomic::{AtomicBool, Ordering},
+    mpsc, Arc, Mutex,
 };
 use std::time::{Duration, Instant};
 
@@ -23,7 +23,12 @@ pub(super) enum Initial {
 }
 pub(super) enum Event {
     Error(String),
-    Saved(String),
+    Stopped(String),
+    Saved {
+        path: String,
+        elapsed_s: f64,
+        epoch_unix_s: f64,
+    },
 }
 pub(super) struct Scene {
     pub regions: Vec<Region>,
@@ -45,13 +50,24 @@ pub(super) struct Worker {
     pub events: mpsc::Receiver<Event>,
     pub views: mpsc::Receiver<View>,
     pub cancel: Arc<AtomicBool>,
-    pub progress: Arc<AtomicUsize>,
+    pub progress: Arc<Mutex<PreparationProgress>>,
+    pub started: Instant,
     pub fast: Arc<AtomicBool>,
 }
 impl Drop for Worker {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
     }
+}
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_else(|| "panic without a text message".into())
+}
+fn stopped_message(context: &str, error: &str) -> String {
+    format!("Capture worker stopped while {context}: {error}. Displayed counters are from the last completed update, not this worker failure. Reload a checkpoint to resume.")
 }
 #[cfg(not(target_arch = "wasm32"))]
 impl Worker {
@@ -60,77 +76,40 @@ impl Worker {
         let (etx, events) = mpsc::channel();
         let (vtx, views) = mpsc::sync_channel(1);
         let cancel = Arc::new(AtomicBool::new(false));
-        let progress = Arc::new(AtomicUsize::new(0));
         let stop = cancel.clone();
-        let p = progress.clone();
+        let progress = Arc::new(Mutex::new(PreparationProgress {
+            stage: PreparationStage::ValidateInputs,
+            completed: 0,
+            total: 0,
+        }));
+        let worker_progress = progress.clone();
         let fast = Arc::new(AtomicBool::new(false));
         let worker_fast = fast.clone();
         std::thread::spawn(move || {
-            let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||->Result<(),String> {
-                let mut running=matches!(&initial,Initial::New(_));
-                let progress=|f:f32| {p.store((f*1000.0) as usize,Ordering::Relaxed);!stop.load(Ordering::Relaxed)};
-                let mut session=match initial {Initial::New(i)=>Session::new(i,progress)?,Initial::Load(path)=>Session::load(std::path::Path::new(&path),progress)?};
-                let scene=Arc::new(Scene {regions:session.inputs().regions.clone(),anchors:session.inputs().jobs.iter().map(|j|[j.aoi.longitude,j.aoi.latitude]).collect(),
-                    satellites:session.inputs().satellites.iter().map(|s|format!("{} / {}",s.constellation,s.name)).collect()});
-                let mut speed=speed;
-                let mut fast_target:Option<f64>=None;
-                let mut resume_running=false;
-                let mut last_wall=Instant::now();let mut debt=0.0;let mut last_view=Instant::now()-Duration::from_secs(1);
-                loop {
-                    if stop.load(Ordering::Relaxed) {return Ok(());}
-                    let mut dirty=false;
-                    while let Ok(command)=rx.try_recv() {
-                        dirty=true;
-                        match command {
-                            Command::Run(value)=>{running=value;fast_target=None;debt=0.0;worker_fast.store(false,Ordering::Relaxed);},
-                            Command::Speed(value)=>speed=value.clamp(1.0,86400.0),
-                            Command::FastForward(seconds)=> {
-                                if seconds.is_finite() && seconds>0.0 {
-                                    resume_running=running;running=false;debt=0.0;
-                                    worker_fast.store(true,Ordering::Relaxed);
-                                    fast_target=Some((session.elapsed_s()+seconds).min(session.inputs().options.duration_s));
-                                }
-                            }
-                            Command::Save(path)=>match session.save(std::path::Path::new(&path)) {
-                                Ok(())=>{let _=etx.send(Event::Saved(path));},Err(e)=>{let _=etx.send(Event::Error(e));}
-                            },
-                        }
-                        // Saving is an explicit simulation pause, not elapsed simulated time.
-                        last_wall=Instant::now();
-                    }
-                    let now=Instant::now();let wall=now.duration_since(last_wall).as_secs_f64();last_wall=now;
-                    if !session.finished() {
-                        let steps=if let Some(target)=fast_target {
-                            ((target-session.elapsed_s())/session.inputs().options.step_s).ceil().max(0.0) as u64
-                        } else if running {
-                            debt+=wall*speed;
-                            (debt/session.inputs().options.step_s).floor() as u64
-                        } else {0};
-                        // Bounded work gives pause/save/cancel a chance between chunks.
-                        let steps=steps.min(12);
-                        if steps>0 {session.advance(steps)?;if fast_target.is_none(){debt-=steps as f64*session.inputs().options.step_s;}}
-                    }
-                    if fast_target.is_some_and(|target|session.elapsed_s()>=target) {
-                        fast_target=None;worker_fast.store(false,Ordering::Relaxed);running=resume_running;debt=0.0;last_wall=Instant::now();dirty=true;
-                    }
-                    if session.finished() {running=false;fast_target=None;worker_fast.store(false,Ordering::Relaxed);}
-                    if dirty || last_view.elapsed()>=Duration::from_millis(250) {
-                        let mut report=session.report().clone();
-                        // UI shows first 100; full reports and all jobs remain in checkpoints.
-                        report.jobs.truncate(100);
-                        let footprints=if fast_target.is_none() {
-                            session.state().captures.iter().rev().take_while(|c|c.end_s>session.elapsed_s()-600.0).take(2000).map(|c|session.footprint(c)).collect()
-                        } else {Vec::new()};
-                        let view=View {scene:scene.clone(),report,meters:session.meters(),positions:if fast_target.is_none(){session.ground_positions()?}else{Vec::new()},footprints,
-                            running,fast_target,finished:session.finished()};
-                        match vtx.try_send(view) {Ok(())=>last_view=Instant::now(),Err(mpsc::TrySendError::Full(_))=>{},Err(mpsc::TrySendError::Disconnected(_))=>return Ok(())}
-                    }
-                    if fast_target.is_none(){std::thread::sleep(Duration::from_millis(20));}
-                }
-            })).unwrap_or_else(|_|Err("Capture worker stopped after an unexpected geometry error. Reload the last checkpoint.".into()));
+            let context = Mutex::new("preparing the session".to_string());
+            let run = || {
+                run(
+                    initial,
+                    speed,
+                    rx,
+                    &etx,
+                    &vtx,
+                    &stop,
+                    &worker_fast,
+                    &worker_progress,
+                    &context,
+                )
+            };
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run))
+                .unwrap_or_else(|payload| Err(panic_message(payload)));
             worker_fast.store(false, Ordering::Relaxed);
-            if let Err(e) = result {
-                let _ = etx.send(Event::Error(e));
+            if !stop.load(Ordering::Relaxed) {
+                if let Err(e) = result {
+                    let _ = etx.send(Event::Stopped(stopped_message(
+                        &context.lock().unwrap(),
+                        &e,
+                    )));
+                }
             }
         });
         Self {
@@ -139,7 +118,189 @@ impl Worker {
             views,
             cancel,
             progress,
+            started: Instant::now(),
             fast,
+        }
+    }
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn run(
+    initial: Initial,
+    mut speed: f64,
+    rx: mpsc::Receiver<Command>,
+    events: &mpsc::Sender<Event>,
+    views: &mpsc::SyncSender<View>,
+    stop: &AtomicBool,
+    fast: &AtomicBool,
+    progress: &Mutex<PreparationProgress>,
+    context: &Mutex<String>,
+) -> Result<(), String> {
+    let mut running = matches!(&initial, Initial::New(_));
+    let preparation = |p: PreparationProgress| {
+        *context.lock().unwrap() = format!("preparing {:?} ({}/{})", p.stage, p.completed, p.total);
+        *progress.lock().unwrap() = p;
+        !stop.load(Ordering::Relaxed)
+    };
+    let mut session = match initial {
+        Initial::New(i) => {
+            leo_capture::workload::TimingSummary::new(&i.jobs).validate()?;
+            Session::prepare(i, preparation)?
+        }
+        Initial::Load(path) => {
+            Session::load_with_progress(std::path::Path::new(&path), preparation)?
+        }
+    };
+    let scene = Arc::new(Scene {
+        regions: session.inputs().regions.clone(),
+        anchors: session
+            .inputs()
+            .jobs
+            .iter()
+            .map(|j| [j.aoi.longitude, j.aoi.latitude])
+            .collect(),
+        satellites: session
+            .inputs()
+            .satellites
+            .iter()
+            .map(|s| format!("{} / {}", s.constellation, s.name))
+            .collect(),
+    });
+    let mut fast_target: Option<f64> = None;
+    let mut resume_running = false;
+    let mut last_wall = Instant::now();
+    let mut debt = 0.0;
+    let mut last_view = Instant::now() - Duration::from_secs(1);
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let mut dirty = false;
+        while let Ok(command) = rx.try_recv() {
+            dirty = true;
+            match command {
+                Command::Run(value) => {
+                    running = value;
+                    fast_target = None;
+                    debt = 0.0;
+                    fast.store(false, Ordering::Relaxed);
+                }
+                Command::Speed(value) => speed = value.clamp(1.0, 86400.0),
+                Command::FastForward(seconds) => {
+                    if seconds.is_finite() && seconds > 0.0 {
+                        resume_running = running;
+                        running = false;
+                        debt = 0.0;
+                        fast.store(true, Ordering::Relaxed);
+                        fast_target = Some(
+                            (session.elapsed_s() + seconds)
+                                .min(session.inputs().options.duration_s),
+                        );
+                    }
+                }
+                Command::Save(path) => {
+                    *context.lock().unwrap() = format!(
+                        "saving the checkpoint at {:.3} simulated seconds",
+                        session.elapsed_s()
+                    );
+                    match session.save(std::path::Path::new(&path)) {
+                        Ok(()) => {
+                            let _ = events.send(Event::Saved {
+                                path,
+                                elapsed_s: session.elapsed_s(),
+                                epoch_unix_s: session.inputs().epoch(),
+                            });
+                        }
+                        Err(e) => {
+                            let _ = events.send(Event::Error(e));
+                        }
+                    }
+                }
+            }
+            last_wall = Instant::now();
+        }
+        let now = Instant::now();
+        let wall = now.duration_since(last_wall).as_secs_f64();
+        last_wall = now;
+        if !session.finished() {
+            let steps = if let Some(target) = fast_target {
+                ((target - session.elapsed_s()) / session.inputs().options.step_s)
+                    .ceil()
+                    .max(0.0) as u64
+            } else if running {
+                debt += wall * speed;
+                (debt / session.inputs().options.step_s).floor() as u64
+            } else {
+                0
+            };
+            let steps = steps.min(12);
+            if steps > 0 {
+                *context.lock().unwrap() = format!(
+                    "advancing capture from {:.3} to {:.3} simulated seconds",
+                    session.elapsed_s(),
+                    (session.elapsed_s() + steps as f64 * session.inputs().options.step_s)
+                        .min(session.inputs().options.duration_s)
+                );
+                session.advance(steps)?;
+                if fast_target.is_none() {
+                    debt -= steps as f64 * session.inputs().options.step_s;
+                }
+            }
+        }
+        if fast_target.is_some_and(|target| session.elapsed_s() >= target) {
+            fast_target = None;
+            fast.store(false, Ordering::Relaxed);
+            running = resume_running;
+            debt = 0.0;
+            last_wall = Instant::now();
+            dirty = true;
+        }
+        if session.finished() {
+            running = false;
+            fast_target = None;
+            fast.store(false, Ordering::Relaxed);
+        }
+        if dirty || last_view.elapsed() >= Duration::from_millis(250) {
+            *context.lock().unwrap() = format!(
+                "preparing the display at {:.3} simulated seconds",
+                session.elapsed_s()
+            );
+            let mut report = session.report().clone();
+            report.jobs.truncate(100);
+            let footprints = if fast_target.is_none() {
+                session
+                    .state()
+                    .captures
+                    .iter()
+                    .rev()
+                    .take_while(|c| c.end_s > session.elapsed_s() - 600.0)
+                    .take(2000)
+                    .map(|c| session.footprint(c))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let view = View {
+                scene: scene.clone(),
+                report,
+                meters: session.meters(),
+                positions: if fast_target.is_none() {
+                    session.ground_positions()?
+                } else {
+                    Vec::new()
+                },
+                footprints,
+                running,
+                fast_target,
+                finished: session.finished(),
+            };
+            match views.try_send(view) {
+                Ok(()) => last_view = Instant::now(),
+                Err(mpsc::TrySendError::Full(_)) => {}
+                Err(mpsc::TrySendError::Disconnected(_)) => return Ok(()),
+            }
+        }
+        if fast_target.is_none() {
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
 }
@@ -188,7 +349,7 @@ pub(super) mod tests {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             for event in w.events.try_iter() {
-                if let Event::Error(e) = event {
+                if let Event::Error(e) | Event::Stopped(e) = event {
                     panic!("{e}");
                 }
             }
@@ -220,8 +381,8 @@ pub(super) mod tests {
             .send(Command::Save(path.display().to_string()))
             .unwrap();
         match w.events.recv_timeout(Duration::from_secs(10)).unwrap() {
-            Event::Saved(_) => {}
-            Event::Error(e) => panic!("{e}"),
+            Event::Saved { .. } => {}
+            Event::Error(e) | Event::Stopped(e) => panic!("{e}"),
         }
         let loaded = Worker::spawn(Initial::Load(path.display().to_string()), 1.0);
         let restored = view_until(&loaded, |_| true);
@@ -284,5 +445,21 @@ mod orbit_checkpoint_tests {
             )) < 1e-6
         );
         std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+    #[test]
+    fn panic_diagnostics_preserve_the_actual_message_and_simulation_context() {
+        let error = panic_message(Box::new("assertion failed: segment order".to_string()));
+        let message = stopped_message(
+            "advancing capture from 17535 to 17595 simulated seconds",
+            &error,
+        );
+        assert!(message.contains("assertion failed: segment order"));
+        assert!(message.contains("17535"));
+        assert!(message.contains("not this worker failure"));
     }
 }

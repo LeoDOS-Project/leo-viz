@@ -14,6 +14,44 @@ use std::{
     path::Path,
 };
 
+/// Preparation has several distinct stages; percentages apply only to the
+/// named stage, never to an invented overall completion estimate.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PreparationStage {
+    ReadCheckpoint,
+    ValidateInputs,
+    BuildGeometry,
+    BuildIndex,
+    InitializeCoverage,
+    ValidateCheckpoint,
+    VerifyPositions,
+    Ready,
+}
+#[derive(Clone, Debug)]
+pub struct PreparationProgress {
+    pub stage: PreparationStage,
+    pub completed: usize,
+    pub total: usize,
+}
+impl PreparationProgress {
+    fn report(
+        callback: &mut impl FnMut(Self) -> bool,
+        stage: PreparationStage,
+        completed: usize,
+        total: usize,
+    ) -> Result<(), String> {
+        if callback(Self {
+            stage,
+            completed,
+            total,
+        }) {
+            Ok(())
+        } else {
+            Err("Cancelled.".into())
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Orbit {
@@ -126,6 +164,8 @@ pub struct Meters {
     pub partial_updates: u64,
     pub failed_updates: u64,
     pub affected_jobs: u64,
+    pub jobs_meeting_all_due_updates: u64,
+    pub jobs_without_due_updates: u64,
 }
 impl Meters {
     pub fn constellation_last_24h_bytes(&self) -> f64 {
@@ -133,14 +173,47 @@ impl Meters {
     }
 }
 impl Session {
-    pub fn new(inputs: Inputs, progress: impl FnMut(f32) -> bool) -> Result<Self, String> {
+    pub fn new(inputs: Inputs, mut progress: impl FnMut(f32) -> bool) -> Result<Self, String> {
+        Self::prepare(inputs, |p| match p.stage {
+            PreparationStage::BuildGeometry => progress(p.completed as f32 / p.total.max(1) as f32),
+            PreparationStage::Ready => progress(1.0),
+            _ => true,
+        })
+    }
+    pub fn prepare(
+        inputs: Inputs,
+        mut progress: impl FnMut(PreparationProgress) -> bool,
+    ) -> Result<Self, String> {
+        PreparationProgress::report(
+            &mut progress,
+            PreparationStage::ValidateInputs,
+            0,
+            inputs.jobs.len(),
+        )?;
         inputs.validate()?;
+        let total = inputs.regions.len();
         let atlas = Atlas::new(
             &inputs.jobs,
             &inputs.regions,
             inputs.options.cell_deg,
             inputs.options.edge_km,
-            progress,
+            |f| {
+                progress(PreparationProgress {
+                    stage: if f >= 1.0 {
+                        PreparationStage::BuildIndex
+                    } else {
+                        PreparationStage::BuildGeometry
+                    },
+                    completed: (f * total as f32).round() as usize,
+                    total,
+                })
+            },
+        )?;
+        PreparationProgress::report(
+            &mut progress,
+            PreparationStage::InitializeCoverage,
+            0,
+            inputs.jobs.len(),
         )?;
         let mut baseline = Baseline::new(
             &inputs.jobs,
@@ -153,6 +226,7 @@ impl Session {
         )?;
         baseline.update_clock(0.0);
         let state = baseline.into_state();
+        PreparationProgress::report(&mut progress, PreparationStage::Ready, total, total)?;
         Ok(Self {
             inputs,
             atlas,
@@ -269,6 +343,8 @@ impl Session {
             partial_updates: 0,
             failed_updates: 0,
             affected_jobs: 0,
+            jobs_meeting_all_due_updates: 0,
+            jobs_without_due_updates: 0,
         };
         for c in self
             .state()
@@ -287,6 +363,8 @@ impl Session {
             let failures = j.due_updates - j.complete_due_updates;
             meters.failed_updates += failures;
             meters.affected_jobs += u64::from(failures > 0);
+            meters.jobs_meeting_all_due_updates += u64::from(j.due_updates > 0 && failures == 0);
+            meters.jobs_without_due_updates += u64::from(j.due_updates == 0);
         }
         meters
     }
@@ -338,7 +416,7 @@ impl Session {
             serde_json::to_writer(
                 &mut gzip,
                 &Saved {
-                    schema_version: 1,
+                    schema_version: 2,
                     inputs: &self.inputs,
                     next_tick: self.next_tick,
                     positions_km: self.positions()?,
@@ -357,22 +435,51 @@ impl Session {
         }
         result
     }
-    pub fn load(path: &Path, progress: impl FnMut(f32) -> bool) -> Result<Self, String> {
+    pub fn load(path: &Path, mut progress: impl FnMut(f32) -> bool) -> Result<Self, String> {
+        Self::load_with_progress(path, |p| match p.stage {
+            PreparationStage::BuildGeometry => progress(p.completed as f32 / p.total.max(1) as f32),
+            PreparationStage::Ready => progress(1.0),
+            _ => true,
+        })
+    }
+    pub fn load_with_progress(
+        path: &Path,
+        mut progress: impl FnMut(PreparationProgress) -> bool,
+    ) -> Result<Self, String> {
+        PreparationProgress::report(&mut progress, PreparationStage::ReadCheckpoint, 0, 0)?;
         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
         let decoder = flate2::read::GzDecoder::new(std::io::BufReader::new(file));
         let checkpoint: Checkpoint = serde_json::from_reader(decoder.take(2 * 1024 * 1024 * 1024))
             .map_err(|e| format!("Invalid capture checkpoint: {e}"))?;
-        if checkpoint.schema_version != 1 {
+        if !(1..=2).contains(&checkpoint.schema_version) {
             return Err("Unsupported capture checkpoint version".into());
         }
-        let mut session = Self::new(checkpoint.inputs, progress)?;
+        let mut session = Self::prepare(checkpoint.inputs, |p| {
+            if p.stage == PreparationStage::Ready {
+                true
+            } else {
+                progress(p)
+            }
+        })?;
         if checkpoint.next_tick
             > (session.inputs.options.duration_s / session.inputs.options.step_s).ceil() as u64
         {
             return Err("Checkpoint clock exceeds horizon".into());
         }
         session.next_tick = checkpoint.next_tick;
+        PreparationProgress::report(
+            &mut progress,
+            PreparationStage::ValidateCheckpoint,
+            0,
+            checkpoint.state.captures.len(),
+        )?;
         session.validate_state(&checkpoint.state)?;
+        PreparationProgress::report(
+            &mut progress,
+            PreparationStage::VerifyPositions,
+            0,
+            checkpoint.positions_km.len(),
+        )?;
         let positions = session.positions()?;
         if positions.len() != checkpoint.positions_km.len()
             || positions
@@ -387,6 +494,12 @@ impl Session {
             return Err("Checkpoint positions do not match saved constellation and clock".into());
         }
         session.state = Some(checkpoint.state);
+        PreparationProgress::report(
+            &mut progress,
+            PreparationStage::Ready,
+            session.inputs.jobs.len(),
+            session.inputs.jobs.len(),
+        )?;
         Ok(session)
     }
     fn validate_state(&self, state: &BaselineState) -> Result<(), String> {

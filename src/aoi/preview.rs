@@ -3,33 +3,35 @@ use crate::globe_overlay::{front_segment, line_quad, project_surface};
 use eframe::egui::{self, Color32, Mesh, Rect, Shape};
 use egui_plot::{PlotBounds, PlotGeometry, PlotItem, PlotItemBase, PlotPoint, PlotTransform};
 use nalgebra::{Matrix3, Vector3};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     ops::RangeInclusive,
     sync::{Arc, Mutex},
 };
 
 #[derive(Deserialize)]
-struct Document {
-    schema_version: u32,
-    config: Config,
-    aois: Vec<Record>,
+pub(super) struct Document {
+    pub schema_version: u32,
+    pub config: Config,
+    pub aois: Vec<Record>,
+}
+#[derive(Deserialize, Serialize)]
+pub(super) struct Config {
+    pub seed: u32,
+    pub count: usize,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub source_seeds: std::collections::BTreeMap<String, u32>,
 }
 #[derive(Deserialize)]
-struct Config {
-    seed: u32,
-    count: usize,
-}
-#[derive(Deserialize)]
-struct Record {
+pub(super) struct Record {
     #[serde(default)]
-    id: String,
+    pub id: String,
     anchor_lon: f64,
     anchor_lat: f64,
     area_km2: f64,
     geometry: Geometry,
     #[serde(default)]
-    source_kind: String,
+    pub source_kind: String,
     #[serde(default)]
     path_truncated: bool,
     #[serde(default)]
@@ -118,6 +120,8 @@ struct Boundary {
     polygons: Vec<Vec<Vec<[f64; 2]>>>,
     color: [u8; 3],
     fill: super::fill::Fill,
+    path_truncated: bool,
+    path_length_km: Option<f64>,
 }
 
 pub(crate) struct Preview {
@@ -167,13 +171,63 @@ fn ring(points: Vec<[f64; 2]>) -> Result<Vec<Vector3<f64>>, String> {
 }
 
 impl Preview {
+    /// Serialize original coordinates, never the simplified display outlines.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn serialize_records<S: serde::ser::SerializeSeq>(
+        &self,
+        seq: &mut S,
+    ) -> Result<(), S::Error> {
+        #[derive(Serialize)]
+        struct GeometryRef<'a> {
+            r#type: &'static str,
+            coordinates: &'a Vec<Vec<Vec<[f64; 2]>>>,
+        }
+        #[derive(Serialize)]
+        struct RecordRef<'a> {
+            id: &'a str,
+            source_kind: &'a str,
+            anchor_lon: f64,
+            anchor_lat: f64,
+            area_km2: f64,
+            geometry: GeometryRef<'a>,
+            path_truncated: bool,
+            path_length_km: Option<f64>,
+        }
+        for (a, b) in self.aois.iter().zip(&self.boundaries) {
+            seq.serialize_element(&RecordRef {
+                id: &a.id,
+                source_kind: &a.source,
+                anchor_lon: a.longitude,
+                anchor_lat: a.latitude,
+                area_km2: a.area_km2,
+                geometry: GeometryRef {
+                    r#type: "MultiPolygon",
+                    coordinates: &b.polygons,
+                },
+                path_truncated: b.path_truncated,
+                path_length_km: b.path_length_km,
+            })?;
+        }
+        Ok(())
+    }
     pub(crate) fn capture_regions(&self) -> Vec<leo_capture::geometry::Region> {
-        self.aois.iter().zip(&self.boundaries).map(|(a, b)| leo_capture::geometry::Region { job_key: a.key(), polygons: b.polygons.clone() }).collect()
+        self.aois
+            .iter()
+            .zip(&self.boundaries)
+            .map(|(a, b)| leo_capture::geometry::Region {
+                job_key: a.key(),
+                polygons: b.polygons.clone(),
+            })
+            .collect()
     }
 
     pub fn from_json(bytes: &[u8]) -> Result<Self, String> {
         let doc: Document =
             serde_json::from_slice(bytes).map_err(|e| format!("Invalid AOI response: {e}"))?;
+        Self::from_document(doc)
+    }
+
+    pub(super) fn from_document(doc: Document) -> Result<Self, String> {
         if doc.schema_version != 1
             || doc.aois.is_empty()
             || doc.aois.len() > 50_000
@@ -257,6 +311,8 @@ impl Preview {
                 radius,
                 rings: rings.into_iter().map(Detail::new).collect(),
                 fill: super::fill::Fill::new(&polygons)?,
+                path_truncated: aoi.path_truncated,
+                path_length_km: aoi.path_length_km,
                 polygons,
                 color: match aoi.source_kind.as_str() {
                     "forest" => [130, 231, 158],

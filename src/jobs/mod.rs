@@ -27,12 +27,14 @@ pub(crate) struct Panel {
     message: Option<String>,
     revision: u64,
     baseline: capture_ui::Panel,
+    timing: Option<(u64, model::TimingSummary)>,
 }
 impl Default for Panel {
     fn default() -> Self {
         Self {
             revision: 0,
             baseline: capture_ui::Panel::default(),
+            timing: None,
             config: Generator::default(),
             applied: None,
             jobs: Vec::new(),
@@ -154,6 +156,12 @@ impl Panel {
         self.compatible = true;
         self.reset_edit();
     }
+    fn regenerate_timing(&mut self) -> Result<(), String> {
+        self.config.regenerate_timing(&mut self.jobs)?;
+        self.revision += 1;
+        self.reset_edit();
+        Ok(())
+    }
     fn report(&mut self, capture: CaptureProfile) -> Result<(Totals, [Totals; 3]), String> {
         if self.capture != Some(capture) || self.report.is_none() {
             self.report = Some(model::totals(&self.jobs, capture));
@@ -188,7 +196,7 @@ impl Panel {
                 egui::CollapsingHeader::new(format!("Job generator · {count} loaded AOIs"))
                     .id_salt("job-generator").default_open(self.jobs.is_empty()).show(ui, |ui| {
                         self.generator_ui(ui);
-                        let validation = self.config.validate();
+                        let validation = self.config.validate_generation();
                         if let Err(error) = &validation { ui.colored_label(egui::Color32::LIGHT_RED, error); }
                         if ui.add_enabled(count > 0 && validation.is_ok(), egui::Button::new(
                             if self.jobs.is_empty() { "Assign jobs to AOIs" } else { "Reassign all jobs" })).clicked() {
@@ -199,6 +207,12 @@ impl Panel {
                         }
                         if self.applied.as_ref().is_some_and(|applied| applied != &self.config) {
                             ui.small("Generator changes apply when you reassign. Existing jobs and totals are unchanged.");
+                        }
+                        if ui.add_enabled(self.compatible && !self.jobs.is_empty(), egui::Button::new("Regenerate capture timing")).on_hover_text("Apply the cadence-aware illumination rule and redraw solar preferences using this seed and acquisition settings. Keeps AOIs, cadences, priorities, fulfilment modes, pipelines and output sizes. Existing capture sessions are unchanged.").clicked() {
+                            self.message = Some(match self.regenerate_timing() {
+                                Ok(()) => "Regenerated capture timing. Save the workload and start a new capture run to use it; checkpoints retain their original jobs.".into(),
+                                Err(e) => e,
+                            });
                         }
                     });
                 #[cfg(not(target_arch = "wasm32"))]
@@ -251,12 +265,21 @@ impl Panel {
                     ui.add(egui::DragValue::new(&mut profile.samples).range(2..=100_000));
                 });
                 ui.small(format!(
-                    "Full-window span: {}",
-                    duration(f64::from(profile.samples.saturating_sub(1)) * profile.cadence_hours)
+                    "Full-window span: {} · {}",
+                    duration(f64::from(profile.samples.saturating_sub(1)) * profile.cadence_hours),
+                    model::Illumination::for_cadence(profile.cadence_hours).label()
                 ));
             });
         }
         ui.small("Map jobs use the selected cadence with one sample and no history.");
+        if ui
+            .button("Reset cadence profiles to 2-hour / daily / weekly / monthly defaults")
+            .clicked()
+        {
+            let defaults = Generator::default();
+            self.config.temporal = defaults.temporal;
+            self.config.bounds = defaults.bounds;
+        }
         ui.collapsing("Global cadence and history bounds", |ui| {
             let b = &mut self.config.bounds;
             for (label, lo, hi) in [
@@ -302,6 +325,22 @@ impl Panel {
             }
         };
         ui.strong(format!("Workload total · {} jobs", total.count));
+        if self
+            .timing
+            .as_ref()
+            .is_none_or(|(revision, _)| *revision != self.revision)
+        {
+            self.timing = Some((self.revision, model::TimingSummary::new(&self.jobs)));
+        }
+        let timing = &self.timing.as_ref().unwrap().1;
+        ui.label(format!(
+            "Capture timing: {} any-time · {} daylight",
+            timing.any_time, timing.daylight
+        ));
+        if timing.invalid > 0 {
+            ui.colored_label(egui::Color32::YELLOW, format!("{} jobs have incompatible timing. Use ‘Regenerate capture timing’ in the Job generator before starting a new run.", timing.invalid));
+        }
+        ui.small("Timing policy is checked separately from constellation coverage. Feasibility is measured by the capture baseline over the chosen dates and horizon.");
         egui::Grid::new("workload-totals")
             .num_columns(2)
             .striped(true)
@@ -428,7 +467,7 @@ impl Panel {
             }
         });
         capture_ui::job_controls(ui, &mut job.acquisition, job.cadence_hours);
-        let result = job.estimate(capture).and_then(|e| if bounds.contains(job.cadence_hours, job.samples) { Ok(e) }
+        let result = job.acquisition.validate_timing(job.cadence_hours).and_then(|()| job.estimate(capture)).and_then(|e| if bounds.contains(job.cadence_hours, job.samples) { Ok(e) }
             else { Err("This cadence/window combination is outside the applied global bounds. Adjust it to apply the edit.".into()) });
         let estimate = match result {
             Ok(estimate) => estimate,
@@ -484,7 +523,7 @@ impl Panel {
             ui.add(egui::TextEdit::singleline(&mut self.path).desired_width(f32::INFINITY));
             ui.horizontal(|ui| {
                 if ui.add_enabled(!self.jobs.is_empty() && self.compatible, egui::Button::new("Save workload")).clicked() {
-                    let document = storage::Document { schema_version: 2, generator: self.applied.clone().unwrap(), capture: *capture, jobs: self.jobs.clone() };
+                    let document = storage::Document { schema_version: 3, generator: self.applied.clone().unwrap(), capture: *capture, jobs: self.jobs.clone() };
                     self.message = Some(match document.save(std::path::Path::new(&self.path)) {
                         Ok(()) => format!("Saved {} job configurations.", self.jobs.len()), Err(error) => format!("Could not save: {error}"),
                     });
@@ -649,6 +688,30 @@ mod tests {
         assert!(panel.compatible); // Same geometry reloaded.
         panel.sync(&[]);
         assert!(!panel.compatible); // Stale totals must be hidden.
+    }
+    #[test]
+    fn repair_loaded_workload_updates_revision_without_changing_demand() {
+        let mut panel = Panel::default();
+        panel.sync(&[preview()]);
+        panel.assign().unwrap();
+        panel.jobs[0].cadence_hours = 2.0;
+        panel.jobs[0].samples = if panel.jobs[0].pipeline.has_window() {
+            13
+        } else {
+            1
+        };
+        panel.jobs[0].acquisition = model::Acquisition::default();
+        assert_eq!(model::TimingSummary::new(&panel.jobs).invalid, 1);
+        let before = panel.report(CaptureProfile::default()).unwrap();
+        let revision = panel.revision;
+        panel.regenerate_timing().unwrap();
+        assert!(panel.revision > revision);
+        assert_eq!(model::TimingSummary::new(&panel.jobs).invalid, 0);
+        assert_eq!(
+            panel.jobs[0].acquisition.illumination,
+            model::Illumination::AnyTime
+        );
+        assert_eq!(panel.report(CaptureProfile::default()).unwrap(), before);
     }
     #[test]
     fn inspector_selects_generated_job_and_renders_steady_metrics() {

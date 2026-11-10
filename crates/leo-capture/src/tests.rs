@@ -255,6 +255,13 @@ fn generator_sweeps_between_samples_gates_daylight_and_job_time_and_converges() 
     let night = simulated_pass(&jobs, &at, epoch + 43200.0, 5.0);
     assert_eq!(night.retained_physical_bytes, 0.0);
     assert!(night.opportunities.timing_or_daylight_rejected_segments > 0);
+    // With identical night geometry, only the explicitly any-time job gets data.
+    jobs[0].acquisition.illumination = Illumination::AnyTime;
+    let at = atlas(&jobs, &regions);
+    let night = simulated_pass(&jobs, &at, epoch + 43200.0, 5.0);
+    assert!(night.jobs[0].captured_area_km2 > 0.0);
+    assert_eq!(night.jobs[1].captured_area_km2, 0.0);
+    assert_eq!(night.reuse_saved_bytes, 0.0);
 }
 
 #[test]
@@ -269,8 +276,9 @@ fn deterministic_normal_assignment_priorities_and_circular_time() {
     let mean = times.iter().sum::<f64>() / times.len() as f64;
     assert!((mean - 12.0).abs() < 0.1);
     let variance = times.iter().map(|t| (t - mean).powi(2)).sum::<f64>() / times.len() as f64;
-    assert!((variance.sqrt() - 3.95).abs() < 0.1);
-    assert!(times.iter().all(|t| (0.0..24.0).contains(t)));
+    // N(12, 4²) truncated to [11,13] has standard deviation ≈0.575 h.
+    assert!((variance.sqrt() - 0.575).abs() < 0.02);
+    assert!(times.iter().all(|t| (11.0..=13.0).contains(t)));
     let mosaics = generated
         .iter()
         .filter(|j| j.acquisition.fulfilment == Fulfilment::Mosaic)
@@ -367,6 +375,10 @@ fn session_inputs() -> crate::session::Inputs {
 fn session_checkpoint_preserves_partial_mosaic_and_resumes_identical_crops() {
     use crate::session::Session;
     let input = session_inputs();
+    let mut first_deadline = Session::new(input.clone(), |_| true).unwrap();
+    first_deadline.advance(12).unwrap();
+    assert_eq!(first_deadline.meters().jobs_meeting_all_due_updates, 2);
+    assert_eq!(first_deadline.meters().jobs_without_due_updates, 0);
     let mut continuous = Session::new(input.clone(), |_| true).unwrap();
     continuous.advance(24).unwrap();
     assert!(continuous.report().retained_physical_bytes > 0.0);
@@ -374,12 +386,16 @@ fn session_checkpoint_preserves_partial_mosaic_and_resumes_identical_crops() {
     assert_eq!(continuous.meters().due_updates, 4);
     assert_eq!(continuous.meters().complete_updates, 2);
     assert_eq!(continuous.meters().failed_updates, 2);
+    assert_eq!(continuous.meters().jobs_meeting_all_due_updates, 0);
+    assert_eq!(continuous.meters().jobs_without_due_updates, 0);
     let mut split = Session::new(input, |_| true).unwrap();
     split.advance(1).unwrap();
     assert!(split.report().jobs[0].captured_area_km2 > 0.0);
     assert_eq!(split.report().jobs[0].ready_area_km2, 0.0);
     assert!(split.report().jobs[1].ready_area_km2 > 0.0);
     assert_eq!(split.meters().failed_updates, 0);
+    assert_eq!(split.meters().jobs_meeting_all_due_updates, 0);
+    assert_eq!(split.meters().jobs_without_due_updates, 2);
     let path = std::env::temp_dir().join(format!(
         "leo-session-partial-{}.json.gz",
         std::process::id()
@@ -438,6 +454,8 @@ fn session_deadlines_without_captures_and_rolling_window_expire_on_simulation_cl
     assert_eq!(s.meters().constellation_last_24h_bytes(), 0.0);
     assert_eq!(s.meters().captures_last_24h, 0);
     assert_eq!(s.meters().failed_updates, 0); // deadline remains in the future
+    assert_eq!(s.meters().jobs_without_due_updates, 2);
+    assert_eq!(s.meters().jobs_meeting_all_due_updates, 0);
     let mut input = session_inputs();
     for job in &mut input.jobs {
         job.acquisition.min_solar_elevation_deg = 90.0;
@@ -477,6 +495,57 @@ fn session_rejects_positions_that_do_not_match_saved_constellation() {
         .err()
         .unwrap()
         .contains("positions"));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn checkpoint_versions_preserve_explicit_and_legacy_illumination() {
+    use crate::session::Session;
+    use std::io::{Read, Write};
+    let path =
+        std::env::temp_dir().join(format!("leo-illumination-{}.json.gz", std::process::id()));
+    let mut inputs = session_inputs();
+    inputs.jobs[0].acquisition.illumination = Illumination::AnyTime;
+    let mut session = Session::new(inputs, |_| true).unwrap();
+    session.advance(1).unwrap();
+    session.save(&path).unwrap();
+    let restored = Session::load(&path, |_| true).unwrap();
+    assert_eq!(restored.inputs().jobs, session.inputs().jobs);
+    assert_eq!(
+        serde_json::to_value(restored.state()).unwrap(),
+        serde_json::to_value(session.state()).unwrap()
+    );
+
+    // A genuinely legacy file has no explicit illumination field. Existing
+    // capture state and the original daylight semantics must survive loading.
+    let mut legacy = Session::new(session_inputs(), |_| true).unwrap();
+    legacy.advance(1).unwrap();
+    legacy.save(&path).unwrap();
+    let mut bytes = Vec::new();
+    flate2::read::GzDecoder::new(std::fs::File::open(&path).unwrap())
+        .read_to_end(&mut bytes)
+        .unwrap();
+    let mut json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["schema_version"], 2);
+    json["schema_version"] = 1.into();
+    for j in json["inputs"]["jobs"].as_array_mut().unwrap() {
+        j["acquisition"]
+            .as_object_mut()
+            .unwrap()
+            .remove("illumination");
+    }
+    let mut gzip = flate2::write::GzEncoder::new(
+        std::fs::File::create(&path).unwrap(),
+        flate2::Compression::fast(),
+    );
+    gzip.write_all(&serde_json::to_vec(&json).unwrap()).unwrap();
+    gzip.finish().unwrap();
+    let restored = Session::load(&path, |_| true).unwrap();
+    assert_eq!(restored.inputs().jobs, legacy.inputs().jobs);
+    assert_eq!(
+        serde_json::to_value(restored.state()).unwrap(),
+        serde_json::to_value(legacy.state()).unwrap()
+    );
     std::fs::remove_file(path).unwrap();
 }
 
@@ -539,5 +608,36 @@ fn session_scale_checkpoint_roundtrip() {
     );
     assert_eq!(s.positions().unwrap(), restored.positions().unwrap());
     eprintln!("50k checkpoint: {:.2}s including atlas, 1h capture, save/load/validation, continuation; {} records; {} bytes compressed",start.elapsed().as_secs_f64(),s.meters().captures_total,std::fs::metadata(&path).unwrap().len());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn preparation_reports_distinct_stages_and_can_cancel_before_building_geometry() {
+    use crate::session::{PreparationStage as Stage, Session};
+    let mut stages = Vec::new();
+    let session = Session::prepare(session_inputs(), |p| {
+        stages.push(p.stage);
+        true
+    })
+    .unwrap();
+    assert_eq!(stages.first(), Some(&Stage::ValidateInputs));
+    assert_eq!(stages.last(), Some(&Stage::Ready));
+    assert!(stages.contains(&Stage::BuildGeometry));
+    assert!(stages.contains(&Stage::BuildIndex));
+    assert!(stages.contains(&Stage::InitializeCoverage));
+    let cancelled = Session::prepare(session_inputs(), |p| p.stage != Stage::ValidateInputs);
+    assert!(cancelled.err().unwrap().contains("Cancelled"));
+    let path = std::env::temp_dir().join(format!("leo-preparation-{}.json.gz", std::process::id()));
+    session.save(&path).unwrap();
+    stages.clear();
+    Session::load_with_progress(&path, |p| {
+        stages.push(p.stage);
+        true
+    })
+    .unwrap();
+    assert_eq!(stages.first(), Some(&Stage::ReadCheckpoint));
+    assert!(stages.contains(&Stage::ValidateCheckpoint));
+    assert!(stages.contains(&Stage::VerifyPositions));
+    assert_eq!(stages.iter().filter(|s| **s == Stage::Ready).count(), 1);
     std::fs::remove_file(path).unwrap();
 }

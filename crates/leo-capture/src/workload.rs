@@ -20,6 +20,30 @@ impl Fulfilment {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Illumination {
+    AnyTime,
+    // Missing fields in older workloads/checkpoints must retain their old gating.
+    #[default]
+    Daylight,
+}
+impl Illumination {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AnyTime => "Any time (day or night)",
+            Self::Daylight => "Daylight and local solar time",
+        }
+    }
+    pub fn for_cadence(cadence_hours: f64) -> Self {
+        if cadence_hours < 24.0 {
+            Self::AnyTime
+        } else {
+            Self::Daylight
+        }
+    }
+}
+
 /// Cadence slots start at run start + phase; all pieces must be acquired within
 /// that slot. No observation is carried into another slot. Local solar time is
 /// circular (e.g. 23:30 ± 1 h includes 00:15), not civil time or satellite eclipse.
@@ -30,6 +54,7 @@ pub struct Acquisition {
     /// Larger values have strictly higher admission priority. Ties use job ID.
     pub priority: u16,
     pub phase_hours: f64,
+    pub illumination: Illumination,
     pub solar_time_hours: f64,
     pub solar_tolerance_hours: f64,
     pub min_solar_elevation_deg: f64,
@@ -40,6 +65,7 @@ impl Default for Acquisition {
             fulfilment: Fulfilment::Independent,
             priority: 1,
             phase_hours: 0.0,
+            illumination: Illumination::Daylight,
             solar_time_hours: 12.0,
             solar_tolerance_hours: 1.0,
             min_solar_elevation_deg: 0.0,
@@ -66,8 +92,25 @@ impl Acquisition {
         Ok(())
     }
     pub fn accepts(&self, solar_hours: f64, elevation_deg: f64) -> bool {
+        if self.illumination == Illumination::AnyTime {
+            return true;
+        }
         let distance = ((solar_hours - self.solar_time_hours + 12.0).rem_euclid(24.0) - 12.0).abs();
         elevation_deg >= self.min_solar_elevation_deg && distance <= self.solar_tolerance_hours
+    }
+    /// New-workload policy, separate from format validation so historical
+    /// workloads and checkpoints can still be inspected and replayed verbatim.
+    pub fn validate_timing(&self, cadence: f64) -> Result<(), String> {
+        self.validate(cadence)?;
+        if self.illumination == Illumination::Daylight {
+            if cadence < 24.0 {
+                return Err("Daylight jobs require a cadence of at least 24 h. Use any-time capture for subdaily jobs.".into());
+            }
+            if self.solar_tolerance_hours == 0.0 || self.min_solar_elevation_deg == 90.0 {
+                return Err("Daylight capture requires a nonzero time window and minimum elevation below 90°.".into());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -100,7 +143,7 @@ impl AcquisitionGenerator {
             min_solar_elevation_deg: self.min_solar_elevation_deg,
             ..Default::default()
         }
-        .validate(1.0)?;
+        .validate(24.0)?;
         if !self.mosaic_fraction.is_finite()
             || !(0.0..=1.0).contains(&self.mosaic_fraction)
             || !self.solar_stddev_hours.is_finite()
@@ -113,13 +156,30 @@ impl AcquisitionGenerator {
         }
         Ok(())
     }
-    fn generate(&self, rng: &mut Random) -> Acquisition {
-        // Rejection sampling, not clamping: no artificial mass at midnight.
+    fn generate(&self, rng: &mut Random, cadence: f64) -> Acquisition {
+        // Rejection sampling, not clamping: no artificial mass at the edges.
+        // Keep noon inside every generated acceptance window, and its preferred
+        // time within 06:00–18:00. This avoids excluding the best daylight of the
+        // day. Latitude/season can still make even noon too dark.
+        let radius = self.solar_tolerance_hours.min(6.0);
         let solar_time_hours = loop {
+            if radius == 0.0 || self.solar_stddev_hours == 0.0 {
+                break 12.0;
+            }
+            // Uniform rejection is efficient for very narrow truncation;
+            // normal rejection is efficient for wide truncation. Neither has a
+            // clamp point mass or pathological runtime as tolerance approaches 0.
+            if radius < self.solar_stddev_hours {
+                let offset = (2.0 * rng.unit() - 1.0) * radius;
+                if rng.unit() < (-0.5 * (offset / self.solar_stddev_hours).powi(2)).exp() {
+                    break 12.0 + offset;
+                }
+                continue;
+            }
             let z = (-2.0 * (1.0 - rng.unit()).ln()).sqrt()
                 * (std::f64::consts::TAU * rng.unit()).cos();
             let time = 12.0 + z * self.solar_stddev_hours;
-            if (0.0..24.0).contains(&time) {
+            if (time - 12.0).abs() <= radius {
                 break time;
             }
         };
@@ -137,6 +197,7 @@ impl AcquisitionGenerator {
             solar_tolerance_hours: self.solar_tolerance_hours,
             min_solar_elevation_deg: self.min_solar_elevation_deg,
             phase_hours: 0.0,
+            illumination: Illumination::for_cadence(cadence),
         }
     }
 }
@@ -231,27 +292,33 @@ impl Default for Generator {
             pipeline_weights: [1.0, 1.0, 1.0],
             temporal: vec![
                 TemporalProfile {
-                    name: "Daily history".into(),
+                    name: "Every 2 hours · 1-day history".into(),
                     weight: 1.0,
                     cadence_hours: 2.0,
                     samples: 13,
                 },
                 TemporalProfile {
-                    name: "Monthly history".into(),
+                    name: "Daily · 30-day history".into(),
                     weight: 1.0,
                     cadence_hours: 24.0,
                     samples: 31,
                 },
                 TemporalProfile {
-                    name: "Yearly history".into(),
+                    name: "Weekly · 52-week history".into(),
                     weight: 1.0,
                     cadence_hours: 168.0,
                     samples: 53,
                 },
+                TemporalProfile {
+                    name: "Monthly (30 days) · 360-day history".into(),
+                    weight: 1.0,
+                    cadence_hours: 720.0,
+                    samples: 13,
+                },
             ],
             bounds: Bounds {
                 cadence_min_hours: 2.0,
-                cadence_max_hours: 168.0,
+                cadence_max_hours: 720.0,
                 span_min_hours: 24.0,
                 span_max_hours: 8760.0,
             },
@@ -292,14 +359,34 @@ impl Bounds {
     }
 }
 impl Generator {
-    pub fn acquisition_for(&self, aoi: &AoiRef) -> Acquisition {
+    pub fn acquisition_for(&self, aoi: &AoiRef, cadence: f64) -> Acquisition {
         let mut rng = Random(
             hash(aoi.key().as_bytes())
                 ^ aoi.geometry_hash
                 ^ u64::from(self.seed)
                 ^ 0x6163717569736974,
         );
-        self.acquisition.generate(&mut rng)
+        self.acquisition.generate(&mut rng, cadence)
+    }
+    /// Change only illumination and solar preferences. Keep user edits to
+    /// cadence, phase, priority, fulfilment, pipeline and byte densities.
+    pub fn regenerate_timing(&self, jobs: &mut [Job]) -> Result<(), String> {
+        self.acquisition.validate()?;
+        // Validate the entire change before mutating anything.
+        let timing: Vec<_> = jobs
+            .iter()
+            .map(|j| self.acquisition_for(&j.aoi, j.cadence_hours))
+            .collect();
+        for (job, next) in jobs.iter().zip(&timing) {
+            next.validate_timing(job.cadence_hours)?;
+        }
+        for (job, next) in jobs.iter_mut().zip(timing) {
+            job.acquisition.illumination = next.illumination;
+            job.acquisition.solar_time_hours = next.solar_time_hours;
+            job.acquisition.solar_tolerance_hours = next.solar_tolerance_hours;
+            job.acquisition.min_solar_elevation_deg = next.min_solar_elevation_deg;
+        }
+        Ok(())
     }
     pub fn validate(&self) -> Result<(), String> {
         self.bounds.validate()?;
@@ -335,8 +422,24 @@ impl Generator {
         }
         Ok(())
     }
-    pub fn generate(&self, aois: impl IntoIterator<Item = AoiRef>) -> Result<Vec<Job>, String> {
+    pub fn validate_generation(&self) -> Result<(), String> {
         self.validate()?;
+        if self
+            .temporal
+            .iter()
+            .any(|p| p.weight > 0.0 && p.cadence_hours >= 24.0)
+        {
+            Acquisition {
+                solar_tolerance_hours: self.acquisition.solar_tolerance_hours,
+                min_solar_elevation_deg: self.acquisition.min_solar_elevation_deg,
+                ..Default::default()
+            }
+            .validate_timing(24.0)?;
+        }
+        Ok(())
+    }
+    pub fn generate(&self, aois: impl IntoIterator<Item = AoiRef>) -> Result<Vec<Job>, String> {
+        self.validate_generation()?;
         let mut keys = std::collections::HashSet::new();
         let mut jobs = Vec::new();
         let temporal_weights: Vec<_> = self.temporal.iter().map(|p| p.weight).collect();
@@ -363,8 +466,9 @@ impl Generator {
                     * rng.spread(self.output_size_range),
             };
             let mut job = job;
-            job.acquisition = self.acquisition_for(&job.aoi);
+            job.acquisition = self.acquisition_for(&job.aoi, job.cadence_hours);
             job.validate()?;
+            job.acquisition.validate_timing(job.cadence_hours)?;
             jobs.push(job);
         }
         Ok(jobs)
@@ -382,6 +486,39 @@ pub struct Job {
     pub samples: u32,
     pub map_bytes_per_km2: f64,
     pub window_bytes_per_km2: f64,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TimingSummary {
+    pub any_time: usize,
+    pub daylight: usize,
+    pub invalid: usize,
+    pub examples: Vec<String>,
+}
+impl TimingSummary {
+    pub fn new(jobs: &[Job]) -> Self {
+        let mut result = Self::default();
+        for job in jobs {
+            match job.acquisition.illumination {
+                Illumination::AnyTime => result.any_time += 1,
+                Illumination::Daylight => result.daylight += 1,
+            }
+            if let Err(reason) = job.acquisition.validate_timing(job.cadence_hours) {
+                result.invalid += 1;
+                if result.examples.len() < 3 {
+                    result.examples.push(format!("{}: {reason}", job.aoi.key()));
+                }
+            }
+        }
+        result
+    }
+    pub fn validate(&self) -> Result<(), String> {
+        if self.invalid == 0 {
+            return Ok(());
+        }
+        Err(format!("{} jobs have incompatible acquisition timing. Regenerate capture timing in the Job generator, or edit these jobs before starting a new run. {}",
+            self.invalid, self.examples.join(" ")))
+    }
 }
 impl Job {
     pub fn span_hours(&self) -> f64 {
@@ -663,5 +800,71 @@ mod tests {
         let mut bad_job = job(Pipeline::Window);
         bad_job.cadence_hours = 0.0;
         assert!(bad_job.estimate(capture()).is_err());
+    }
+    #[test]
+    fn cadence_aware_generation_and_timing_repair_preserve_other_requirements() {
+        let g = Generator::default();
+        let mut jobs = g.generate((0..1000).map(|i| aoi(&i.to_string()))).unwrap();
+        for cadence in [2.0, 24.0, 168.0, 720.0] {
+            assert!(jobs.iter().any(|j| j.cadence_hours == cadence));
+        }
+        for job in &jobs {
+            job.acquisition.validate_timing(job.cadence_hours).unwrap();
+            if job.cadence_hours < 24.0 {
+                assert_eq!(job.acquisition.illumination, Illumination::AnyTime);
+                assert!(job.acquisition.accepts(0.0, -90.0));
+            } else {
+                assert_eq!(job.acquisition.illumination, Illumination::Daylight);
+                assert!(job.acquisition.accepts(12.0, 45.0));
+                assert!(!job.acquisition.accepts(12.0, -1.0));
+            }
+        }
+        let expected = jobs.clone();
+        for j in &mut jobs {
+            j.acquisition.illumination = Illumination::Daylight;
+            j.acquisition.solar_time_hours = 0.0;
+            j.acquisition.priority = 123;
+            j.acquisition.phase_hours = 0.5;
+            j.acquisition.fulfilment = Fulfilment::Mosaic;
+        }
+        let summary = TimingSummary::new(&jobs);
+        assert_eq!(
+            summary.invalid,
+            jobs.iter().filter(|j| j.cadence_hours < 24.0).count()
+        );
+        assert!(summary.validate().is_err());
+        g.regenerate_timing(&mut jobs).unwrap();
+        for (j, mut expected) in jobs.iter().zip(expected) {
+            expected.acquisition.priority = 123;
+            expected.acquisition.phase_hours = 0.5;
+            expected.acquisition.fulfilment = Fulfilment::Mosaic;
+            assert_eq!(j, &expected);
+        }
+        TimingSummary::new(&jobs).validate().unwrap();
+        let before = jobs.clone();
+        let mut invalid = g;
+        invalid.acquisition.solar_tolerance_hours = 0.0;
+        assert!(invalid.generate([aoi("a")]).is_err());
+        assert!(invalid.regenerate_timing(&mut jobs).is_err());
+        assert_eq!(jobs, before); // Failed repair is atomic.
+    }
+    #[test]
+    fn narrow_solar_windows_are_bounded_and_legacy_acquisitions_keep_daylight() {
+        let old: Acquisition =
+            serde_json::from_str(r#"{"solar_time_hours":0,"solar_tolerance_hours":12}"#).unwrap();
+        assert_eq!(old.illumination, Illumination::Daylight);
+        assert!(!old.accepts(12.0, -1.0));
+        let mut g = Generator::default();
+        g.acquisition.solar_tolerance_hours = 1e-9;
+        let a = g.acquisition_for(&aoi("tiny-window"), 24.0);
+        assert!((a.solar_time_hours - 12.0).abs() <= 1e-9);
+        let a = Acquisition {
+            illumination: Illumination::AnyTime,
+            ..old
+        };
+        let restored: Acquisition =
+            serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
+        assert_eq!(restored, a);
+        assert!(restored.accepts(12.0, -90.0));
     }
 }

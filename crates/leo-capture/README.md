@@ -16,7 +16,8 @@ The overlap fixture has three jobs over two partially overlapping rectangles.
 One rectangle appears twice. A completed update of all three requires half as
 many physical crop bytes as their independently counted logical bytes. The default
 fixture uses the bundled 50,000 AOIs, a 13×13 ADAM-style constellation, 20 km swath,
-one day, noon-centred job preferences and daylight gating.
+one day, and cadence-aware acquisition requirements (subdaily any-time capture;
+daily, weekly and monthly daylight capture).
 
 ## Inputs and reproducibility
 
@@ -55,11 +56,25 @@ Times in events and reports are seconds from `epoch_unix_s + start_s`.
   slot is censored, not reported as a missed deadline.
 - All pieces of a mosaic must come from its slot. Thus the initial maximum mosaic
   collection span equals the cadence. There is no separate tighter coherence bound.
-- Job preferred local solar times use a seeded truncated normal with mean 12 h
-  and σ=4 h, bounded to [0,24). The default circular tolerance is ±1 h and minimum
-  solar elevation is 0°. Both are editable. Timing is evaluated at the AOI anchor;
+- Generated cadences below 24 h use `illumination: "any_time"`, bypassing both
+  solar filters and assuming night acquisitions are usable. Daily and slower
+  jobs use `"daylight"`. Default profiles are 2 h, 24 h, 168 h and 720 h; a month
+  is a fixed 30 days. Custom cadences follow the same 24 h threshold.
+- Daylight preferred local solar times use a seeded truncated normal with mean
+  12 h and σ=4 h, bounded to 12 ± min(tolerance, 6 h). Every generated window thus
+  includes noon; default preferences are 11:00–13:00. The default circular tolerance
+  is ±1 h and minimum solar elevation is 0°. Both are editable. Timing is evaluated at the AOI anchor;
   solar elevation is checked at crop vertices at interval start, middle and end.
   No cloud simulation or random availability is applied.
+- `TimingSummary` validates the new-workload policy: daylight cadence ≥24 h,
+  positive tolerance and minimum elevation <90°. The GUI and CLI reject new runs
+  that violate this policy before building geometry. Format validation and the
+  low-level session API remain compatible with historical experiments/checkpoints.
+  `Generator::regenerate_timing` changes only solar settings and illumination,
+  atomically preserving priorities, phases, fulfilment modes and all other fields.
+  Consistent timing does not prove solar availability (including polar night),
+  revisit or full AOI coverage. Use the unconstrained baseline over the intended
+  dates; jobs with no closed deadline remain untested, even if some crops exist.
 - Only newly needed crop polygons are retained. Overlapping eligible jobs share
   one physical capture; histories and application outputs remain separate future
   concerns. The model assumes lossless identity of overlapping pixels from the
@@ -116,7 +131,14 @@ allocated. Cancellation is checked during atlas construction and each time step.
 Tests cover independent readiness versus mosaics, cumulative capture, repeated
 passes, partial overlaps, timing-dependent sharing, daylight, midnight wrapping,
 holes, dateline/polar geometry, temporal convergence, finite-capacity diagnostics,
-priority order, deterministic normal draws and v1→v2 workload migration.
+priority order, cadence-aware deterministic normal draws, explicit night capture,
+timing repair and legacy workload compatibility.
+
+Workload saves use schema 3 and checkpoint saves use schema 2 to prevent older
+readers from silently treating any-time jobs as daylight jobs. Workload schemas
+1–3 and checkpoint schemas 1–2 load. A missing illumination field means daylight,
+preserving existing v2 workload edits and v1 checkpoint histories; v1 workloads
+(which had no acquisition settings) receive the new generator defaults.
 
 
 ## Resumable sessions
@@ -134,7 +156,7 @@ reduced by expiry of that reporting window. A failed update is a closed cadence
 slot lacking full AOI coverage; partial independent captures remain ready. Counts
 include slots with no opportunities, and exclude incomplete final slots.
 
-`save(path)` streams schema-1 gzip JSON to a unique sibling temporary file, syncs
+`save(path)` streams schema-2 gzip JSON to a unique sibling temporary file, syncs
 and renames it. `load(path, progress)` validates schema, inputs, geometry hashes,
 coverage state, ledger accounting and propagated saved positions. It rebuilds
 only the spatial atlas, never the capture history. All job/slot coverage polygons,
@@ -150,3 +172,34 @@ skips the main app's scene rendering and preview physics; pause/save commands ar
 handled between chunks of at most 12 ticks. A loaded session is initially paused.
 The constrained scheduler, storage enforcement, downlink and processing remain
 future work.
+
+
+## Preparation and diagnostics
+
+`Session::prepare` and `load_with_progress` expose typed preparation stages with
+counts, including checkpoint decoding, AOI geometry construction, spatial indexing
+and restored-state validation. The existing `new`/`load` fraction callbacks remain
+available. Percentages describe one stage, not overall elapsed-work estimates.
+Large boundaries use an R-tree to prune disjoint edge pairs during validation,
+preserving geo's ring and hole rules and the original polygon vertices.
+
+For a read-only replay with a Rust backtrace:
+
+```sh
+RUST_BACKTRACE=1 cargo run --release --manifest-path crates/leo-capture/Cargo.toml \
+  --example replay_checkpoint -- capture-session.json.gz 18000
+```
+
+The optional end time is seconds since the capture run began. This never writes
+the checkpoint. The GUI reports the original panic payload and current operation
+instead of assuming every worker panic is a geometry failure. Acquisition deadline
+shortfalls and worker failures are separate; no synthetic job failures are added
+when the worker stops.
+
+Coverage accumulation unions the original incoming crop with existing coverage.
+It uses `crop − covered` only for newly retained bytes and allocations. Feeding
+that rounded difference back into the union (`covered ∪ (crop − covered)`) created
+nearly coincident cut edges that triggered i_overlay 4.5.2's OGC extraction
+assertion on a river AOI. The equivalent direct union (`covered ∪ crop`) avoids
+that extra round trip. A compressed regression fixture preserves the exact
+failing boundaries, with area, validity and repeated-capture checks.

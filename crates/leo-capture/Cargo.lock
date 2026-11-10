@@ -290,6 +290,7 @@ dependencies = [
  "flate2",
  "geo",
  "leo-sim",
+ "rstar 0.12.2",
  "serde",
  "serde_json",
  "sgp4",

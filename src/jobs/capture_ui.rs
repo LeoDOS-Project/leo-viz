@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use eframe::egui;
 use leo_capture::{
     baseline::Options,
-    workload::{Acquisition, AcquisitionGenerator, Fulfilment, Job},
+    workload::{Acquisition, AcquisitionGenerator, Fulfilment, Illumination, Job},
 };
 use leo_sim::acquisition::CaptureProfile;
 use std::sync::{atomic::Ordering, Arc};
@@ -21,7 +21,8 @@ pub(super) fn generator_controls(ui: &mut egui::Ui, g: &mut AcquisitionGenerator
             ui.label("Noon-centred normal σ");ui.add(egui::DragValue::new(&mut g.solar_stddev_hours).range(0.0..=12.0).speed(0.25).suffix(" h"));
         });
         solar_controls(ui,&mut g.solar_tolerance_hours,&mut g.min_solar_elevation_deg);
-        ui.small("Preferred local solar times follow a truncated normal centred at 12:00, bounded by 00:00–24:00. Independent of geographic source and pipeline. Clouds are not modeled.");
+        ui.small("Cadence < 24 h: any-time capture, with no solar-time or elevation filter. Cadence ≥ 24 h: daylight plus a preferred local solar time. This assumes frequent jobs can use data acquired at night.");
+        ui.small("Daylight preferences use a noon-centred truncated normal. Draws stay within 06:00–18:00 and within the configured tolerance of noon, so every generated window includes noon. Latitude, season and orbital coverage still determine feasibility. Clouds are not modeled.");
         ui.small("Cadence slots begin at run start. Mosaic pieces must all come from the same slot; independent jobs release crops as captured. Priorities are uniform integers in this range.");
     });
 }
@@ -52,14 +53,23 @@ pub(super) fn job_controls(ui: &mut egui::Ui, a: &mut Acquisition, cadence: f64)
         });
         ui.horizontal_wrapped(|ui| {ui.label("Priority (higher wins)");ui.add(egui::DragValue::new(&mut a.priority));});
         ui.horizontal_wrapped(|ui| {ui.label("First slot starts after");ui.add(egui::DragValue::new(&mut a.phase_hours).range(0.0..=(cadence-1e-6).max(0.0)).suffix(" h"));});
-        ui.horizontal_wrapped(|ui| {ui.label("Preferred local solar time");ui.add(egui::DragValue::new(&mut a.solar_time_hours).range(0.0..=23.999).speed(0.25).suffix(" h"));});
-        solar_controls(ui,&mut a.solar_tolerance_hours,&mut a.min_solar_elevation_deg);
+        egui::ComboBox::from_id_salt("job-illumination").selected_text(a.illumination.label()).show_ui(ui, |ui| {
+            ui.selectable_value(&mut a.illumination, Illumination::AnyTime, Illumination::AnyTime.label());
+            ui.add_enabled_ui(cadence >= 24.0, |ui| {
+                ui.selectable_value(&mut a.illumination, Illumination::Daylight, Illumination::Daylight.label());
+            });
+        });
+        if cadence < 24.0 { ui.small("Subdaily jobs must allow capture at any time of day."); }
+        ui.add_enabled_ui(a.illumination == Illumination::Daylight, |ui| {
+            ui.horizontal_wrapped(|ui| {ui.label("Preferred local solar time");ui.add(egui::DragValue::new(&mut a.solar_time_hours).range(0.0..=23.999).speed(0.25).suffix(" h"));});
+            solar_controls(ui,&mut a.solar_tolerance_hours,&mut a.min_solar_elevation_deg);
+        });
         ui.small("Cumulative captures within each cadence slot. Overlapping jobs can use the same physical capture if both accept its time. Overload policy: drop lowest-priority whole jobs first.");
     });
 }
 
 use super::capture_worker::{Command, Event, Initial, View, Worker};
-use leo_capture::session::{Inputs, Orbit, Satellite};
+use leo_capture::session::{Inputs, Orbit, PreparationStage, Satellite};
 
 pub(super) struct Panel {
     options: Options,
@@ -72,6 +82,7 @@ pub(super) struct Panel {
     speed: f64,
     forward_hours: f64,
     show_scene: bool,
+    stopped: bool,
 }
 impl Default for Panel {
     fn default() -> Self {
@@ -89,6 +100,7 @@ impl Default for Panel {
             speed: 600.0,
             forward_hours: 24.0,
             show_scene: false,
+            stopped: false,
         }
     }
 }
@@ -98,10 +110,11 @@ impl Panel {
             if let Ok(view) = p.views.try_recv() {
                 self.view = Some(view);
                 self.worker = self.pending.take();
+                self.stopped = false;
                 self.notice=Some("Session ready. Checkpoints include all AOIs, jobs, orbits, retained footprints and partial coverage.".into());
             } else {
                 let error = p.events.try_iter().find_map(|event| match event {
-                    Event::Error(e) => Some(e),
+                    Event::Error(e) | Event::Stopped(e) => Some(e),
                     _ => None,
                 });
                 if let Some(e) = error {
@@ -118,7 +131,27 @@ impl Panel {
             while let Ok(event) = w.events.try_recv() {
                 match event {
                     Event::Error(e) => self.error = Some(e),
-                    Event::Saved(path) => self.notice = Some(format!("Checkpoint saved: {path}")),
+                    Event::Stopped(e) => {
+                        self.stopped = true;
+                        if let Some(v) = &mut self.view {
+                            v.running = false;
+                            v.fast_target = None;
+                        }
+                        self.error = Some(e);
+                    }
+                    Event::Saved {
+                        path,
+                        elapsed_s,
+                        epoch_unix_s,
+                    } => {
+                        let utc = DateTime::<Utc>::from_timestamp(
+                            (epoch_unix_s + elapsed_s).floor() as i64,
+                            0,
+                        )
+                        .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                        .unwrap_or_default();
+                        self.notice=Some(format!("Last successful checkpoint: {path} · {utc} · {:.2} h into the run. Later progress is not saved automatically.",elapsed_s/3600.0));
+                    }
                 }
             }
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -142,10 +175,10 @@ impl Panel {
         self.pending = Some(Worker::spawn(initial, self.speed));
         self.error = None;
         self.notice = None;
-        self.show_scene = true;
+        // Starting or loading a run must not replace the user’s current globe view.
     }
     fn controls(&mut self, ui: &mut egui::Ui) {
-        let ready = self.view.is_some();
+        let ready = self.view.is_some() && !self.stopped;
         let running = self.view.as_ref().is_some_and(|v| v.running);
         let finished = self.view.as_ref().is_some_and(|v| v.finished);
         let fast = self
@@ -174,7 +207,8 @@ impl Panel {
             {
                 self.command(Command::Speed(self.speed));
             }
-            ui.checkbox(&mut self.show_scene, "Show capture map");
+            ui.checkbox(&mut self.show_scene, "Open capture diagnostic map")
+                .on_hover_text("Optional longitude/latitude map of the frozen capture session. Replaces the globe while open; closing it returns to the setup view.");
         });
         ui.horizontal_wrapped(|ui| {
             ui.add(
@@ -196,6 +230,10 @@ impl Panel {
                 self.command(Command::FastForward(self.forward_hours * 3600.0));
             }
         });
+        ui.small("The setup globe is a separate orbit preview; it does not display captured data or follow the capture session clock. Open the diagnostic map to inspect actual session positions and retained crops.");
+        if self.stopped {
+            ui.colored_label(egui::Color32::LIGHT_RED,"Worker stopped — these are the last completed results. Run and save are disabled until a session is loaded or restarted.");
+        }
         ui.small("Fast-forward skips scene rendering, advances the same capture ticks, then restores the previous Run/Pause state. Target rounds up to the next track step, capped by the run horizon.");
         ui.add(egui::TextEdit::singleline(&mut self.path).desired_width(f32::INFINITY));
         ui.horizontal_wrapped(|ui| {
@@ -234,6 +272,7 @@ impl Panel {
         self.poll(ui.ctx());
         egui::CollapsingHeader::new("Capture simulation").id_salt("capture-baseline").default_open(true).show(ui,|ui| {
             ui.small("Unconstrained capture baseline. Storage is measured against capacity; no storage enforcement, processing, downlink, clouds or job dropping yet.");
+            ui.small("Use this baseline to test the workload against the selected constellation. Consistent timing alone does not guarantee revisit or full AOI coverage; polar night can also prevent daylight jobs.");
             ui.collapsing("New run settings",|ui| {
                 ui.horizontal_wrapped(|ui| {
                     let mut days=self.options.duration_s/86400.0;
@@ -244,6 +283,10 @@ impl Panel {
                 ui.horizontal_wrapped(|ui| {ui.label("Track step");ui.add(egui::DragValue::new(&mut self.options.step_s).range(0.05..=30.0).speed(0.5).suffix(" s"));});
                 ui.horizontal_wrapped(|ui| {ui.label("Polygon edge spacing");ui.add(egui::DragValue::new(&mut self.options.edge_km).range(0.05..=10.0).speed(0.1).suffix(" km"));});
                 ui.small("Halve step and edge spacing to check convergence. Mosaic tolerance: 1 part per million of geometric area.");
+                let no_deadline = jobs.iter().filter(|j| (j.acquisition.phase_hours+j.cadence_hours)*3600.0 > self.options.duration_s).count();
+                if no_deadline > 0 {
+                    ui.colored_label(egui::Color32::YELLOW, format!("{no_deadline} jobs have no deadline within this horizon. Their cadence feasibility will remain untested. Weekly jobs need at least 7 days; monthly jobs use a fixed 30-day cadence."));
+                }
             });
             #[cfg(not(target_arch="wasm32"))]
             if ui.add_enabled(compatible&&!jobs.is_empty(),egui::Button::new("Start new capture run from setup")).clicked() {
@@ -264,15 +307,34 @@ impl Panel {
             }
             #[cfg(target_arch="wasm32")]
             ui.small("Resumable capture runs require the native app.");
-            ui.small("New runs freeze the selected constellation, current epoch/positions, AOIs, jobs and sensor. Setup edits affect the next run. Loading restores the saved session, paused, in its capture map.");
-            if self.pending.is_some() {
-                ui.label("Preparing capture session…");
-                ui.add(egui::ProgressBar::new(self.pending.as_ref().unwrap().progress.load(Ordering::Relaxed) as f32/1000.0));
-                if ui.button("Cancel preparation").clicked(){self.pending=None;}
-            }
+            ui.small("New runs freeze the selected constellation, current epoch/positions, AOIs, jobs and sensor. Setup edits affect the next run. Loading restores the saved session, paused. The optional diagnostic map uses its own saved constellation and clock.");
+            self.preparation_ui(ui);
             self.controls(ui);
-            if let Some(v)=&self.view {meters(ui,v);}
+            if let Some(v)=&self.view {meters(ui,v,self.stopped);}
         });
+    }
+    fn preparation_ui(&mut self, ui: &mut egui::Ui) {
+        if let Some(worker) = &self.pending {
+            let p = worker.progress.lock().unwrap().clone();
+            let message = preparation_message(&p);
+            ui.strong(message);
+            if p.stage == PreparationStage::BuildGeometry {
+                ui.add(
+                    egui::ProgressBar::new(p.completed as f32 / p.total.max(1) as f32)
+                        .show_percentage(),
+                );
+                ui.small("Checking polygon boundaries, splitting them into geographic cells, and preparing coverage geometry. Detailed environmental AOIs can take longer than rectangles.");
+            } else {
+                ui.spinner();
+            }
+            ui.small(format!(
+                "Preparation elapsed: {:.0} s. Percentages apply to the named stage.",
+                worker.started.elapsed().as_secs_f64()
+            ));
+            if ui.button("Cancel preparation").clicked() {
+                self.pending = None;
+            }
+        }
     }
     fn scene(&mut self, ctx: &egui::Context, fast_only: bool) -> bool {
         let fast = self
@@ -290,12 +352,12 @@ impl Panel {
             ui.heading(if fast {
                 "Fast-forwarding capture simulation"
             } else {
-                "Capture simulation"
+                "Capture diagnostic map"
             });
             self.controls(ui);
             if let Some(v) = &self.view {
                 ui.label(format!(
-                    "Elapsed {:.2} h · last 24 h {} · failed updates {} · retained {}",
+                    "Elapsed {:.2} h · last 24 h {} · unfulfilled updates {} · retained {}",
                     v.meters.elapsed_s / 3600.0,
                     super::bytes(v.meters.constellation_last_24h_bytes()),
                     v.meters.failed_updates,
@@ -312,7 +374,7 @@ impl Panel {
                         v.meters.elapsed_s / 3600.0,
                         target / 3600.0
                     ));
-                    meters(ui, v);
+                    meters(ui, v, self.stopped);
                 } else {
                     map(ui, v);
                 }
@@ -323,7 +385,32 @@ impl Panel {
         true
     }
 }
-fn meters(ui: &mut egui::Ui, v: &View) {
+fn preparation_message(p: &leo_capture::session::PreparationProgress) -> String {
+    match p.stage {
+        PreparationStage::ReadCheckpoint => "Reading and decompressing checkpoint…".into(),
+        PreparationStage::ValidateInputs => {
+            format!("Validating sensor, constellation and {} jobs…", p.total)
+        }
+        PreparationStage::BuildGeometry => {
+            format!("Preparing AOI geometry: {} / {}", p.completed, p.total)
+        }
+        PreparationStage::BuildIndex => {
+            format!("Building spatial lookup index for {} AOIs…", p.total)
+        }
+        PreparationStage::InitializeCoverage => {
+            format!("Initializing coverage and counters for {} jobs…", p.total)
+        }
+        PreparationStage::ValidateCheckpoint => format!(
+            "Validating restored partial coverage and {} retained crop records…",
+            p.total
+        ),
+        PreparationStage::VerifyPositions => {
+            format!("Checking {} saved satellite positions…", p.total)
+        }
+        PreparationStage::Ready => "Session ready".into(),
+    }
+}
+fn meters(ui: &mut egui::Ui, v: &View, stopped: bool) {
     let m = &v.meters;
     let r = &v.report;
     ui.separator();
@@ -341,7 +428,9 @@ fn meters(ui: &mut egui::Ui, v: &View) {
         r.satellites.len(),
         m.elapsed_s / 86400.0,
         r.options.duration_s / 86400.0,
-        if v.finished {
+        if stopped {
+            "· worker stopped (last completed results)"
+        } else if v.finished {
             "· finished"
         } else if v.running {
             "· running"
@@ -360,16 +449,25 @@ fn meters(ui: &mut egui::Ui, v: &View) {
         super::bytes(r.reuse_saved_bytes)
     ));
     ui.strong(format!(
-        "Failed acquisition updates: {} / {} due · {} jobs affected",
+        "Unfulfilled acquisition updates: {} / {} due · {} jobs affected",
         m.failed_updates, m.due_updates, m.affected_jobs
     ));
     ui.label(format!(
-        "{} complete · {} partial · {} with no coverage",
+        "{} complete · {} partial · {} with no accepted coverage",
         m.complete_updates,
         m.partial_updates,
         m.failed_updates - m.partial_updates
     ));
-    ui.small("A failure is a cadence deadline without full AOI coverage; a recurring job can fail multiple updates. Partial independent crops remain usable. No processing failures are modeled. Last 24 h uses simulation time and credits each crop at its end time.");
+    ui.label(format!("Baseline coverage by job: {} met every elapsed deadline · {} fell short · {} have no deadline yet",
+        m.jobs_meeting_all_due_updates, m.affected_jobs, m.jobs_without_due_updates));
+    ui.small("This tests full AOI coverage at the requested cadence, including for independent-crop jobs. A shortfall in this unconstrained baseline cannot be fixed by resource scheduling. Results apply to elapsed deadlines; they do not certify other dates or future deadlines.");
+    ui.small("Unfulfilled means a cadence deadline passed without full accepted AOI coverage. This counter is separate from worker/software errors. Missing orbital coverage, daylight restrictions and the allowed local solar-time window can all contribute; individual deadline causes are not yet classified. Partial independent crops remain usable.");
+    ui.small("All cadence slots count, including slots outside a job’s permitted time of day. Storage is not enforced in this baseline. The 24 h meter uses simulation time and credits crops at their end time.");
+    ui.collapsing("Acquisition eligibility diagnostics",|ui| {
+        let o=&r.opportunities;
+        ui.label(format!("{} intersecting job/track segments checked · {} rejected by daylight or solar-time requirements",o.geometrically_intersecting_job_segments,o.timing_or_daylight_rejected_segments));
+        ui.small("These are track-segment counts across the run, not a breakdown of failed deadlines. A job can have many segments, or none.");
+    });
     ui.collapsing("Per-satellite capture and storage meters", |ui| {
         egui::ScrollArea::vertical()
             .id_salt("satellite-capture-meters")
@@ -412,12 +510,16 @@ fn meters(ui: &mut egui::Ui, v: &View) {
 }
 fn map(ui: &mut egui::Ui, v: &View) {
     use egui_plot::{Line, Plot, Points};
-    ui.small("Blue: AOIs · amber: satellite ground positions · green: retained crop outlines from the last 10 simulated minutes (latest 2,000). Scroll to zoom; drag to pan. AOI outlines appear when zoomed in.");
+    ui.label("This is a longitude/latitude map of the capture session, not the setup globe.");
+    ui.small("Blue points mark requested AOIs (their boundaries appear when zoomed in). Amber points are satellite ground positions at the displayed simulation time. Green outlines are crops actually retained in the last 10 simulated minutes, limited to the latest 2,000 records.");
+    ui.small("Green outlines are recent acquisition activity, not cumulative job completion or a full sensor swath. They disappear from this map after 10 simulated minutes; the retained data stays in storage. Scroll to zoom; drag to pan.");
     Plot::new("capture-session-map")
         .include_x(-180.0)
         .include_x(180.0)
         .include_y(-90.0)
         .include_y(90.0)
+        .x_axis_label("Longitude (°)")
+        .y_axis_label("Latitude (°)")
         .data_aspect(1.0)
         .height(ui.available_height().max(180.0))
         .show(ui, |plot| {
@@ -546,6 +648,11 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(p.view.is_some(), "{:?}", p.error);
+        assert!(
+            !p.show_scene,
+            "Starting capture must preserve the current view"
+        );
+        p.show_scene = true;
         p.command(Command::Run(false));
         let mut labels = String::new();
         for _ in 0..3 {
@@ -566,10 +673,22 @@ mod tests {
                 text(&shape.shape, &mut labels);
             }
         }
-        assert!(labels.contains("Capture simulation"));
+        assert!(labels.contains("Capture diagnostic map"));
         assert!(labels.contains("last 24 h"));
-        assert!(labels.contains("failed updates"));
+        assert!(labels.contains("unfulfilled updates"));
         assert!(labels.contains("Save checkpoint"));
+        p.stopped = true;
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            p.scene(ctx, false);
+        });
+        labels.clear();
+        for shape in output.shapes {
+            text(&shape.shape, &mut labels);
+        }
+        assert!(labels.contains("Worker stopped"));
+        assert!(labels.contains("Run and save are disabled"));
+        p.stopped = false;
+
         let count = p.view.as_ref().unwrap().scene.anchors.len();
         p.start(Initial::Load(
             "/this-path-does-not-exist/capture.json.gz".into(),
