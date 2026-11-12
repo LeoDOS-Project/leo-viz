@@ -1,0 +1,106 @@
+{
+  "schema": "leo-worldview-comparison/v1",
+  "model": "450 km effective access corridor; circular secular-J2 orbits; spherical Earth; no daylight or pointing constraints",
+  "target_latitude_deg": 84,
+  "results": [
+    {
+      "name": "WorldView-3",
+      "days": 7.0,
+      "epoch_unix_s": 1794441600.0,
+      "longest_silence_s": 561895.3174169342,
+      "max_revisit_gap_s": 561895.3174169342,
+      "never_seen": 0,
+      "point_count": 2040,
+      "satellites": 1,
+      "scope": "finite_horizon_sampled_points_not_a_global_coverage_certificate",
+      "shells": [
+        {
+          "altitude_km": 617.0,
+          "argument_deg": 0.0,
+          "eccentricity": 0.0,
+          "inclination_deg": 97.9,
+          "phasing": 0,
+          "planes": 1,
+          "propagation": "j2",
+          "raan_offset_deg": 0.0,
+          "satellites_per_plane": 1,
+          "star": false
+        }
+      ],
+      "step_s": 10.0,
+      "swath_km": 450.0,
+      "worst_point": [
+        -6.0,
+        -172.5
+      ],
+      "fine_max_gap_s": 561895.3189816483
+    },
+    {
+      "name": "WorldView-30",
+      "days": 7.0,
+      "epoch_unix_s": 1794441600.0,
+      "longest_silence_s": 18035.050350063895,
+      "max_revisit_gap_s": 18035.050350063895,
+      "never_seen": 0,
+      "point_count": 2040,
+      "satellites": 30,
+      "scope": "finite_horizon_sampled_points_not_a_global_coverage_certificate",
+      "shells": [
+        {
+          "altitude_km": 617.0,
+          "argument_deg": 0.0,
+          "eccentricity": 0.0,
+          "inclination_deg": 97.9,
+          "phasing": 3,
+          "planes": 5,
+          "propagation": "j2",
+          "raan_offset_deg": 0.0,
+          "satellites_per_plane": 6,
+          "star": false
+        }
+      ],
+      "step_s": 10.0,
+      "swath_km": 450.0,
+      "worst_point": [
+        -30.0,
+        132.91019662496848
+      ],
+      "fine_max_gap_s": 18034.675143581117
+    },
+    {
+      "name": "WorldView-60",
+      "days": 7.0,
+      "epoch_unix_s": 1794441600.0,
+      "longest_silence_s": 8538.60671477308,
+      "max_revisit_gap_s": 8538.60671477308,
+      "never_seen": 0,
+      "point_count": 2040,
+      "satellites": 60,
+      "scope": "finite_horizon_sampled_points_not_a_global_coverage_certificate",
+      "shells": [
+        {
+          "altitude_km": 617.0,
+          "argument_deg": 0.0,
+          "eccentricity": 0.0,
+          "inclination_deg": 97.9,
+          "phasing": 14,
+          "planes": 20,
+          "propagation": "j2",
+          "raan_offset_deg": 0.0,
+          "satellites_per_plane": 3,
+          "star": false
+        }
+      ],
+      "step_s": 10.0,
+      "swath_km": 450.0,
+      "worst_point": [
+        -12.0,
+        -86.87694101250946
+      ],
+      "fine_max_gap_s": 8538.60726505547
+    }
+  ],
+  "worker_sha256": "9909942eb470aa9fb8430a5d3155b6a68b495613600803c843214a24f6f347f5",
+  "experiment_branch": "codex/constellation-optimizer",
+  "experiment_commit": "6ba5b8123d16c644c8d614c4f9eb6d6b68e00b3a"
+}

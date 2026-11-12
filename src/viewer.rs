@@ -2063,7 +2063,7 @@ impl ViewerState {
         if show_config && !self.show_tab_info {
             ui.separator();
 
-            let mut adam_applied = false;
+            let mut preset_swath = None;
             let mut const_to_remove: Option<usize> = None;
             let mut cameras_to_clean: Vec<usize> = Vec::new();
             let altitude_edit_time = self.tabs[tab_idx].settings.time;
@@ -2580,8 +2580,21 @@ impl ViewerState {
                                     .on_hover_text("169 satellites: 13 × 13, 70°, daily repeat, +Grid. Sets the Earth Observation swath to 20 km (shared by this view). Coverage is recomputed for this width.")
                                     .clicked() {
                                     crate::orbit_presets::apply_adam(cons);
-                                    adam_applied = true;
+                                    preset_swath = Some(crate::orbit_presets::ADAM_SWATH_KM);
                                     cameras_to_clean.push(cidx);
+                                }
+                                for fleet in leo_sim::worldview::Fleet::ALL {
+                                    let shell = fleet.shell();
+                                    if ui.add_enabled(planet.celestial_body == CelestialBody::Earth,
+                                        egui::Button::selectable(cons.preset == crate::orbit_presets::worldview_preset(fleet), fleet.name()))
+                                        .on_hover_text(format!(
+                                            "{} satellite(s): {} planes × {}, 617 km, 97.9°, J2. Sets this view's effective access width to 450 km (native camera swath: 13.1 km). {} No daylight or pointing schedule is included.",
+                                            shell.count(), shell.planes, shell.satellites_per_plane, fleet.baseline_note()))
+                                        .clicked() {
+                                        crate::orbit_presets::apply_worldview(cons, fleet);
+                                        preset_swath = Some(leo_sim::worldview::ACCESS_WIDTH_KM);
+                                        cameras_to_clean.push(cidx);
+                                    }
                                 }
                                 if ui.selectable_label(cons.preset == Preset::Starlink, "Starlink").clicked() {
                                     cons.sats_per_plane = 22; cons.num_planes = 72;
@@ -2901,9 +2914,8 @@ impl ViewerState {
             }
         }); });
 
-                if adam_applied {
-                    self.tabs[tab_idx].settings.pushbroom.swath_km =
-                        crate::orbit_presets::ADAM_SWATH_KM;
+                if let Some(swath) = preset_swath {
+                    self.tabs[tab_idx].settings.pushbroom.swath_km = swath;
                     let planet = &mut self.tabs[tab_idx].planets[planet_idx];
                     planet.ground_track_history.clear();
                     planet.pushbroom_history.clear();

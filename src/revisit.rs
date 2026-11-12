@@ -438,6 +438,9 @@ impl Panel {
             let swath=tab.settings.pushbroom.swath_km;
             let key=fingerprint(planet,swath,epoch);
             ui.label(format!("Uses the current {:.1} km pushbroom width and visible constellations in this Earth view.",swath));
+            if crate::orbit_presets::has_worldview(planet) {
+                crate::orbit_presets::worldview_note(ui);
+            }
             ui.small("Continuous nadir imaging on a spherical Earth. Daylight, clouds, jobs, resource limits, maneuvers and debris are excluded. A point observation does not imply full AOI coverage.");
             if ui.add_enabled(!busy,egui::Button::new("Calculate revisit")).clicked() {
                 #[cfg(not(target_arch="wasm32"))]

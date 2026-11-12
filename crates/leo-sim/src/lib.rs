@@ -12,6 +12,7 @@ pub mod observation;
 pub mod resources;
 pub mod repeat_ground_track;
 pub mod revisit;
+pub mod worldview;
 pub mod storage;
 pub use config::*;
 pub use engine::{Event, OperationStatus, Report, Simulator};

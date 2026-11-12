@@ -48,6 +48,9 @@ pub struct NumericalState {
 pub enum Preset {
     None,
     Adam,
+    WorldView3,
+    WorldView30,
+    WorldView60,
     Starlink,
     OneWeb,
     Iridium,
@@ -310,6 +313,9 @@ impl ConstellationConfig {
         match self.preset {
             Preset::None => "Custom",
             Preset::Adam => "ADAM",
+            Preset::WorldView3 => "WorldView-3",
+            Preset::WorldView30 => "WorldView-30",
+            Preset::WorldView60 => "WorldView-60",
             Preset::Starlink => "Starlink",
             Preset::OneWeb => "OneWeb",
             Preset::Iridium => "Iridium",

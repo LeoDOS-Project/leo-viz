@@ -225,6 +225,9 @@ impl Panel {
                 ui.label("Select a tab with an Earth globe."); return;
             }
             tab.settings.pushbroom.ui(ui,true);
+            if crate::orbit_presets::has_worldview(&tab.planets[self.planet]) {
+                crate::orbit_presets::worldview_note(ui);
+            }
             self.literature.ui(ui, &mut tab.planets[self.planet], &mut tab.settings.pushbroom);
             if let Some(band)=self.designer.ui(ui,&mut tab.planets[self.planet],tab.settings.pushbroom.swath_km) {
                 self.whole_earth=band>=90.0;

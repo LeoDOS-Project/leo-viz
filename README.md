@@ -395,6 +395,48 @@ The renderer-independent [`leo-capture`](crates/leo-capture/README.md) crate als
 provides a headless CLI and optional streaming JSONL acquisition opportunities for
 the later scheduler. No execution engine or constrained scheduler is introduced.
 
+## WorldView orbit presets
+
+The Earth constellation **Preset** dropdown includes **WorldView-3** (one
+satellite), **WorldView-30**, and **WorldView-60**. The latter two are hypothetical
+fleets using WorldView-3's nominal **617 km altitude and 97.9° retrograde
+inclination**, propagated with secular J2. The presets replace orbital overrides,
+clear stale tracks, and set the view's shared effective width to **450 km**.
+They preserve resource profiles. RAAN and phase are design coordinates, not a
+live ephemeris or a fixed 10:30 local solar time for every plane.
+
+| Preset | Planes × satellites | Walker Delta phasing F | Largest sampled gap across ±84° |
+| --- | --- | --- | --- |
+| WorldView-3 | 1 × 1 | 0 | 6.50 days |
+| WorldView-30 | 5 × 6 | 3 | 5.01 hours |
+| WorldView-60 | 20 × 3 | 14 | 2.37 hours |
+
+The 450 km width represents an **idealized accessible corridor**. WorldView-3's
+native camera swath is **13.1 km**; its operator quotes 4.5-day revisit at 40° N
+with viewing angles within 20° of nadir. That is not a worst-case whole-band
+guarantee, and dividing it by satellite count does not determine a fleet's
+maximum revisit. The preview, data estimates, and capture baseline currently
+treat the full selected width as continuously available. Steering schedules,
+simultaneous collection capacity, and daylight are excluded from geometric
+revisit. See the [operator datasheet](https://pacgeo.com/wp-content/uploads/2025/12/Vantor_WorldView-3_25AUG2025_Datasheet_PacGeo.pdf)
+and [USGS orbit characterization](https://pubs.usgs.gov/of/2021/1030/i/ofr20211030i_ver1.1.pdf).
+
+These results cover 2,040 jittered geographic points, including ±84°, over
+seven days with 10-second interpolated track segments. Every sampled point was
+seen; the worst 20 points per preset were rechecked at five seconds. The earlier
+three-day screen gave 4.74 hours for WorldView-30; the longer run raised that
+measurement to 5.01 hours. These are measured gaps, **not all-time bounds or a
+continuous geographic coverage certificate**. The single-satellite result is
+also a model observation, not a claim about commercial service performance.
+
+Use **Earth Observation → Sampled latitude forecast…** to measure the active
+view. The sampler also shows rows near the geometric reach of ±84.12°, slightly
+beyond this comparison's ±84° boundary; those rows can have larger gaps.
+The recorded inputs and validation summary are in
+[`docs/worldview-presets.json`](docs/worldview-presets.json). Full search tooling,
+per-point audits, and optimization experiments remain on the
+`codex/constellation-optimizer` branch.
+
 ## ADAM orbit preset
 
 Open a constellation's basic **Preset** dropdown (beside Starlink, OneWeb, etc.)
