@@ -641,3 +641,212 @@ fn preparation_reports_distinct_stages_and_can_cancel_before_building_geometry()
     assert_eq!(stages.iter().filter(|s| **s == Stage::Ready).count(), 1);
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+#[ignore = "50k AOIs / 169 satellites capture performance measurement"]
+fn benchmark_capture_pipeline() {
+    use crate::session::{Inputs, Orbit, Satellite, Session};
+    let records = crate::dataset::decode(include_bytes!(
+        "../../../assets/aois/default-jobs-oriented.json.gz"
+    ))
+    .unwrap();
+    let jobs = Generator::default()
+        .generate(records.iter().map(|(a, _)| a.clone()))
+        .unwrap();
+    let shell = leo_sim::orbit::WalkerShell {
+        planes: 13,
+        satellites_per_plane: 13,
+        altitude_km: 561.3856170563513,
+        inclination_deg: 70.0,
+        phasing: 0,
+        ..Default::default()
+    };
+    let satellites = (0..13)
+        .flat_map(|plane| (0..13).map(move |sat| (plane, sat)))
+        .map(|(plane, sat)| Satellite {
+            name: format!("{plane}:{sat}"),
+            constellation: "ADAM".into(),
+            orbit: Orbit::Analytical {
+                elements: shell.elements(plane, sat),
+            },
+        })
+        .collect();
+    let inputs = Inputs {
+        orbit_epoch_unix_s: 946728000.0,
+        start_s: 0.0,
+        satellites,
+        jobs,
+        regions: records.into_iter().map(|(_, r)| r).collect(),
+        capture: Default::default(),
+        swath_km: 20.0,
+        options: Options {
+            duration_s: 7200.0,
+            ..Default::default()
+        },
+    };
+    let start = std::time::Instant::now();
+    eprintln!(
+        "workers: {}; process memory: {:?}; physical RAM: {:?}",
+        crate::resources::worker_limit(),
+        crate::resources::process_memory(),
+        crate::resources::physical_memory()
+    );
+    let mut s = Session::new(inputs, |_| true).unwrap();
+    eprintln!("atlas: {:.3}s", start.elapsed().as_secs_f64());
+    let capture = std::time::Instant::now();
+    for _ in 0..10 {
+        s.advance(12).unwrap();
+    }
+    eprintln!(
+        "10 simulated minutes: {:.3}s; {} captures; {:.6} bytes",
+        capture.elapsed().as_secs_f64(),
+        s.state().captures.len(),
+        s.report().retained_physical_bytes
+    );
+    let display = std::time::Instant::now();
+    for _ in 0..100 {
+        let report = s.report().summary(100);
+        std::hint::black_box(report);
+        std::hint::black_box(s.meters());
+    }
+    eprintln!(
+        "100 display summaries: {:.3}s",
+        display.elapsed().as_secs_f64()
+    );
+    let capture = std::time::Instant::now();
+    for _ in 0..120 {
+        s.advance(1).unwrap();
+    }
+    eprintln!(
+        "next 10 simulated minutes, per-tick resource boundaries: {:.3}s; process memory: {:?}",
+        capture.elapsed().as_secs_f64(),
+        crate::resources::process_memory()
+    );
+}
+
+#[test]
+fn parallel_atlas_matches_serial_and_piece_index_matches_exhaustive_bounds() {
+    use geo::Intersects;
+    let (mut jobs, mut regions) = fixture(vec![vec![ring(0.1, 0.1, 0.1)]], 48);
+    for (i, (job, region)) in jobs.iter_mut().zip(&mut regions).enumerate() {
+        region.polygons = vec![vec![ring(
+            0.02 + (i % 8) as f64 * 0.2,
+            0.02 + (i / 8) as f64 * 0.2,
+            0.15,
+        )]];
+        job.aoi.geometry_hash = hash(&serde_json::to_vec(&region.polygons).unwrap());
+    }
+    let serial = Atlas::with_workers(&jobs, &regions, 2.0, 1.0, 1, |_| true).unwrap();
+    let parallel = Atlas::with_workers(&jobs, &regions, 2.0, 1.0, 4, |_| true).unwrap();
+    assert_eq!(serial.job_areas_km2, parallel.job_areas_km2);
+    assert_eq!(serial.patch_count(), parallel.patch_count());
+    for (a, b) in serial.patches.iter().zip(&parallel.patches) {
+        assert_eq!(a.chart.center, b.chart.center);
+        assert_eq!(a.pieces.len(), b.pieces.len());
+        for (x, y) in a.pieces.iter().zip(&b.pieces) {
+            assert_eq!(x.job, y.job);
+            assert_eq!(x.shape, y.shape);
+        }
+        for i in 0..40 {
+            let bounds = geo::Rect::new(
+                (-160.0 + i as f64 * 8.0, -130.0),
+                (-130.0 + i as f64 * 8.0, 100.0),
+            );
+            let expected: Vec<_> = a
+                .pieces
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.bounds.intersects(&bounds))
+                .map(|(i, _)| i)
+                .collect();
+            assert_eq!(b.candidates(bounds), expected);
+        }
+    }
+}
+
+#[test]
+fn parallel_capture_preserves_exact_order_statistics_and_coverage() {
+    let input = session_inputs();
+    let atlas = atlas(&input.jobs, &input.regions);
+    let run = |workers| {
+        let initial = Baseline::new(
+            &input.jobs,
+            &atlas,
+            4,
+            input.epoch(),
+            input.swath_km,
+            input.capture,
+            &input.options,
+        )
+        .unwrap()
+        .into_state();
+        let mut baseline = Baseline::resume(&input.jobs, &atlas, &input.options, initial);
+        let mut opportunities = Vec::new();
+        let stats = crate::baseline::opportunities_range(
+            &input.jobs,
+            &atlas,
+            4,
+            input.epoch(),
+            input.swath_km,
+            &input.options,
+            0,
+            24,
+            Default::default(),
+            workers,
+            |s, t| {
+                input.satellites[0]
+                    .orbit
+                    .position(t + s as f64, input.orbit_epoch_unix_s)
+            },
+            |op| {
+                opportunities.push(crate::baseline::opportunity_json(&op, &input.jobs, &atlas));
+                baseline.accept(&op)
+            },
+            |_| true,
+        )
+        .unwrap();
+        baseline.update_clock(120.0);
+        baseline.report.opportunities = stats;
+        (
+            opportunities,
+            serde_json::to_value(baseline.into_state()).unwrap(),
+        )
+    };
+    let serial = run(1);
+    assert!(!serial.0.is_empty());
+    assert_eq!(serial, run(4));
+}
+
+#[test]
+fn display_summary_and_cached_meters_match_full_report_after_every_tick() {
+    let mut s = crate::session::Session::new(session_inputs(), |_| true).unwrap();
+    while !s.finished() {
+        s.advance(1).unwrap();
+        let mut expected = s.report().clone();
+        expected.jobs.truncate(1);
+        assert_eq!(
+            serde_json::to_value(expected).unwrap(),
+            serde_json::to_value(s.report().summary(1)).unwrap()
+        );
+        let meters = s.meters();
+        assert_eq!(meters.elapsed_s, s.meters().elapsed_s);
+        let mut bytes = vec![0.0; s.inputs().satellites.len()];
+        let mut count = 0;
+        for c in &s.state().captures {
+            if c.end_s > s.elapsed_s() - 86400.0 {
+                bytes[c.satellite] += c.bytes;
+                count += 1;
+            }
+        }
+        assert_eq!(meters.captured_last_24h_bytes, bytes);
+        assert_eq!(meters.captures_last_24h, count);
+        assert_eq!(
+            meters.failed_updates,
+            s.report()
+                .jobs
+                .iter()
+                .map(|j| j.due_updates - j.complete_due_updates)
+                .sum::<u64>()
+        );
+    }
+}

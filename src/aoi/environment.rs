@@ -3,6 +3,11 @@ use super::{data, generate, preview::Preview};
 use eframe::egui;
 use std::sync::Arc;
 
+pub(super) enum Action {
+    Generate(generate::Settings, data::Input),
+    Compact(Arc<Preview>),
+}
+
 pub(super) struct Source {
     pub kind: &'static str,
     pub name: &'static str,
@@ -82,11 +87,7 @@ impl Source {
         )
     }
 
-    pub fn ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        busy: bool,
-    ) -> Option<(generate::Settings, data::Input)> {
+    pub fn ui(&mut self, ui: &mut egui::Ui, busy: bool) -> Option<Action> {
         let bundled = self.dataset.is_default();
         if bundled && self.kind == "river" {
             self.flow = self.flow.max(10.0);
@@ -142,12 +143,13 @@ impl Source {
                     ui.label("Anchor latitude band"); ui.add(egui::DragValue::new(&mut self.latitude).range(1.0..=85.0).prefix("±").suffix("°")); ui.end_row();
                 });
                 ui.small("Sizes are log-uniform; averages are expected values. Overlapping jobs are retained.");
+                ui.small("Stored boundaries are capped at 100 edges per AOI, including holes and separate pieces. Smallest features may be removed to preserve larger features within this budget.");
                 ui.collapsing("Dataset cache and geometry", |ui| {
                     self.dataset.ui(ui);
                     ui.horizontal(|ui| { ui.label("Projected tile edge");
                         ui.add(egui::DragValue::new(&mut self.tile_edge).range(0.05..=10.0).speed(0.05).suffix(" km")); });
                 });
-                if ui.button(format!("Generate {}", self.name.to_lowercase())).clicked() { request = Some(self.request()); }
+                if ui.button(format!("Generate {}", self.name.to_lowercase())).clicked() { let (settings, input) = self.request(); request = Some(Action::Generate(settings, input)); }
             });
             if let Some(preview) = &self.preview {
                 ui.separator();
@@ -155,6 +157,10 @@ impl Source {
                 ui.small(format!("Area {:.2}–{:.2} km² · seed {}", preview.min_area, preview.max_area, preview.seed));
                 if let Some(length) = preview.mean_path_length {
                     ui.small(format!("Actual average path {length:.1} km · {} paths ended early at outlets, gaps or closed coastlines", preview.truncated_paths));
+                }
+                preview.complexity_ui(ui);
+                if ui.add_enabled(!busy && preview.max_edges > super::compact::EDGE_LIMIT, egui::Button::new("Simplify loaded AOIs to 100 edges")).on_hover_text("Changes the stored footprint and area. Reassign jobs afterward and use Save AOIs to keep the simplified geometry. Existing files and capture checkpoints are unchanged.").clicked() {
+                    request = Some(Action::Compact(Arc::clone(preview)));
                 }
                 ui.checkbox(&mut self.visible, "Show on Earth globes");
                 ui.add(egui::Slider::new(&mut self.opacity, 0.05..=1.0).text("Outline opacity"));

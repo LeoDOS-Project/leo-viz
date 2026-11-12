@@ -107,7 +107,7 @@ impl Default for Panel {
 impl Panel {
     fn poll(&mut self, ctx: &egui::Context) {
         if let Some(p) = &self.pending {
-            if let Ok(view) = p.views.try_recv() {
+            if let Some(view) = p.take_view() {
                 self.view = Some(view);
                 self.worker = self.pending.take();
                 self.stopped = false;
@@ -125,12 +125,12 @@ impl Panel {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         if let Some(w) = &self.worker {
-            while let Ok(view) = w.views.try_recv() {
+            if let Some(view) = w.take_view() {
                 self.view = Some(view);
             }
             while let Ok(event) = w.events.try_recv() {
                 match event {
-                    Event::Error(e) => self.error = Some(e),
+                    Event::Error(e) | Event::Paused(e) => self.error = Some(e),
                     Event::Stopped(e) => {
                         self.stopped = true;
                         if let Some(v) = &mut self.view {
@@ -158,6 +158,9 @@ impl Panel {
         }
     }
     fn command(&mut self, command: Command) {
+        if !self.stopped && matches!(command, Command::Run(true) | Command::FastForward(_)) {
+            self.error = None;
+        }
         if let Some(w) = &self.worker {
             if w.commands.send(command).is_err() {
                 w.fast.store(false, Ordering::Relaxed);
@@ -172,7 +175,9 @@ impl Panel {
     fn start(&mut self, initial: Initial) {
         // Keep the old checkpoint/session available if loading or preparation fails.
         self.command(Command::Run(false));
-        self.pending = Some(Worker::spawn(initial, self.speed));
+        let worker = Worker::spawn(initial, self.speed);
+        let _ = worker.commands.send(Command::Scene(self.show_scene));
+        self.pending = Some(worker);
         self.error = None;
         self.notice = None;
         // Starting or loading a run must not replace the user’s current globe view.
@@ -207,8 +212,11 @@ impl Panel {
             {
                 self.command(Command::Speed(self.speed));
             }
-            ui.checkbox(&mut self.show_scene, "Open capture diagnostic map")
-                .on_hover_text("Optional longitude/latitude map of the frozen capture session. Replaces the globe while open; closing it returns to the setup view.");
+            if ui.checkbox(&mut self.show_scene, "Open capture diagnostic map")
+                .on_hover_text("Optional longitude/latitude map of the frozen capture session. Replaces the globe while open; closing it returns to the setup view.").changed() {
+                self.command(Command::Scene(self.show_scene));
+                if let Some(p) = &self.pending { let _ = p.commands.send(Command::Scene(self.show_scene)); }
+            }
         });
         ui.horizontal_wrapped(|ui| {
             ui.add(
@@ -247,6 +255,15 @@ impl Panel {
             #[cfg(not(target_arch = "wasm32"))]
             if ui.button("Load checkpoint").clicked() {
                 self.start(Initial::Load(self.path.clone()));
+            }
+            if ui.add_enabled(self.worker.is_some() || self.pending.is_some(), egui::Button::new("Unload session"))
+                .on_hover_text("Release this session's memory. Stops capture and discards unsaved progress; save a checkpoint first.").clicked() {
+                self.pending = None;
+                self.worker = None;
+                self.view = None;
+                self.stopped = false;
+                self.error = None;
+                self.notice = Some("Session unloaded; unsaved progress was discarded. Load a checkpoint to resume.".into());
             }
         });
         if let Some(e) = &self.error {
@@ -308,9 +325,40 @@ impl Panel {
             #[cfg(target_arch="wasm32")]
             ui.small("Resumable capture runs require the native app.");
             ui.small("New runs freeze the selected constellation, current epoch/positions, AOIs, jobs and sensor. Setup edits affect the next run. Loading restores the saved session, paused. The optional diagnostic map uses its own saved constellation and clock.");
+            #[cfg(not(target_arch="wasm32"))]
+            self.resource_controls(ui);
             self.preparation_ui(ui);
             self.controls(ui);
             if let Some(v)=&self.view {meters(ui,v,self.stopped);}
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn resource_controls(&self, ui: &mut egui::Ui) {
+        use leo_capture::resources as r;
+        ui.collapsing("Native resource limits", |ui| {
+            let mut workers = r::worker_limit();
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("Background workers ({} CPUs detected)", r::cpu_count()));
+                if ui.add(egui::DragValue::new(&mut workers).range(1..=r::cpu_count())).changed() { r::set_worker_limit(workers); }
+            });
+            let mut duty = r::duty_percent();
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Simulation CPU activity");
+                if ui.add(egui::Slider::new(&mut duty, 10..=100).suffix("%")).changed() { r::set_duty_percent(duty); }
+            });
+            let mut gib = r::memory_limit() as f64 / r::GIB as f64;
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Client memory pause threshold");
+                if ui.add(egui::DragValue::new(&mut gib).range(0.5..=1024.0).speed(0.5).suffix(" GiB")).changed() { r::set_memory_limit((gib * r::GIB as f64) as u64); }
+            });
+            if let Some(bytes) = self.view.as_ref().and_then(|v| v.memory_bytes) {
+                ui.label(format!("Client memory at last update: {:.2} GiB", bytes as f64 / r::GIB as f64));
+            } else if r::process_memory().is_none() {
+                ui.small("Process memory monitoring is unavailable on this platform; automatic memory pausing is unavailable.");
+            }
+            ui.small("Background worker capacity is shared by AOI generation, job assignment and capture preparation. Defaults leave two CPUs free and use at most eight workers. Changes apply as current work batches finish.");
+            ui.small("Simulation CPU activity controls calculation/rest time, not total system CPU. The memory pause threshold defaults to 16 GiB. These settings apply for this app session.");
+            ui.small("The memory threshold covers the whole client. Capture pauses between completed ticks and remains saveable; preparation cancels. An operation already in progress can overshoot. Retained captures are never deleted to meet the limit. Save, then Unload session to release its memory before loading another checkpoint.");
         });
     }
     fn preparation_ui(&mut self, ui: &mut egui::Ui) {
@@ -387,7 +435,10 @@ impl Panel {
 }
 fn preparation_message(p: &leo_capture::session::PreparationProgress) -> String {
     match p.stage {
-        PreparationStage::ReadCheckpoint => "Reading and decompressing checkpoint…".into(),
+        PreparationStage::ReadCheckpoint => format!(
+            "Reading and decompressing checkpoint… {:.1} MiB decoded",
+            p.completed as f64 / (1024.0 * 1024.0)
+        ),
         PreparationStage::ValidateInputs => {
             format!("Validating sensor, constellation and {} jobs…", p.total)
         }
@@ -511,7 +562,7 @@ fn meters(ui: &mut egui::Ui, v: &View, stopped: bool) {
 fn map(ui: &mut egui::Ui, v: &View) {
     use egui_plot::{Line, Plot, Points};
     ui.label("This is a longitude/latitude map of the capture session, not the setup globe.");
-    ui.small("Blue points mark requested AOIs (their boundaries appear when zoomed in). Amber points are satellite ground positions at the displayed simulation time. Green outlines are crops actually retained in the last 10 simulated minutes, limited to the latest 2,000 records.");
+    ui.small("Blue points mark requested AOIs (their boundaries appear when zoomed in, up to 50,000 vertices per frame). Amber points are satellite ground positions at the displayed simulation time. Green outlines are crops actually retained in the last 10 simulated minutes, limited to the latest 2,000 records and 100,000 vertices.");
     ui.small("Green outlines are recent acquisition activity, not cumulative job completion or a full sensor swath. They disappear from this map after 10 simulated minutes; the retained data stays in storage. Scroll to zoom; drag to pan.");
     Plot::new("capture-session-map")
         .include_x(-180.0)
@@ -525,28 +576,22 @@ fn map(ui: &mut egui::Ui, v: &View) {
         .show(ui, |plot| {
             let bounds = plot.plot_bounds();
             plot.points(
-                Points::new("AOIs", v.scene.anchors.clone())
+                Points::new("AOIs", v.scene.anchors.as_slice())
                     .radius(1.5)
                     .color(egui::Color32::from_rgb(80, 130, 210)),
             );
             if bounds.width() < 30.0 {
-                for region in &v.scene.regions {
-                    for polygon in &region.polygons {
-                        for ring in polygon {
-                            if ring.iter().any(|p| {
-                                p[0] >= bounds.min()[0]
-                                    && p[0] <= bounds.max()[0]
-                                    && p[1] >= bounds.min()[1]
-                                    && p[1] <= bounds.max()[1]
-                            }) {
-                                plot.line(
-                                    Line::new("", ring.clone())
-                                        .color(egui::Color32::from_rgb(80, 130, 210))
-                                        .width(1.0),
-                                );
-                            }
-                        }
+                let mut vertices = 0;
+                for ring in v.scene.visible_rings(bounds.min(), bounds.max()) {
+                    if vertices + ring.len() > 50_000 {
+                        break;
                     }
+                    vertices += ring.len();
+                    plot.line(
+                        Line::new("", ring.clone())
+                            .color(egui::Color32::from_rgb(80, 130, 210))
+                            .width(1.0),
+                    );
                 }
             }
             for footprint in &v.footprints {

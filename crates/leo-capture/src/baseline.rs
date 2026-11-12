@@ -2,7 +2,7 @@ use crate::{
     geometry::{self, Atlas, Shape},
     workload::{Fulfilment, Job},
 };
-use geo::{Area, BooleanOps, BoundingRect, Intersects, MultiPolygon};
+use geo::{Area, BooleanOps, BoundingRect, MultiPolygon};
 use leo_sim::{
     acquisition::CaptureProfile,
     geometry::{
@@ -107,6 +107,11 @@ pub fn opportunities(
         0,
         (options.duration_s / options.step_s).ceil() as u64,
         OpportunityStats::default(),
+        if jobs.len() >= 1000 {
+            crate::parallel::worker_count(satellite_count)
+        } else {
+            1
+        },
         position,
         visit,
         progress,
@@ -125,6 +130,7 @@ pub(crate) fn opportunities_range(
     first_tick: u64,
     last_tick: u64,
     mut stats: OpportunityStats,
+    workers: usize,
     mut position: impl FnMut(usize, f64) -> Result<Vector, String>,
     mut visit: impl FnMut(Opportunity) -> Result<(), String>,
     mut progress: impl FnMut(f32) -> bool,
@@ -175,113 +181,46 @@ pub(crate) fn opportunities_range(
         }
         let start = tick as f64 * options.step_s;
         let end = ((tick + 1) as f64 * options.step_s).min(options.duration_s);
+        // Propagators keep their original FnMut contract and sampling order.
+        // Only independent intersection work runs concurrently. Buffer at most
+        // one tick, then commit in satellite/patch/crop order, including sums.
+        let mut work = Vec::with_capacity(satellite_count);
         for (satellite, (a, na)) in previous.iter_mut().enumerate() {
             let (b, nb) = sample(satellite, end)?;
-            if dot(*a, b) < 0.1_f64.cos() {
-                return Err(
-                    "Ground-track segment exceeds 637 km; reduce step or check propagation.".into(),
-                );
-            }
-            for patch_id in atlas.candidates(*a, b, half) {
-                let patch = &atlas.patches[patch_id];
-                // BVH leaves are conservative; filter each patch before projecting.
-                let middle = geometry::unit(std::array::from_fn(|i| a[i] + b[i]));
-                if norm(leo_sim::geometry::sub(patch.sphere.center, middle))
-                    > patch.sphere.radius + norm(leo_sim::geometry::sub(*a, middle)) + half + 1e-8
-                {
-                    continue;
-                }
-                let full_strip =
-                    geometry::strip(&patch.chart, *a, b, *na, nb, half, options.edge_km);
-                let Some(bounds) = full_strip.bounding_rect() else {
-                    continue;
-                };
-                let mut crops = Vec::new();
-                for piece in &patch.pieces {
-                    if !piece.bounds.intersects(&bounds) {
-                        continue;
-                    }
-                    let intersect = piece.shape.intersection(&full_strip);
-                    if intersect.unsigned_area() <= 1e-10 {
-                        continue;
-                    }
-                    stats.geometrically_intersecting_job_segments += 1;
-                    let job = &jobs[piece.job];
-                    let cadence = job.cadence_hours * 3600.0;
-                    let phase = job.acquisition.phase_hours * 3600.0;
-                    let mut left = start.max(phase);
-                    let mut accepted = false;
-                    while left < end - 1e-9 {
-                        let slot = ((left - phase) / cadence + 1e-10).floor() as u64;
-                        let right = end.min(phase + (slot + 1) as f64 * cadence);
-                        if right <= left {
-                            break;
-                        }
-                        let shape = if left == start && right == end {
-                            intersect.clone()
-                        } else {
-                            let aa = geometry::mix(*a, b, (left - start) / (end - start));
-                            let bb = geometry::mix(*a, b, (right - start) / (end - start));
-                            let naa = geometry::normal_between(
-                                *na,
-                                nb,
-                                aa,
-                                (left - start) / (end - start),
-                            );
-                            let nbb = geometry::normal_between(
-                                *na,
-                                nb,
-                                bb,
-                                (right - start) / (end - start),
-                            );
-                            piece.shape.intersection(&geometry::strip(
-                                &patch.chart,
-                                aa,
-                                bb,
-                                naa,
-                                nbb,
-                                half,
-                                options.edge_km,
-                            ))
-                        };
-                        if shape.unsigned_area() > 1e-10
-                            && usable(job, &shape, &patch.chart, epoch_unix_s, left, right)
-                        {
-                            accepted = true;
-                            crops.push(Crop {
-                                job: piece.job,
-                                slot,
-                                start_s: left,
-                                end_s: right,
-                                geometry: shape,
-                            });
-                        }
-                        left = right;
-                    }
-                    if !accepted {
-                        stats.timing_or_daylight_rejected_segments += 1;
-                    }
-                }
-                if !crops.is_empty() {
-                    let mut union = MultiPolygon::new(vec![]);
-                    for c in &crops {
-                        stats.eligible_logical_area_km2 += c.geometry.unsigned_area();
-                        union = union.union(&c.geometry);
-                    }
-                    stats.eligible_physical_area_km2 += union.unsigned_area();
-                    stats.strip_patch_opportunities += 1;
-                    stats.eligible_job_crops += crops.len() as u64;
-                    visit(Opportunity {
-                        satellite,
-                        patch: patch_id,
-                        start_s: start,
-                        end_s: end,
-                        crops,
-                    })?;
-                }
-            }
+            work.push((satellite, *a, *na, b, nb));
             *a = b;
             *na = nb;
+        }
+        let segments = crate::parallel::in_flight(work, workers, |(satellite, a, na, b, nb)| {
+            segment(
+                jobs,
+                atlas,
+                epoch_unix_s,
+                half,
+                options,
+                satellite,
+                start,
+                end,
+                a,
+                na,
+                b,
+                nb,
+            )
+        })?;
+        for segment in segments {
+            stats.geometrically_intersecting_job_segments += segment.geometric;
+            stats.timing_or_daylight_rejected_segments += segment.rejected;
+            for op in segment.ops {
+                let mut union = MultiPolygon::new(vec![]);
+                for c in &op.crops {
+                    stats.eligible_logical_area_km2 += c.geometry.unsigned_area();
+                    union = union.union(&c.geometry);
+                }
+                stats.eligible_physical_area_km2 += union.unsigned_area();
+                stats.strip_patch_opportunities += 1;
+                stats.eligible_job_crops += op.crops.len() as u64;
+                visit(op)?;
+            }
         }
     }
     progress(1.0);
@@ -308,6 +247,9 @@ fn usable(
         let rotation = gmst(epoch + t);
         let anchor = ground_position(job.aoi.latitude, job.aoi.longitude, 1.0, rotation);
         let local_time = local_solar_time_hours(anchor, sun);
+        if !job.acquisition.accepts(local_time, 90.0) {
+            return false;
+        }
         let (s, c) = rotation.sin_cos();
         let min_elevation = shape
             .0
@@ -317,9 +259,11 @@ fn usable(
             .map(|p| {
                 let v = chart.inverse(*p);
                 let inertial = [c * v[0] + s * v[2], v[1], -s * v[0] + c * v[2]];
-                dot(inertial, sun).clamp(-1.0, 1.0).asin().to_degrees()
+                dot(inertial, sun).clamp(-1.0, 1.0)
             })
-            .fold(90.0, f64::min);
+            .fold(1.0, f64::min)
+            .asin()
+            .to_degrees();
         job.acquisition.accepts(local_time, min_elevation)
     })
 }
@@ -365,6 +309,28 @@ pub struct Report {
     pub reused_physical_bytes: f64,
     pub dropped_jobs: u64,
     pub assumptions: Vec<String>,
+}
+impl Report {
+    /// Small display snapshot. Never clone the full job table just to truncate it.
+    pub fn summary(&self, job_limit: usize) -> Self {
+        Self {
+            schema_version: self.schema_version,
+            mode: self.mode.clone(),
+            epoch_unix_s: self.epoch_unix_s,
+            swath_km: self.swath_km,
+            capture: self.capture,
+            options: self.options.clone(),
+            jobs: self.jobs.iter().take(job_limit).cloned().collect(),
+            satellites: self.satellites.clone(),
+            opportunities: self.opportunities.clone(),
+            retained_physical_bytes: self.retained_physical_bytes,
+            fulfilled_logical_bytes: self.fulfilled_logical_bytes,
+            reuse_saved_bytes: self.reuse_saved_bytes,
+            reused_physical_bytes: self.reused_physical_bytes,
+            dropped_jobs: self.dropped_jobs,
+            assumptions: self.assumptions.clone(),
+        }
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Request {
@@ -716,6 +682,7 @@ impl BaselineState {
         atlas: &Atlas,
         satellites: usize,
         now: f64,
+        mut progress: impl FnMut(usize, usize) -> bool,
     ) -> Result<(), String> {
         use geo::CoordsIter;
         let valid_shape = |shape: &Shape| {
@@ -750,6 +717,9 @@ impl BaselineState {
         }
         let mut expiry = BTreeSet::new();
         for (&(job, slot), r) in &self.active {
+            if !progress(0, self.captures.len()) {
+                return Err("Cancelled while validating partial coverage".into());
+            }
             let j = jobs.get(job).ok_or_else(invalid)?;
             let deadline =
                 (j.acquisition.phase_hours + (slot + 1) as f64 * j.cadence_hours) * 3600.0;
@@ -769,7 +739,10 @@ impl BaselineState {
         }
         let mut totals = vec![0.0; satellites];
         let mut last = 0.0;
-        for c in &self.captures {
+        for (i, c) in self.captures.iter().enumerate() {
+            if !progress(i, self.captures.len()) {
+                return Err("Cancelled while validating captures".into());
+            }
             if c.satellite >= satellites
                 || c.patch >= atlas.patches.len()
                 || !c.start_s.is_finite()
@@ -833,4 +806,116 @@ mod regression_tests {
         let repeated = merge_coverage(&merged, &fixture.crop).unwrap();
         assert!((repeated.unsigned_area() - merged.unsigned_area()).abs() < expected * 1e-6);
     }
+}
+
+struct Segment {
+    ops: Vec<Opportunity>,
+    geometric: u64,
+    rejected: u64,
+}
+#[allow(clippy::too_many_arguments)]
+fn segment(
+    jobs: &[Job],
+    atlas: &Atlas,
+    epoch_unix_s: f64,
+    half: f64,
+    options: &Options,
+    satellite: usize,
+    start: f64,
+    end: f64,
+    a: Vector,
+    na: Vector,
+    b: Vector,
+    nb: Vector,
+) -> Result<Segment, String> {
+    let mut ops = Vec::new();
+    let mut geometric = 0;
+    let mut rejected = 0;
+    if dot(a, b) < 0.1_f64.cos() {
+        return Err(
+            "Ground-track segment exceeds 637 km; reduce step or check propagation.".into(),
+        );
+    }
+    for patch_id in atlas.candidates(a, b, half) {
+        let patch = &atlas.patches[patch_id];
+        // BVH leaves are conservative; filter each patch before projecting.
+        let middle = geometry::unit(std::array::from_fn(|i| a[i] + b[i]));
+        if norm(leo_sim::geometry::sub(patch.sphere.center, middle))
+            > patch.sphere.radius + norm(leo_sim::geometry::sub(a, middle)) + half + 1e-8
+        {
+            continue;
+        }
+        let full_strip = geometry::strip(&patch.chart, a, b, na, nb, half, options.edge_km);
+        let Some(bounds) = full_strip.bounding_rect() else {
+            continue;
+        };
+        let mut crops = Vec::new();
+        for piece_id in patch.candidates(bounds) {
+            let piece = &patch.pieces[piece_id];
+            let intersect = piece.shape.intersection(&full_strip);
+            if intersect.unsigned_area() <= 1e-10 {
+                continue;
+            }
+            geometric += 1;
+            let job = &jobs[piece.job];
+            let cadence = job.cadence_hours * 3600.0;
+            let phase = job.acquisition.phase_hours * 3600.0;
+            let mut left = start.max(phase);
+            let mut accepted = false;
+            while left < end - 1e-9 {
+                let slot = ((left - phase) / cadence + 1e-10).floor() as u64;
+                let right = end.min(phase + (slot + 1) as f64 * cadence);
+                if right <= left {
+                    break;
+                }
+                let shape = if left == start && right == end {
+                    intersect.clone()
+                } else {
+                    let aa = geometry::mix(a, b, (left - start) / (end - start));
+                    let bb = geometry::mix(a, b, (right - start) / (end - start));
+                    let naa = geometry::normal_between(na, nb, aa, (left - start) / (end - start));
+                    let nbb = geometry::normal_between(na, nb, bb, (right - start) / (end - start));
+                    piece.shape.intersection(&geometry::strip(
+                        &patch.chart,
+                        aa,
+                        bb,
+                        naa,
+                        nbb,
+                        half,
+                        options.edge_km,
+                    ))
+                };
+                if shape.unsigned_area() > 1e-10
+                    && usable(job, &shape, &patch.chart, epoch_unix_s, left, right)
+                {
+                    accepted = true;
+                    crops.push(Crop {
+                        job: piece.job,
+                        slot,
+                        start_s: left,
+                        end_s: right,
+                        geometry: shape,
+                    });
+                }
+                left = right;
+            }
+            if !accepted {
+                rejected += 1;
+            }
+        }
+        if !crops.is_empty() {
+            ops.push(Opportunity {
+                satellite,
+                patch: patch_id,
+                start_s: start,
+                end_s: end,
+                crops,
+            });
+        }
+    }
+    Ok(Segment {
+        ops,
+        geometric,
+        rejected,
+    })
 }

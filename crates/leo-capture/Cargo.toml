@@ -13,3 +13,6 @@ geo = { version = "0.33.1", default-features = false, features = ["serde"] }
 
 sgp4 = "=2.3.0"
 rstar = "0.12"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"

@@ -98,7 +98,38 @@ plane, with optional random rotation and configurable maximum elongation.
 Boundaries are sampled at up to 5 km intervals, refined near poles and split at
 the dateline. Legacy grid rectangles remain selectable. Forest patches use
 connected growth with controls for maximum elongation, coherent outline variation
-and adherence to the coarse tree-cover grid; holes are retained.
+and adherence to the coarse tree-cover grid.
+
+Forest, river and coast geometry is simplified to at most 100 boundary edges per
+AOI before render preparation, summed over all rings and pieces (ring-closing
+duplicates do not count as extra edges). The simplifier removes low-area vertices
+while checking topology and protecting dateline-cut endpoints. If necessary it
+drops the smallest holes or separate pieces, favoring feature removal when it
+changes less area per saved edge than simplifying a larger boundary. It recalculates spherical area and
+records the original edge count, area and removed feature counts. Stored geometry,
+picking and capture simulation share the resulting footprint. GDP geometry is
+unaffected; sampled curved rectangle edges and dateline splits still count.
+
+Use **Simplify loaded AOIs to 100 edges** to apply the same limit to an existing
+environmental layer, then reassign jobs and explicitly save the AOIs. Files and
+active capture checkpoints are not modified by that button. The panel reports
+stored edge counts, area changes and the separately counted GPU geometry.
+
+Desktop generation and simplification detect available logical CPUs, reserve two
+for other work and use at most eight workers by default, capped at the item count
+and falling back to one. The capture panel’s **Native resource limits** adjusts
+the shared budget for AOI/job generation and capture calculations. Source datasets
+are shared; small sampled requests and bounded result batches avoid copying the
+datasets per worker. Seeded sampling retains its original order; geometry,
+simplification, triangulation and outline preparation run in parallel, then
+results are assembled in order before final display buffers are built. This
+preserves IDs, hashes and geometry across worker counts. The panel shows the
+current stage, completed items and worker count. Job assignment uses the same
+worker pool and reports its own progress. Browser work yields between short
+batches on the main thread. Geometry accumulates in memory during
+generation. Saving streams the completed layers through buffered JSON/gzip to a
+temporary file, then atomically replaces the destination; it does not write each
+AOI during generation or allocate a second whole-file JSON string.
 
 New generation uses the Rust ChaCha8 streams and bundled datasets, so it does not
 reproduce the former Python generator's samples from a seed alone. Both frozen

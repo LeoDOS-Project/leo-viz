@@ -220,6 +220,67 @@ mod tests {
             std::fs::remove_file(path).unwrap();
         }
     }
+    #[test]
+    fn simplified_layer_round_trips_geometry_area_and_reduction_metadata() {
+        use super::super::{compact, preview::Geometry, worker};
+        let mut record = preview("forest", 43, false).record(0);
+        let mut ring: Vec<_> = (0..500)
+            .map(|i| {
+                let angle = std::f64::consts::TAU * i as f64 / 500.0;
+                [angle.cos(), angle.sin()]
+            })
+            .collect();
+        ring.push(ring[0]);
+        let polygons = vec![vec![ring]];
+        record.area_km2 = compact::area(&polygons);
+        record.anchor_lon = 0.0;
+        record.anchor_lat = 0.0;
+        record.geometry = Geometry::MultiPolygon(polygons);
+        let mut original = Preview::empty(1, 43);
+        original.push_record(record).unwrap();
+        let original = Arc::new(original.finish());
+        let rx = worker::compact(Arc::clone(&original), egui::Context::default());
+        let reduced = loop {
+            match rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() {
+                worker::Event::Finished(result) => break Arc::new(result.unwrap()),
+                worker::Event::Progress(_) => (),
+            }
+        };
+        assert_eq!(original.edge_count, 500); // Replacement preserves the old snapshot.
+        assert_eq!(reduced.max_edges, 100);
+        assert_eq!(reduced.original_edges, 500);
+        assert_eq!(original.aois[0].key(), reduced.aois[0].key());
+        assert_ne!(
+            original.aois[0].geometry_hash,
+            reduced.aois[0].geometry_hash
+        );
+        assert!(reduced.gpu_geometry().segments.len() < original.gpu_geometry().segments.len());
+        for extension in ["json", "json.gz"] {
+            let path = std::env::temp_dir().join(format!(
+                "leo-aoi-simplified-{}.{}",
+                std::process::id(),
+                extension
+            ));
+            save(&path, &[Arc::clone(&reduced)]).unwrap();
+            let loaded = load(&path, |_| {}).unwrap();
+            let loaded = loaded[1].as_ref().unwrap();
+            assert_eq!(loaded.edge_count, reduced.edge_count);
+            assert_eq!(loaded.original_edges, reduced.original_edges);
+            assert_eq!(loaded.max_area_change, reduced.max_area_change);
+            assert_eq!(loaded.aois, reduced.aois);
+            assert_eq!(
+                serde_json::to_value(loaded.record(0)).unwrap(),
+                serde_json::to_value(reduced.record(0)).unwrap()
+            );
+            let headless = leo_capture::dataset::decode(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(headless[0].0, reduced.aois[0]);
+            assert_eq!(
+                headless[0].1.polygons,
+                reduced.capture_regions()[0].polygons
+            );
+            std::fs::remove_file(path).unwrap();
+        }
+    }
     fn frame(
         panel: &mut AoiGenerator,
         ctx: &egui::Context,

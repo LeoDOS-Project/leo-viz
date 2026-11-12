@@ -438,40 +438,86 @@ impl Generator {
         }
         Ok(())
     }
-    pub fn generate(&self, aois: impl IntoIterator<Item = AoiRef>) -> Result<Vec<Job>, String> {
+    /// Validate once and prepare a deterministic, input-ordered iterator. Browser
+    /// callers can yield between items without requiring shared-memory threads.
+    pub fn prepare(
+        &self,
+        aois: impl IntoIterator<Item = AoiRef>,
+    ) -> Result<Generation<'_>, String> {
         self.validate_generation()?;
-        let mut keys = std::collections::HashSet::new();
-        let mut jobs = Vec::new();
-        let temporal_weights: Vec<_> = self.temporal.iter().map(|p| p.weight).collect();
-        for aoi in aois {
+        let aois: Vec<_> = aois.into_iter().collect();
+        let mut keys = std::collections::HashSet::with_capacity(aois.len());
+        for aoi in &aois {
             if !keys.insert(aoi.key()) {
                 return Err("AOI identifiers must be unique within each source.".into());
             }
-            let mut rng =
-                Random(hash(aoi.key().as_bytes()) ^ aoi.geometry_hash ^ u64::from(self.seed));
-            let pipeline = Pipeline::ALL[rng.choose(&self.pipeline_weights)];
-            let profile = &self.temporal[rng.choose(&temporal_weights)];
-            let job = Job {
-                aoi,
-                acquisition: Acquisition::default(),
-                pipeline,
-                cadence_hours: profile.cadence_hours,
-                samples: if pipeline.has_window() {
-                    profile.samples
-                } else {
-                    1
-                },
-                map_bytes_per_km2: self.map_bytes_per_km2 * rng.spread(self.output_size_range),
-                window_bytes_per_km2: self.window_bytes_per_km2
-                    * rng.spread(self.output_size_range),
-            };
-            let mut job = job;
-            job.acquisition = self.acquisition_for(&job.aoi, job.cadence_hours);
-            job.validate()?;
-            job.acquisition.validate_timing(job.cadence_hours)?;
-            jobs.push(job);
         }
-        Ok(jobs)
+        Ok(Generation {
+            generator: self,
+            aois: aois.into_iter(),
+            temporal_weights: self.temporal.iter().map(|p| p.weight).collect(),
+        })
+    }
+    pub fn generate(&self, aois: impl IntoIterator<Item = AoiRef>) -> Result<Vec<Job>, String> {
+        self.generate_with_progress(aois, |_, _| {})
+    }
+    /// Native generation uses available CPUs; completion callbacks run on the caller.
+    pub fn generate_with_progress(
+        &self,
+        aois: impl IntoIterator<Item = AoiRef>,
+        progress: impl FnMut(usize, usize),
+    ) -> Result<Vec<Job>, String> {
+        let generation = self.prepare(aois)?;
+        let workers = crate::parallel::worker_count(generation.aois.len());
+        generation.run(workers, progress)
+    }
+    fn generate_one(&self, aoi: AoiRef, temporal_weights: &[f64]) -> Result<Job, String> {
+        let mut rng = Random(hash(aoi.key().as_bytes()) ^ aoi.geometry_hash ^ u64::from(self.seed));
+        let pipeline = Pipeline::ALL[rng.choose(&self.pipeline_weights)];
+        let profile = &self.temporal[rng.choose(temporal_weights)];
+        let job = Job {
+            aoi,
+            acquisition: Acquisition::default(),
+            pipeline,
+            cadence_hours: profile.cadence_hours,
+            samples: if pipeline.has_window() {
+                profile.samples
+            } else {
+                1
+            },
+            map_bytes_per_km2: self.map_bytes_per_km2 * rng.spread(self.output_size_range),
+            window_bytes_per_km2: self.window_bytes_per_km2 * rng.spread(self.output_size_range),
+        };
+        let mut job = job;
+        job.acquisition = self.acquisition_for(&job.aoi, job.cadence_hours);
+        job.validate()?;
+        job.acquisition.validate_timing(job.cadence_hours)?;
+        Ok(job)
+    }
+}
+
+/// Prepared workload generation; sampling depends only on seed and AOI identity.
+pub struct Generation<'a> {
+    generator: &'a Generator,
+    aois: std::vec::IntoIter<AoiRef>,
+    temporal_weights: Vec<f64>,
+}
+impl Generation<'_> {
+    fn run(self, workers: usize, progress: impl FnMut(usize, usize)) -> Result<Vec<Job>, String> {
+        crate::parallel::map(
+            self.aois.collect(),
+            workers,
+            |aoi| self.generator.generate_one(aoi, &self.temporal_weights),
+            progress,
+        )
+    }
+}
+impl Iterator for Generation<'_> {
+    type Item = Result<Job, String>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.aois
+            .next()
+            .map(|aoi| self.generator.generate_one(aoi, &self.temporal_weights))
     }
 }
 
@@ -664,6 +710,65 @@ impl Random {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn parallel_assignment_matches_sequential_iterator_for_every_worker_count() {
+        let generator = Generator::default();
+        let aois: Vec<_> = (0..4096).map(|i| aoi(&i.to_string())).collect();
+        let expected = generator
+            .prepare(aois.clone())
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        for workers in [1, 2, 4, 16] {
+            let mut counts = Vec::new();
+            let jobs = generator
+                .prepare(aois.clone())
+                .unwrap()
+                .run(workers, |n, total| {
+                    assert_eq!(total, expected.len());
+                    counts.push(n);
+                })
+                .unwrap();
+            assert_eq!(jobs, expected);
+            assert_eq!(counts.first(), Some(&0));
+            assert_eq!(counts.last(), Some(&expected.len()));
+            assert!(counts.windows(2).all(|w| w[0] <= w[1]));
+        }
+        let mut duplicate = aois.clone();
+        duplicate.push(aois[0].clone());
+        assert!(generator
+            .generate(duplicate)
+            .unwrap_err()
+            .contains("unique"));
+        let mut invalid = aois;
+        invalid[3000].area_km2 = f64::NAN;
+        assert!(generator.generate(invalid).is_err());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    #[ignore = "CPU scaling benchmark for 50,000 job assignments"]
+    fn benchmark_parallel_assignment() {
+        let generator = Generator::default();
+        let aois: Vec<_> = (0..50_000).map(|i| aoi(&i.to_string())).collect();
+        let mut reference = None;
+        for workers in [1, crate::parallel::worker_count(aois.len())] {
+            let start = std::time::Instant::now();
+            let jobs = generator
+                .prepare(aois.clone())
+                .unwrap()
+                .run(workers, |_, _| {})
+                .unwrap();
+            eprintln!(
+                "{} jobs · {workers} workers: {:?}",
+                jobs.len(),
+                start.elapsed()
+            );
+            if let Some(original) = &reference {
+                assert_eq!(original, &jobs);
+            }
+            reference = Some(jobs);
+        }
+    }
     fn aoi(id: &str) -> AoiRef {
         AoiRef {
             source: "gdp".into(),

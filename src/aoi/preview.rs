@@ -24,6 +24,8 @@ pub(super) struct Config {
 }
 #[derive(Deserialize, Serialize)]
 pub(super) struct Record {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reduction: Option<super::compact::Reduction>,
     #[serde(default)]
     pub id: String,
     pub anchor_lon: f64,
@@ -127,11 +129,24 @@ struct Boundary {
     fill: super::fill::Fill,
     path_truncated: bool,
     path_length_km: Option<f64>,
+    reduction: Option<super::compact::Reduction>,
+}
+
+/// Expensive per-AOI render preparation can be done independently on workers.
+pub(super) struct PreparedRecord {
+    aoi: crate::jobs::model::AoiRef,
+    boundary: Boundary,
 }
 
 pub(crate) struct Preview {
     pub aois: Vec<crate::jobs::model::AoiRef>,
     pub count: usize,
+    pub edge_count: usize,
+    pub max_edges: usize,
+    pub original_edges: usize,
+    pub removed_holes: usize,
+    pub removed_parts: usize,
+    pub max_area_change: f64,
     pub mean_area: f64,
     pub min_area: f64,
     pub max_area: f64,
@@ -207,6 +222,8 @@ impl Preview {
             geometry: GeometryRef<'a>,
             path_truncated: bool,
             path_length_km: Option<f64>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            reduction: &'a Option<super::compact::Reduction>,
         }
         for (a, b) in self.aois.iter().zip(&self.boundaries) {
             seq.serialize_element(&RecordRef {
@@ -221,9 +238,48 @@ impl Preview {
                 },
                 path_truncated: b.path_truncated,
                 path_length_km: b.path_length_km,
+                reduction: &b.reduction,
             })?;
         }
         Ok(())
+    }
+    pub(super) fn record(&self, index: usize) -> Record {
+        let a = &self.aois[index];
+        let b = &self.boundaries[index];
+        Record {
+            id: a.id.clone(),
+            source_kind: a.source.clone(),
+            anchor_lon: a.longitude,
+            anchor_lat: a.latitude,
+            area_km2: a.area_km2,
+            geometry: Geometry::MultiPolygon(b.polygons.clone()),
+            path_truncated: b.path_truncated,
+            path_length_km: b.path_length_km,
+            reduction: b.reduction.clone(),
+        }
+    }
+    pub(super) fn complexity_ui(&self, ui: &mut egui::Ui) {
+        ui.small(format!(
+            "Boundary edges: {} · average {:.1} · maximum {} per AOI",
+            self.edge_count,
+            self.edge_count as f64 / self.count.max(1) as f64,
+            self.max_edges
+        ));
+        if self.original_edges > self.edge_count {
+            ui.small(format!(
+                "Reduced from {} edges · largest area change {:.1}% · {} holes / {} pieces removed",
+                self.original_edges,
+                self.max_area_change * 100.0,
+                self.removed_holes,
+                self.removed_parts
+            ));
+        }
+        let gpu = self.gpu_geometry();
+        ui.small(format!(
+            "GPU geometry: {} outline segments across detail levels · {} fill triangles",
+            gpu.segments.len(),
+            gpu.triangles.len()
+        ));
     }
     pub(crate) fn capture_regions(&self) -> Vec<leo_capture::geometry::Region> {
         self.aois
@@ -264,6 +320,7 @@ impl Preview {
                 .collect();
             points.push(points[0]);
             preview.push_record(Record {
+                reduction: None,
                 id: format!("manual-{index}"),
                 anchor_lon: area.lon,
                 anchor_lat: area.lat,
@@ -329,6 +386,7 @@ impl Preview {
             / 1e6;
         let mut preview = Self::empty(1, 0);
         preview.push_record(Record {
+            reduction: None,
             id: "mapped-search-boundary".into(),
             anchor_lon: anchor[0],
             anchor_lat: anchor[1],
@@ -390,6 +448,12 @@ impl Preview {
     pub(super) fn empty(count: usize, seed: u32) -> Self {
         Self {
             aois: Vec::with_capacity(count),
+            edge_count: 0,
+            max_edges: 0,
+            original_edges: 0,
+            removed_holes: 0,
+            removed_parts: 0,
+            max_area_change: 0.0,
             count,
             mean_area: 0.0,
             min_area: f64::INFINITY,
@@ -408,6 +472,11 @@ impl Preview {
     }
 
     pub(super) fn push_record(&mut self, aoi: Record) -> Result<(), String> {
+        let prepared = Self::prepare_record(aoi, self.aois.len())?;
+        self.push_prepared(prepared);
+        Ok(())
+    }
+    pub(super) fn prepare_record(aoi: Record, index: usize) -> Result<PreparedRecord, String> {
         const COLORS: [[u8; 3]; 6] = [
             [61, 222, 230],
             [255, 190, 86],
@@ -416,8 +485,6 @@ impl Preview {
             [244, 142, 189],
             [235, 226, 136],
         ];
-        let index = self.aois.len();
-        let preview = &mut *self;
         if !aoi.area_km2.is_finite()
             || aoi.area_km2 <= 0.0
             || !aoi.anchor_lon.is_finite()
@@ -432,6 +499,20 @@ impl Preview {
             Geometry::Polygon(p) => vec![p],
             Geometry::MultiPolygon(p) => p,
         };
+        if let Some(r) = &aoi.reduction {
+            if !r.original_area_km2.is_finite()
+                || r.original_area_km2 <= 0.0
+                || r.original_edges < super::compact::edges(&polygons)
+            {
+                return Err("Invalid AOI simplification metadata".into());
+            }
+        }
+        if aoi
+            .path_length_km
+            .is_some_and(|length| !length.is_finite() || length <= 0.0)
+        {
+            return Err("Invalid AOI path length".into());
+        }
         let rings = polygons
             .iter()
             .flatten()
@@ -462,14 +543,14 @@ impl Preview {
             latitude: aoi.anchor_lat,
             geometry_hash: crate::jobs::model::hash(&serde_json::to_vec(&polygons).unwrap()),
         };
-        preview.aois.push(metadata);
-        preview.boundaries.push(Boundary {
+        let boundary = Boundary {
             anchor,
             radius,
             rings: rings.into_iter().map(Detail::new).collect(),
             fill: super::fill::Fill::new(&polygons)?,
             path_truncated: aoi.path_truncated,
             path_length_km: aoi.path_length_km,
+            reduction: aoi.reduction,
             polygons,
             color: match aoi.source_kind.as_str() {
                 "forest" => [130, 231, 158],
@@ -477,18 +558,37 @@ impl Preview {
                 "coast" => [255, 190, 86],
                 _ => COLORS[index % COLORS.len()],
             },
-        });
-        preview.truncated_paths += usize::from(aoi.path_truncated);
-        if let Some(length) = aoi.path_length_km {
-            if !length.is_finite() || length <= 0.0 {
-                return Err("Invalid AOI path length".into());
-            }
-            *preview.mean_path_length.get_or_insert(0.0) += length / preview.count as f64;
+        };
+        Ok(PreparedRecord {
+            aoi: metadata,
+            boundary,
+        })
+    }
+    pub(super) fn push_prepared(&mut self, prepared: PreparedRecord) {
+        let PreparedRecord { aoi, boundary } = prepared;
+        let edges = super::compact::edges(&boundary.polygons);
+        self.edge_count += edges;
+        self.max_edges = self.max_edges.max(edges);
+        self.original_edges += boundary
+            .reduction
+            .as_ref()
+            .map_or(edges, |r| r.original_edges);
+        if let Some(r) = &boundary.reduction {
+            self.removed_holes += r.removed_holes;
+            self.removed_parts += r.removed_parts;
+            self.max_area_change = self
+                .max_area_change
+                .max((aoi.area_km2 / r.original_area_km2 - 1.0).abs());
         }
-        preview.mean_area += aoi.area_km2 / preview.count as f64;
-        preview.min_area = preview.min_area.min(aoi.area_km2);
-        preview.max_area = preview.max_area.max(aoi.area_km2);
-        Ok(())
+        self.truncated_paths += usize::from(boundary.path_truncated);
+        if let Some(length) = boundary.path_length_km {
+            *self.mean_path_length.get_or_insert(0.0) += length / self.count as f64;
+        }
+        self.mean_area += aoi.area_km2 / self.count as f64;
+        self.min_area = self.min_area.min(aoi.area_km2);
+        self.max_area = self.max_area.max(aoi.area_km2);
+        self.aois.push(aoi);
+        self.boundaries.push(boundary);
     }
 
     pub(super) fn finish(mut self) -> Self {

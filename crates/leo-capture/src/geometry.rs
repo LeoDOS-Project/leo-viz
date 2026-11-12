@@ -5,9 +5,7 @@ use crate::{
     spatial::{Index, Sphere},
     workload::Job,
 };
-use geo::{
-    Area, BooleanOps, BoundingRect, Coord, LineString, MultiPolygon, Polygon, Rect,
-};
+use geo::{Area, BooleanOps, BoundingRect, Coord, LineString, MultiPolygon, Polygon, Rect};
 use leo_sim::geometry::{dot, ground_position, norm, scale, sub, Vector, EARTH_RADIUS_KM as R};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -127,6 +125,53 @@ pub(crate) struct Patch {
     pub chart: Chart,
     pub sphere: Sphere,
     pub pieces: Vec<Piece>,
+    piece_index: Option<
+        rstar::RTree<
+            rstar::primitives::GeomWithData<rstar::primitives::Rectangle<[f64; 2]>, usize>,
+        >,
+    >,
+}
+impl Patch {
+    fn index_pieces(&mut self) {
+        if self.pieces.len() >= 16 {
+            self.piece_index = Some(rstar::RTree::bulk_load(
+                self.pieces
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        rstar::primitives::GeomWithData::new(
+                            rstar::primitives::Rectangle::from_corners(
+                                [p.bounds.min().x, p.bounds.min().y],
+                                [p.bounds.max().x, p.bounds.max().y],
+                            ),
+                            i,
+                        )
+                    })
+                    .collect(),
+            ));
+        }
+    }
+    pub(crate) fn candidates(&self, bounds: Rect<f64>) -> Vec<usize> {
+        use geo::Intersects;
+        if let Some(index) = &self.piece_index {
+            let mut ids: Vec<_> = index
+                .locate_in_envelope_intersecting(&envelope(bounds))
+                .map(|p| p.data)
+                .collect();
+            ids.sort_unstable(); // stable acquisition and overlap accounting order
+            ids
+        } else {
+            self.pieces
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.bounds.intersects(&bounds))
+                .map(|(i, _)| i)
+                .collect()
+        }
+    }
+}
+fn envelope(r: Rect<f64>) -> rstar::AABB<[f64; 2]> {
+    rstar::AABB::from_corners([r.min().x, r.min().y], [r.max().x, r.max().y])
 }
 pub struct Atlas {
     pub(crate) patches: Vec<Patch>,
@@ -140,6 +185,23 @@ impl Atlas {
         regions: &[Region],
         cell_deg: f64,
         edge_km: f64,
+        progress: impl FnMut(f32) -> bool,
+    ) -> Result<Self, String> {
+        Self::with_workers(
+            jobs,
+            regions,
+            cell_deg,
+            edge_km,
+            crate::parallel::worker_count(regions.len()),
+            progress,
+        )
+    }
+    pub(crate) fn with_workers(
+        jobs: &[Job],
+        regions: &[Region],
+        cell_deg: f64,
+        edge_km: f64,
+        workers: usize,
         mut progress: impl FnMut(f32) -> bool,
     ) -> Result<Self, String> {
         if !cell_deg.is_finite()
@@ -163,103 +225,52 @@ impl Atlas {
         let mut seen = std::collections::BTreeSet::new();
         let mut patches = BTreeMap::<(i32, i32), Patch>::new();
         let mut areas = vec![0.0; jobs.len()];
-        for (n, region) in regions.iter().enumerate() {
-            if !progress(n as f32 / regions.len().max(1) as f32) {
-                return Err("Cancelled.".into());
-            }
-            let job = *keys
-                .get(&region.job_key)
-                .ok_or("Geometry has no matching job")?;
-            if crate::workload::hash(
-                &serde_json::to_vec(&region.polygons).map_err(|e| e.to_string())?,
-            ) != jobs[job].aoi.geometry_hash
-            {
-                return Err(format!("Geometry hash mismatch for {}", region.job_key));
-            }
-            if !seen.insert(job) {
-                return Err("Duplicate geometry for job.".into());
-            }
-            let mut per_cell = BTreeMap::<(i32, i32), Shape>::new();
-            for poly in &region.polygons {
-                if poly.is_empty()
-                    || poly.iter().any(|ring| {
-                        ring.len() < 4
-                            || ring.first() != ring.last()
-                            || ring.iter().any(|p| {
-                                !p[0].is_finite()
-                                    || !p[1].is_finite()
-                                    || p[0].abs() > 180.0
-                                    || p[1].abs() > 90.0
-                            })
-                            || ring.windows(2).any(|w| (w[0][0] - w[1][0]).abs() > 180.0)
-                    })
-                {
-                    return Err(
-                        "Invalid polygon; rings must be closed and split at the dateline.".into(),
-                    );
+        let indexed: Vec<_> = regions
+            .iter()
+            .map(|region| {
+                let job = *keys
+                    .get(&region.job_key)
+                    .ok_or("Geometry has no matching job")?;
+                if !seen.insert(job) {
+                    return Err("Duplicate geometry for job.");
                 }
-                let rings: Vec<LineString<_>> = poly
-                    .iter()
-                    .map(|r| r.iter().map(|p| (p[0], p[1])).collect())
-                    .collect();
-                let shape =
-                    MultiPolygon::new(vec![Polygon::new(rings[0].clone(), rings[1..].to_vec())]);
-                if !crate::validation::valid_shape(&shape) {
-                    return Err(format!("Invalid polygon topology for {}", region.job_key));
-                }
-                let bounds = shape.bounding_rect().ok_or("Empty polygon")?;
-                let nx = (360.0 / cell_deg).round() as i32;
-                let ny = (180.0 / cell_deg).round() as i32;
-                let ix = |x: f64| (((x + 180.0) / cell_deg).floor() as i32).clamp(0, nx - 1);
-                let iy = |y: f64| (((y + 90.0) / cell_deg).floor() as i32).clamp(0, ny - 1);
-                for y in iy(bounds.min().y)..=iy(bounds.max().y) {
-                    for x in ix(bounds.min().x)..=ix(bounds.max().x) {
-                        let lon = -180.0 + x as f64 * cell_deg;
-                        let lat = -90.0 + y as f64 * cell_deg;
-                        let clip = shape.intersection(
-                            &Rect::new((lon, lat), (lon + cell_deg, lat + cell_deg)).to_polygon(),
-                        );
-                        if clip.unsigned_area() <= 1e-18 {
-                            continue;
-                        }
-                        let patch = patches.entry((x, y)).or_insert_with(|| {
-                            let chart = Chart::new(lon + cell_deg / 2.0, lat + cell_deg / 2.0);
-                            // Angular distance from center bounded by half latitude + half longitude span.
-                            let sphere = Sphere {
-                                center: chart.center,
-                                radius: cell_deg.to_radians() + 1e-8,
-                            };
-                            Patch {
-                                chart,
-                                sphere,
-                                pieces: vec![],
-                            }
-                        });
-                        let projected = patch.chart.shape(&clip, edge_km);
-                        let previous = per_cell
-                            .entry((x, y))
-                            .or_insert_with(|| MultiPolygon::new(vec![]));
-                        *previous = previous.union(&projected);
+                Ok((job, region))
+            })
+            .collect::<Result<_, &str>>()?;
+        // Bound intermediate geometry: merge each ordered batch before starting
+        // another, sharing the original input instead of cloning AOI polygons.
+        for (batch, chunk) in indexed.chunks(1024).enumerate() {
+            let prepared = crate::parallel::try_map(
+                chunk.to_vec(),
+                workers,
+                |(job, region)| {
+                    build_region(job, region, jobs[job].aoi.geometry_hash, cell_deg, edge_km)
+                },
+                |done, _| {
+                    if progress(
+                        ((batch * 1024 + done) as f32 / regions.len().max(1) as f32).min(0.999999),
+                    ) {
+                        Ok(())
+                    } else {
+                        Err("Cancelled.".into())
+                    }
+                },
+            )?;
+            for (job, area, local) in prepared {
+                areas[job] = area;
+                for (key, mut patch) in local {
+                    if let Some(existing) = patches.get_mut(&key) {
+                        existing.pieces.append(&mut patch.pieces);
+                    } else {
+                        patches.insert(key, patch);
                     }
                 }
             }
-            for (key, shape) in per_cell {
-                let area = shape.unsigned_area();
-                if area > 0.0 {
-                    areas[job] += area;
-                    let bounds = shape.bounding_rect().unwrap();
-                    patches
-                        .get_mut(&key)
-                        .unwrap()
-                        .pieces
-                        .push(Piece { job, shape, bounds });
-                }
-            }
-            if areas[job] <= 0.0 {
-                return Err(format!("{} has no positive-area geometry", region.job_key));
-            }
         }
-        let patches: Vec<_> = patches.into_values().collect();
+        let mut patches: Vec<_> = patches.into_values().collect();
+        for patch in &mut patches {
+            patch.index_pieces();
+        }
         let polygon_pieces = patches.iter().map(|p| p.pieces.len()).sum();
         if !progress(1.0) {
             return Err("Cancelled.".into());
@@ -338,4 +349,98 @@ pub fn coordinates(shape: &Shape) -> Polygons {
                 .collect()
         })
         .collect()
+}
+
+fn build_region(
+    job: usize,
+    region: &Region,
+    expected_hash: u64,
+    cell_deg: f64,
+    edge_km: f64,
+) -> Result<(usize, f64, BTreeMap<(i32, i32), Patch>), String> {
+    let mut patches = BTreeMap::<(i32, i32), Patch>::new();
+    let mut area_total = 0.0;
+    if crate::workload::hash(&serde_json::to_vec(&region.polygons).map_err(|e| e.to_string())?)
+        != expected_hash
+    {
+        return Err(format!("Geometry hash mismatch for {}", region.job_key));
+    }
+    let mut per_cell = BTreeMap::<(i32, i32), Shape>::new();
+    for poly in &region.polygons {
+        if poly.is_empty()
+            || poly.iter().any(|ring| {
+                ring.len() < 4
+                    || ring.first() != ring.last()
+                    || ring.iter().any(|p| {
+                        !p[0].is_finite()
+                            || !p[1].is_finite()
+                            || p[0].abs() > 180.0
+                            || p[1].abs() > 90.0
+                    })
+                    || ring.windows(2).any(|w| (w[0][0] - w[1][0]).abs() > 180.0)
+            })
+        {
+            return Err("Invalid polygon; rings must be closed and split at the dateline.".into());
+        }
+        let rings: Vec<LineString<_>> = poly
+            .iter()
+            .map(|r| r.iter().map(|p| (p[0], p[1])).collect())
+            .collect();
+        let shape = MultiPolygon::new(vec![Polygon::new(rings[0].clone(), rings[1..].to_vec())]);
+        if !crate::validation::valid_shape(&shape) {
+            return Err(format!("Invalid polygon topology for {}", region.job_key));
+        }
+        let bounds = shape.bounding_rect().ok_or("Empty polygon")?;
+        let nx = (360.0 / cell_deg).round() as i32;
+        let ny = (180.0 / cell_deg).round() as i32;
+        let ix = |x: f64| (((x + 180.0) / cell_deg).floor() as i32).clamp(0, nx - 1);
+        let iy = |y: f64| (((y + 90.0) / cell_deg).floor() as i32).clamp(0, ny - 1);
+        for y in iy(bounds.min().y)..=iy(bounds.max().y) {
+            for x in ix(bounds.min().x)..=ix(bounds.max().x) {
+                let lon = -180.0 + x as f64 * cell_deg;
+                let lat = -90.0 + y as f64 * cell_deg;
+                let clip = shape.intersection(
+                    &Rect::new((lon, lat), (lon + cell_deg, lat + cell_deg)).to_polygon(),
+                );
+                if clip.unsigned_area() <= 1e-18 {
+                    continue;
+                }
+                let patch = patches.entry((x, y)).or_insert_with(|| {
+                    let chart = Chart::new(lon + cell_deg / 2.0, lat + cell_deg / 2.0);
+                    // Angular distance from center bounded by half latitude + half longitude span.
+                    let sphere = Sphere {
+                        center: chart.center,
+                        radius: cell_deg.to_radians() + 1e-8,
+                    };
+                    Patch {
+                        chart,
+                        sphere,
+                        pieces: vec![],
+                        piece_index: None,
+                    }
+                });
+                let projected = patch.chart.shape(&clip, edge_km);
+                let previous = per_cell
+                    .entry((x, y))
+                    .or_insert_with(|| MultiPolygon::new(vec![]));
+                *previous = previous.union(&projected);
+            }
+        }
+    }
+    for (key, shape) in per_cell {
+        let area = shape.unsigned_area();
+        if area > 0.0 {
+            area_total += area;
+            let bounds = shape.bounding_rect().unwrap();
+            patches
+                .get_mut(&key)
+                .unwrap()
+                .pieces
+                .push(Piece { job, shape, bounds });
+        }
+    }
+    if area_total <= 0.0 {
+        return Err(format!("{} has no positive-area geometry", region.job_key));
+    }
+    Ok((job, area_total, patches))
 }

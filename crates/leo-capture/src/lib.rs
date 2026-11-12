@@ -2,10 +2,12 @@
 pub mod baseline;
 pub mod dataset;
 pub mod geometry;
+pub mod parallel;
+pub mod resources;
+pub mod session;
 mod spatial;
 pub mod storage;
 #[cfg(test)]
 mod tests;
-pub mod workload;
-pub mod session;
 mod validation;
+pub mod workload;

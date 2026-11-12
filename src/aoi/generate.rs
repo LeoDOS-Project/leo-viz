@@ -197,7 +197,7 @@ enum Sampler {
     },
     Forest {
         weights: Weights,
-        area: Vec<f64>,
+        area: Arc<Vec<f64>>,
         columns: BTreeMap<usize, Vec<usize>>,
     },
     Network {
@@ -311,7 +311,7 @@ impl Job {
                     }))?;
                     Sampler::Forest {
                         weights,
-                        area,
+                        area: Arc::new(area),
                         columns: BTreeMap::new(),
                     }
                 }
@@ -339,6 +339,7 @@ impl Job {
     }
 
     // A time budget also keeps the browser event loop responsive during large batches.
+    #[cfg(any(test, target_arch = "wasm32"))]
     pub fn step(&mut self) -> Result<Option<Preview>, String> {
         let start = web_time::Instant::now();
         while self.completed < self.settings.count() {
@@ -352,8 +353,15 @@ impl Job {
         Ok(Some(self.preview.take().unwrap().finish()))
     }
 
+    #[cfg(any(test, target_arch = "wasm32"))]
     fn record(&mut self) -> Result<Record, String> {
-        let (anchor, rects, kind, path) = match (&self.settings, &mut self.sampler) {
+        self.sample()?.build()
+    }
+
+    /// Sampling remains serial so random streams and existing seed outputs stay
+    /// unchanged. Only these small requests are queued; source datasets are shared.
+    fn sample(&mut self) -> Result<Request, String> {
+        let shape = match (&self.settings, &mut self.sampler) {
             (Settings::Gdp(c), Sampler::Demand { weights, parents }) => {
                 let data = if c.uniform {
                     None
@@ -404,31 +412,19 @@ impl Job {
                 };
                 let area = draw_size(&mut self.shapes, c.mean_area, c.size_ratio);
                 let aspect = ((2.0 * self.shapes.random::<f64>() - 1.0) * c.max_aspect.ln()).exp();
-                if c.shape == "oriented_rectangle" {
-                    let bearing = self.rotations.random::<f64>() * PI;
-                    return Ok(Record {
-                        id: format!("aoi-{:08}", self.completed),
-                        anchor_lon: anchor[0],
-                        anchor_lat: anchor[1],
-                        area_km2: area,
-                        geometry: geometry::oriented_rectangle(
-                            anchor,
-                            area,
-                            aspect,
-                            if c.random_rotation { bearing } else { 0.0 },
-                        )?,
-                        source_kind: "gdp".into(),
-                        path_length_km: None,
-                        path_truncated: false,
-                    });
-                }
-                let tiles = (area / self.grid.area()).round().max(1.0) as i64;
-                (
+                let oriented = c.shape == "oriented_rectangle";
+                let bearing = if oriented {
+                    self.rotations.random::<f64>() * PI
+                } else {
+                    0.0
+                };
+                Shape::Rectangle {
                     anchor,
-                    self.grid.rectangle(anchor, tiles, aspect)?,
-                    "gdp",
-                    None,
-                )
+                    area,
+                    aspect,
+                    oriented,
+                    bearing: if c.random_rotation { bearing } else { 0.0 },
+                }
             }
             (
                 Settings::Environment(c),
@@ -454,18 +450,17 @@ impl Job {
                     90.0 - (row as f64 + 0.5) * step,
                 ];
                 let requested = draw_size(&mut self.shapes, c.mean_area, c.size_ratio);
-                // One morphology seed per AOI keeps sampled areas stable as controls change.
-                let mut morphology = ChaCha8Rng::seed_from_u64(self.shapes.random());
-                let polygon =
-                    forest_patch(d, c, anchor, (row, col), area, requested, &mut morphology)?;
-                let projected = polygon.map_coords(|p| self.grid.project([p.x, p.y], anchor[0]));
-                (anchor, self.grid.cover(&projected)?, "forest", None)
+                Shape::Forest {
+                    settings: c.clone(),
+                    dataset: Arc::clone(self.dataset.as_ref().unwrap()),
+                    areas: Arc::clone(area),
+                    anchor,
+                    cell: (row, col),
+                    requested,
+                    seed: self.shapes.random(),
+                }
             }
             (Settings::Environment(c), Sampler::Network { weights, portions }) => {
-                let network = match self.dataset.as_deref() {
-                    Some(Dataset::River(n) | Dataset::Coast(n)) => n,
-                    _ => unreachable!(),
-                };
                 let index = weights.sample(&mut self.locations);
                 let allowed = &portions[index];
                 let mut distance =
@@ -479,7 +474,151 @@ impl Job {
                     distance -= length;
                 }
                 let requested = draw_size(&mut self.shapes, c.mean_length, c.length_ratio);
-                let path = follow(network, index, offset, requested, c.kind == "coast")?;
+                Shape::Network {
+                    settings: c.clone(),
+                    dataset: Arc::clone(self.dataset.as_ref().unwrap()),
+                    index,
+                    offset,
+                    requested,
+                }
+            }
+            _ => unreachable!(),
+        };
+        Ok(Request {
+            index: self.completed,
+            grid: self.grid,
+            shape,
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn run_parallel(
+        mut self,
+        workers: usize,
+        mut progress: impl FnMut(&'static str, usize, usize),
+    ) -> Result<Preview, String> {
+        let total = self.settings.count();
+        let mut requests = Vec::with_capacity(total);
+        progress("Sampling AOI locations", 0, total);
+        while self.completed < total {
+            requests.push(self.sample()?);
+            self.completed += 1;
+            if self.completed % 256 == 0 || self.completed == total {
+                progress("Sampling AOI locations", self.completed, total);
+            }
+        }
+        let prepared = leo_capture::parallel::map(
+            requests,
+            workers,
+            |request| {
+                let index = request.index;
+                Preview::prepare_record(request.build()?, index)
+            },
+            |done, total| progress("Building AOI geometry", done, total),
+        )?;
+        let mut preview = self.preview.take().unwrap();
+        for aoi in prepared {
+            preview.push_prepared(aoi);
+        }
+        progress("Preparing AOI display buffers", total, total);
+        Ok(preview.finish())
+    }
+}
+
+struct Request {
+    index: usize,
+    grid: Grid,
+    shape: Shape,
+}
+enum Shape {
+    Rectangle {
+        anchor: [f64; 2],
+        area: f64,
+        aspect: f64,
+        oriented: bool,
+        bearing: f64,
+    },
+    Forest {
+        settings: Environment,
+        dataset: Arc<Dataset>,
+        areas: Arc<Vec<f64>>,
+        anchor: [f64; 2],
+        cell: (usize, usize),
+        requested: f64,
+        seed: u64,
+    },
+    Network {
+        settings: Environment,
+        dataset: Arc<Dataset>,
+        index: usize,
+        offset: f64,
+        requested: f64,
+    },
+}
+impl Request {
+    fn build(self) -> Result<Record, String> {
+        let Self { index, grid, shape } = self;
+        let (anchor, rects, kind, path) = match shape {
+            Shape::Rectangle {
+                anchor,
+                area,
+                aspect,
+                oriented,
+                bearing,
+            } => {
+                if oriented {
+                    return Ok(Record {
+                        reduction: None,
+                        id: format!("aoi-{index:08}"),
+                        anchor_lon: anchor[0],
+                        anchor_lat: anchor[1],
+                        area_km2: area,
+                        geometry: geometry::oriented_rectangle(anchor, area, aspect, bearing)?,
+                        source_kind: "gdp".into(),
+                        path_length_km: None,
+                        path_truncated: false,
+                    });
+                }
+                let tiles = (area / grid.area()).round().max(1.0) as i64;
+                (anchor, grid.rectangle(anchor, tiles, aspect)?, "gdp", None)
+            }
+            Shape::Forest {
+                settings,
+                dataset,
+                areas,
+                anchor,
+                cell,
+                requested,
+                seed,
+            } => {
+                let Dataset::Forest(d) = dataset.as_ref() else {
+                    unreachable!()
+                };
+                let mut morphology = ChaCha8Rng::seed_from_u64(seed);
+                let polygon = forest_patch(
+                    d,
+                    &settings,
+                    anchor,
+                    cell,
+                    &areas,
+                    requested,
+                    &mut morphology,
+                )?;
+                let projected = polygon.map_coords(|p| grid.project([p.x, p.y], anchor[0]));
+                (anchor, grid.cover(&projected)?, "forest", None)
+            }
+            Shape::Network {
+                settings: c,
+                dataset,
+                index: network_index,
+                offset,
+                requested,
+            } => {
+                let network = match dataset.as_ref() {
+                    Dataset::River(n) | Dataset::Coast(n) => n,
+                    _ => unreachable!(),
+                };
+                let path = follow(network, network_index, offset, requested, c.kind == "coast")?;
                 let length: f64 = path
                     .windows(2)
                     .map(|w| geometry::distance(w[0], w[1]))
@@ -492,31 +631,29 @@ impl Job {
                 } else {
                     line.buffer(c.buffer)
                 };
-                let projected = footprint.map_coords(|p| {
-                    self.grid
-                        .project(geometry::geographic(p, anchor), anchor[0])
-                });
+                let projected = footprint
+                    .map_coords(|p| grid.project(geometry::geographic(p, anchor), anchor[0]));
                 (
                     anchor,
-                    self.grid.cover(&projected)?,
+                    grid.cover(&projected)?,
                     c.kind,
                     Some((length, length < requested * 0.99)),
                 )
             }
-            _ => unreachable!(),
         };
         let area = rects
             .iter()
             .map(|r| (r.width * r.height) as f64)
             .sum::<f64>()
-            * self.grid.area();
+            * grid.area();
         let prefix = if kind == "gdp" { "aoi" } else { kind };
-        Ok(Record {
-            id: format!("{prefix}-{:08}", self.completed),
+        super::compact::record(Record {
+            reduction: None,
+            id: format!("{prefix}-{:08}", index),
             anchor_lon: anchor[0],
             anchor_lat: anchor[1],
             area_km2: area,
-            geometry: self.grid.geometry(&rects),
+            geometry: grid.geometry(&rects),
             source_kind: kind.into(),
             path_length_km: path.map(|p| p.0),
             path_truncated: path.is_some_and(|p| p.1),
@@ -853,6 +990,116 @@ mod tests {
             }
         }
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn parallel_workers_preserve_seeded_geometry_metadata_and_render_buffers() {
+        let mut cases = vec![];
+        for shape in ["rectangle", "oriented_rectangle"] {
+            cases.push((
+                Settings::Gdp(Gdp {
+                    count: 24,
+                    hotspot_count: 4,
+                    shape: shape.into(),
+                    ..gdp()
+                }),
+                None,
+            ));
+        }
+        for kind in ["forest", "river", "coast"] {
+            let dataset =
+                Arc::new(Dataset::decode(data::fixture(kind).bytes.as_ref().unwrap()).unwrap());
+            cases.push((
+                Settings::Environment(Environment {
+                    count: 12,
+                    ..environment(kind)
+                }),
+                Some(dataset),
+            ));
+        }
+        for (settings, dataset) in cases {
+            let serial = run(settings.clone(), dataset.clone());
+            for workers in [1, 2, 4] {
+                let mut progress = Vec::new();
+                let parallel = Job::new(settings.clone(), dataset.clone())
+                    .unwrap()
+                    .run_parallel(workers, |stage, done, total| {
+                        if stage == "Building AOI geometry" {
+                            progress.push(done);
+                        }
+                        assert_eq!(total, settings.count());
+                    })
+                    .unwrap();
+                assert_eq!(serial.aois, parallel.aois);
+                assert_eq!(serial.mean_area, parallel.mean_area);
+                assert_eq!(serial.mean_path_length, parallel.mean_path_length);
+                assert_eq!(serial.original_edges, parallel.original_edges);
+                for i in 0..serial.count {
+                    assert_eq!(
+                        serde_json::to_vec(&serial.record(i)).unwrap(),
+                        serde_json::to_vec(&parallel.record(i)).unwrap()
+                    );
+                }
+                let (a, b) = (serial.gpu_geometry(), parallel.gpu_geometry());
+                assert_eq!(
+                    bytemuck::cast_slice::<_, u8>(&a.segments),
+                    bytemuck::cast_slice::<_, u8>(&b.segments)
+                );
+                assert_eq!(
+                    bytemuck::cast_slice::<_, u8>(&a.triangles),
+                    bytemuck::cast_slice::<_, u8>(&b.triangles)
+                );
+                assert_eq!(
+                    bytemuck::cast_slice::<_, u8>(&a.dots),
+                    bytemuck::cast_slice::<_, u8>(&b.dots)
+                );
+                assert_eq!(progress.first(), Some(&0));
+                assert_eq!(progress.last(), Some(&serial.count));
+                assert!(progress.windows(2).all(|w| w[0] <= w[1]));
+            }
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    #[ignore = "CPU scaling benchmark with bundled datasets; generates in memory"]
+    fn benchmark_parallel_generation() {
+        let mut cases = vec![(
+            Settings::Gdp(Gdp {
+                count: 2000,
+                shape: "oriented_rectangle".into(),
+                ..gdp()
+            }),
+            None,
+        )];
+        for kind in ["forest", "river", "coast"] {
+            cases.push((
+                Settings::Environment(Environment {
+                    count: 128,
+                    ..environment(kind)
+                }),
+                Some(data::load(&data::Input::default(), kind).unwrap()),
+            ));
+        }
+        for (settings, dataset) in cases {
+            let mut reference = None;
+            for workers in [1, leo_capture::parallel::worker_count(settings.count())] {
+                let start = std::time::Instant::now();
+                let preview = Job::new(settings.clone(), dataset.clone())
+                    .unwrap()
+                    .run_parallel(workers, |_, _, _| {})
+                    .unwrap();
+                eprintln!(
+                    "{} {} AOIs · {workers} workers: {:?}",
+                    settings.count(),
+                    settings.source_kind(),
+                    start.elapsed()
+                );
+                if let Some(original) = &reference {
+                    assert_eq!(original, &preview.aois);
+                }
+                reference = Some(preview.aois);
+            }
+        }
+    }
     #[test]
     fn oriented_rotation_preserves_locations_sizes_and_seeded_prefix() {
         let settings = Gdp {
@@ -1008,6 +1255,7 @@ mod tests {
             let data = Arc::new(Dataset::decode(input.bytes.as_ref().unwrap()).unwrap());
             let result = run(Settings::Environment(environment(kind)), Some(data));
             assert_eq!(result.count, 5);
+            assert!(result.max_edges <= super::super::compact::EDGE_LIMIT);
             assert!(result
                 .aois
                 .iter()

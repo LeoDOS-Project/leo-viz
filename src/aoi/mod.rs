@@ -1,6 +1,7 @@
 //! Native and browser AOI generation. Generated AOIs stay separate from
 //! the circular routing-demo targets and do not acquire application semantics.
 
+mod compact;
 mod data;
 mod environment;
 mod fill;
@@ -165,11 +166,19 @@ impl AoiGenerator {
             self.gdp_ui(ui);
         } else {
             let index = self.page - 1;
-            if let Some((settings, dataset)) = self.sources[index].ui(ui, busy) {
+            if let Some(action) = self.sources[index].ui(ui, busy) {
                 self.error = None;
                 self.progress = "Preparing geographic source…".into();
                 self.pending_source = Some(index);
-                self.pending = Some(worker::start(settings, dataset, ui.ctx().clone()));
+                self.pending = Some(match action {
+                    environment::Action::Generate(settings, dataset) => {
+                        worker::start(settings, dataset, ui.ctx().clone())
+                    }
+                    environment::Action::Compact(preview) => {
+                        self.progress = "Simplifying stored AOI boundaries…".into();
+                        worker::compact(preview, ui.ctx().clone())
+                    }
+                });
             }
             if let Some(error) = &self.error {
                 ui.colored_label(egui::Color32::LIGHT_RED, error);
@@ -300,6 +309,7 @@ impl AoiGenerator {
                     ui.strong(self.preview_name);
                     ui.label(format!("{} AOIs · actual average {:.1} km²", preview.count, preview.mean_area));
                     ui.small(format!("Area {:.2}–{:.2} km² · seed {}", preview.min_area, preview.max_area, preview.seed));
+                    preview.complexity_ui(ui);
                     ui.checkbox(&mut self.visible, "Show AOIs on Earth globes");
                     ui.add(egui::Slider::new(&mut self.opacity, 0.05..=1.0).text("Outline opacity"));
                     ui.small("Zoom in for outlines. Subpixel AOIs appear as dots.");
@@ -355,6 +365,17 @@ impl AoiGenerator {
     }
 
     pub(crate) fn poll(&mut self, ctx: &egui::Context) {
+        self.poll_aois(ctx);
+        let layers: Vec<_> = self
+            .preview
+            .iter()
+            .chain(self.sources.iter().filter_map(|s| s.preview.as_ref()))
+            .cloned()
+            .collect();
+        self.jobs.poll(ctx, &layers);
+    }
+
+    fn poll_aois(&mut self, ctx: &egui::Context) {
         use std::sync::mpsc::TryRecvError;
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_storage();

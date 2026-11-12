@@ -10,8 +10,10 @@ use leo_sim::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::RefCell,
     io::{Read, Write},
     path::Path,
+    sync::Arc,
 };
 
 /// Preparation has several distinct stages; percentages apply only to the
@@ -147,11 +149,20 @@ struct Checkpoint {
     state: BaselineState,
 }
 pub struct Session {
-    inputs: Inputs,
+    inputs: Arc<Inputs>,
     atlas: Atlas,
     state: Option<BaselineState>,
     next_tick: u64,
     poisoned: bool,
+    meter_cache: RefCell<Option<(u64, Meters)>>,
+    window: RefCell<CaptureWindow>,
+}
+#[derive(Default)]
+struct CaptureWindow {
+    first: usize,
+    seen: usize,
+    bytes: Vec<f64>,
+    counts: Vec<usize>,
 }
 #[derive(Clone)]
 pub struct Meters {
@@ -228,15 +239,21 @@ impl Session {
         let state = baseline.into_state();
         PreparationProgress::report(&mut progress, PreparationStage::Ready, total, total)?;
         Ok(Self {
-            inputs,
+            inputs: Arc::new(inputs),
             atlas,
             state: Some(state),
             next_tick: 0,
             poisoned: false,
+            meter_cache: RefCell::new(None),
+            window: RefCell::new(CaptureWindow::default()),
         })
     }
     pub fn inputs(&self) -> &Inputs {
         &self.inputs
+    }
+    /// Immutable setup shared with viewers without duplicating all AOI geometry.
+    pub fn shared_inputs(&self) -> Arc<Inputs> {
+        self.inputs.clone()
     }
     pub fn elapsed_s(&self) -> f64 {
         (self.next_tick as f64 * self.inputs.options.step_s).min(self.inputs.options.duration_s)
@@ -306,6 +323,11 @@ impl Session {
             self.next_tick,
             last,
             std::mem::take(&mut baseline.report.opportunities),
+            if self.inputs.jobs.len() >= 1000 {
+                crate::parallel::worker_count(self.inputs.satellites.len())
+            } else {
+                1
+            },
             |s, t| {
                 self.inputs.satellites[s]
                     .orbit
@@ -332,11 +354,42 @@ impl Session {
         }
     }
     pub fn meters(&self) -> Meters {
+        if let Some((tick, meters)) = &*self.meter_cache.borrow() {
+            if *tick == self.next_tick {
+                return meters.clone();
+            }
+        }
         let now = self.elapsed_s();
+        let captures = &self.state().captures;
+        let mut window = self.window.borrow_mut();
+        window.bytes.resize(self.inputs.satellites.len(), 0.0);
+        window.counts.resize(self.inputs.satellites.len(), 0);
+        while window.first < window.seen && captures[window.first].end_s <= now - 86400.0 {
+            let c = &captures[window.first];
+            window.bytes[c.satellite] = (window.bytes[c.satellite] - c.bytes).max(0.0);
+            window.counts[c.satellite] -= 1;
+            if window.counts[c.satellite] == 0 {
+                window.bytes[c.satellite] = 0.0;
+            }
+            window.first += 1;
+        }
+        // A restored/fast-forwarded session may contain many days of history.
+        // Skip newly observed records already outside the window instead of
+        // adding and subtracting huge totals (and losing precision).
+        let first_new =
+            window.seen + captures[window.seen..].partition_point(|c| c.end_s <= now - 86400.0);
+        if first_new > window.seen {
+            window.first = first_new;
+        }
+        for c in &captures[first_new..] {
+            window.bytes[c.satellite] += c.bytes;
+            window.counts[c.satellite] += 1;
+        }
+        window.seen = captures.len();
         let mut meters = Meters {
             elapsed_s: now,
-            captured_last_24h_bytes: vec![0.0; self.inputs.satellites.len()],
-            captures_last_24h: 0,
+            captured_last_24h_bytes: window.bytes.clone(),
+            captures_last_24h: (window.seen - window.first) as u64,
             captures_total: self.state().captures.len() as u64,
             due_updates: 0,
             complete_updates: 0,
@@ -346,16 +399,6 @@ impl Session {
             jobs_meeting_all_due_updates: 0,
             jobs_without_due_updates: 0,
         };
-        for c in self
-            .state()
-            .captures
-            .iter()
-            .rev()
-            .take_while(|c| c.end_s > now - 86400.0)
-        {
-            meters.captured_last_24h_bytes[c.satellite] += c.bytes;
-            meters.captures_last_24h += 1;
-        }
         for j in &self.report().jobs {
             meters.due_updates += j.due_updates;
             meters.complete_updates += j.complete_due_updates;
@@ -366,6 +409,7 @@ impl Session {
             meters.jobs_meeting_all_due_updates += u64::from(j.due_updates > 0 && failures == 0);
             meters.jobs_without_due_updates += u64::from(j.due_updates == 0);
         }
+        *self.meter_cache.borrow_mut() = Some((self.next_tick, meters.clone()));
         meters
     }
     pub fn footprint(&self, capture: &baseline::RetainedCapture) -> Polygons {
@@ -449,7 +493,36 @@ impl Session {
         PreparationProgress::report(&mut progress, PreparationStage::ReadCheckpoint, 0, 0)?;
         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
         let decoder = flate2::read::GzDecoder::new(std::io::BufReader::new(file));
-        let checkpoint: Checkpoint = serde_json::from_reader(decoder.take(2 * 1024 * 1024 * 1024))
+        struct ProgressReader<R, F> {
+            inner: R,
+            progress: F,
+            read: usize,
+            next: usize,
+        }
+        impl<R: Read, F: FnMut(PreparationProgress) -> bool> Read for ProgressReader<R, F> {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                if self.read >= self.next {
+                    if !(self.progress)(PreparationProgress {
+                        stage: PreparationStage::ReadCheckpoint,
+                        completed: self.read,
+                        total: 0,
+                    }) {
+                        return Err(std::io::Error::other("Cancelled while reading checkpoint"));
+                    }
+                    self.next = self.read.saturating_add(1024 * 1024);
+                }
+                let n = self.inner.read(buffer)?;
+                self.read += n;
+                Ok(n)
+            }
+        }
+        let reader = ProgressReader {
+            inner: decoder.take(2 * 1024 * 1024 * 1024),
+            progress: &mut progress,
+            read: 0,
+            next: 0,
+        };
+        let checkpoint: Checkpoint = serde_json::from_reader(std::io::BufReader::new(reader))
             .map_err(|e| format!("Invalid capture checkpoint: {e}"))?;
         if !(1..=2).contains(&checkpoint.schema_version) {
             return Err("Unsupported capture checkpoint version".into());
@@ -473,7 +546,7 @@ impl Session {
             0,
             checkpoint.state.captures.len(),
         )?;
-        session.validate_state(&checkpoint.state)?;
+        session.validate_state(&checkpoint.state, &mut progress)?;
         PreparationProgress::report(
             &mut progress,
             PreparationStage::VerifyPositions,
@@ -502,12 +575,23 @@ impl Session {
         )?;
         Ok(session)
     }
-    fn validate_state(&self, state: &BaselineState) -> Result<(), String> {
+    fn validate_state(
+        &self,
+        state: &BaselineState,
+        progress: &mut impl FnMut(PreparationProgress) -> bool,
+    ) -> Result<(), String> {
         state.validate(
             &self.inputs.jobs,
             &self.atlas,
             self.inputs.satellites.len(),
             self.elapsed_s(),
+            |completed, total| {
+                progress(PreparationProgress {
+                    stage: PreparationStage::ValidateCheckpoint,
+                    completed,
+                    total,
+                })
+            },
         )?;
         let r = &state.report;
         if r.options != self.inputs.options

@@ -4,6 +4,7 @@ mod capture_worker;
 pub(crate) mod model;
 #[cfg(any(test, not(target_arch = "wasm32")))]
 mod storage;
+mod worker;
 
 use crate::aoi::preview::{Hit, Preview};
 use eframe::egui;
@@ -30,6 +31,15 @@ pub(crate) struct Panel {
     revision: u64,
     baseline: capture_ui::Panel,
     timing: Option<(u64, model::TimingSummary)>,
+    assignment: Option<Assignment>,
+}
+struct Assignment {
+    rx: std::sync::mpsc::Receiver<worker::Event>,
+    generator: Generator,
+    revision: u64,
+    completed: usize,
+    total: usize,
+    workers: usize,
 }
 impl Default for Panel {
     fn default() -> Self {
@@ -37,6 +47,7 @@ impl Default for Panel {
             revision: 0,
             baseline: capture_ui::Panel::default(),
             timing: None,
+            assignment: None,
             config: Generator::default(),
             applied: None,
             jobs: Vec::new(),
@@ -135,6 +146,7 @@ impl Panel {
             self.edit = None;
         }
     }
+    #[cfg(test)]
     fn assign(&mut self) -> Result<(), String> {
         let jobs = self
             .config
@@ -145,7 +157,67 @@ impl Panel {
         self.install(jobs, self.config.clone());
         Ok(())
     }
+    fn start_assignment(&mut self, ctx: &egui::Context) {
+        if self.assignment.is_some() {
+            return;
+        }
+        let total = self.layers.iter().map(|p| p.count).sum();
+        self.assignment = Some(Assignment {
+            rx: worker::start(self.config.clone(), self.layers.clone(), ctx.clone()),
+            generator: self.config.clone(),
+            revision: self.revision,
+            completed: 0,
+            total,
+            workers: leo_capture::parallel::worker_count(total),
+        });
+        self.message = None;
+    }
+    pub(crate) fn poll(&mut self, ctx: &egui::Context, layers: &[Arc<Preview>]) {
+        use std::sync::mpsc::TryRecvError;
+        self.sync(layers);
+        loop {
+            let Some(pending) = &mut self.assignment else {
+                return;
+            };
+            match pending.rx.try_recv() {
+                Ok(worker::Event::Progress(done)) => pending.completed = done,
+                Ok(worker::Event::Finished(result)) => {
+                    let pending = self.assignment.take().unwrap();
+                    self.message = Some(if pending.revision != self.revision {
+                        "AOIs or jobs changed during assignment. Assign again to use the current state.".into()
+                    } else {
+                        match result {
+                            Ok(jobs) if !jobs.is_empty() => {
+                                let message = format!(
+                                    "Assigned {} jobs with seed {} · {} CPU workers.",
+                                    jobs.len(),
+                                    pending.generator.seed,
+                                    pending.workers
+                                );
+                                self.install(jobs, pending.generator);
+                                message
+                            }
+                            Ok(_) => "Load or generate AOIs first.".into(),
+                            Err(error) => error,
+                        }
+                    });
+                    return;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.assignment = None;
+                    self.message =
+                        Some("Job assignment worker stopped. Previous jobs were preserved.".into());
+                    return;
+                }
+                Err(TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                    return;
+                }
+            }
+        }
+    }
     fn install(&mut self, jobs: Vec<Job>, generator: Generator) {
+        self.assignment = None;
         self.revision += 1;
         self.jobs = jobs;
         self.lookup = self
@@ -178,7 +250,7 @@ impl Panel {
         layers: Vec<Arc<Preview>>,
         capture: &mut CaptureProfile,
     ) {
-        self.sync(&layers);
+        self.poll(ui.ctx(), &layers);
         let reveal = std::mem::take(&mut self.reveal);
         egui::CollapsingHeader::new("Jobs")
             .id_salt("sidebar-jobs").default_open(true).open(reveal.then_some(true)).show(ui, |ui| {
@@ -186,6 +258,11 @@ impl Panel {
                 if reveal { intro.scroll_to_me(Some(egui::Align::TOP)); }
                 ui.small("One job per loaded AOI. Overlaps count separately; overlay visibility does not change demand.");
                 ui.label("Click an AOI on the Earth globe to inspect its job.");
+                if let Some(pending) = &self.assignment {
+                    ui.label(format!("Assigning jobs · {} CPU workers", pending.workers));
+                    ui.add(egui::ProgressBar::new(pending.completed as f32 / pending.total.max(1) as f32)
+                        .text(format!("{} / {} jobs", pending.completed, pending.total)));
+                }
                 if !self.compatible {
                     ui.colored_label(egui::Color32::YELLOW, "AOIs changed. Assign jobs again, or load a workload matching these AOIs.");
                 }
@@ -198,20 +275,18 @@ impl Panel {
                 ui.separator();
                 egui::CollapsingHeader::new(format!("Job generator · {count} loaded AOIs"))
                     .id_salt("job-generator").default_open(self.jobs.is_empty()).show(ui, |ui| {
-                        self.generator_ui(ui);
+                        let busy = self.assignment.is_some();
+                        ui.add_enabled_ui(!busy, |ui| self.generator_ui(ui));
                         let validation = self.config.validate_generation();
                         if let Err(error) = &validation { ui.colored_label(egui::Color32::LIGHT_RED, error); }
-                        if ui.add_enabled(count > 0 && validation.is_ok(), egui::Button::new(
+                        if ui.add_enabled(!busy && count > 0 && validation.is_ok(), egui::Button::new(
                             if self.jobs.is_empty() { "Assign jobs to AOIs" } else { "Reassign all jobs" })).clicked() {
-                            self.message = match self.assign() {
-                                Ok(()) => Some(format!("Assigned {} jobs with seed {}.", self.jobs.len(), self.config.seed)),
-                                Err(error) => Some(error),
-                            };
+                            self.start_assignment(ui.ctx());
                         }
                         if self.applied.as_ref().is_some_and(|applied| applied != &self.config) {
                             ui.small("Generator changes apply when you reassign. Existing jobs and totals are unchanged.");
                         }
-                        if ui.add_enabled(self.compatible && !self.jobs.is_empty(), egui::Button::new("Regenerate capture timing")).on_hover_text("Apply the cadence-aware illumination rule and redraw solar preferences using this seed and acquisition settings. Keeps AOIs, cadences, priorities, fulfilment modes, pipelines and output sizes. Existing capture sessions are unchanged.").clicked() {
+                        if ui.add_enabled(!busy && self.compatible && !self.jobs.is_empty(), egui::Button::new("Regenerate capture timing")).on_hover_text("Apply the cadence-aware illumination rule and redraw solar preferences using this seed and acquisition settings. Keeps AOIs, cadences, priorities, fulfilment modes, pipelines and output sizes. Existing capture sessions are unchanged.").clicked() {
                             self.message = Some(match self.regenerate_timing() {
                                 Ok(()) => "Regenerated capture timing. Save the workload and start a new capture run to use it; checkpoints retain their original jobs.".into(),
                                 Err(e) => e,
@@ -219,7 +294,7 @@ impl Panel {
                         }
                     });
                 #[cfg(not(target_arch = "wasm32"))]
-                self.storage_ui(ui, capture);
+                ui.add_enabled_ui(self.assignment.is_none(), |ui| self.storage_ui(ui, capture));
                 if let Some(message) = &self.message { ui.small(message); }
                 ui.collapsing("Calculation assumptions", |ui| {
                     ui.label("Input is new useful imagery over each AOI, using the Data pane's channels, resolution, packed encoding and compression. It excludes unused swath pixels and repeated reads of history.");
@@ -569,6 +644,40 @@ fn metric(ui: &mut egui::Ui, label: &str, value: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn finish_assignment(panel: &mut Panel, ctx: &egui::Context) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while panel.assignment.is_some() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            panel.poll(ctx, &panel.layers.clone());
+        }
+        assert!(panel.assignment.is_none(), "assignment worker timed out");
+    }
+    #[test]
+    fn assignment_preserves_existing_jobs_on_failure_or_changed_inputs() {
+        let mut panel = Panel::default();
+        let ctx = egui::Context::default();
+        let p = preview();
+        panel.sync(&[Arc::clone(&p)]);
+        panel.assign().unwrap();
+        let previous = panel.jobs.clone();
+        panel.config.seed += 1;
+        panel.start_assignment(&ctx);
+        panel.sync(&[]);
+        finish_assignment(&mut panel, &ctx);
+        assert_eq!(panel.jobs, previous);
+        assert!(panel
+            .message
+            .as_ref()
+            .unwrap()
+            .contains("changed during assignment"));
+
+        // Duplicate IDs in separate layers must be checked across the entire input.
+        panel.sync(&[Arc::clone(&p), p]);
+        panel.start_assignment(&ctx);
+        finish_assignment(&mut panel, &ctx);
+        assert_eq!(panel.jobs, previous);
+        assert!(panel.message.as_ref().unwrap().contains("unique"));
+    }
     fn preview() -> Arc<Preview> {
         Arc::new(Preview::from_json(br#"{"schema_version":1,"config":{"seed":42,"count":1},"aois":[{"id":"a","area_km2":100,"anchor_lon":-90,"anchor_lat":0,"geometry":{"type":"Polygon","coordinates":[[[-91,-1],[-89,-1],[-89,1],[-91,1],[-91,-1]]]}}]}"#).unwrap())
     }
@@ -622,6 +731,7 @@ mod tests {
                 ],
             );
         }
+        finish_assignment(&mut panel, &ctx);
         assert_eq!(panel.jobs.len(), 1);
         assert_eq!(panel.report(capture).unwrap().0.count, 1);
     }

@@ -7,6 +7,69 @@ use super::{
 use eframe::egui;
 use std::sync::mpsc;
 
+pub(super) fn compact(
+    preview: std::sync::Arc<Preview>,
+    ctx: egui::Context,
+) -> mpsc::Receiver<Event> {
+    let (tx, rx) = mpsc::channel();
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::spawn(move || {
+        leo_capture::resources::background_thread();
+        let workers = leo_capture::parallel::worker_count(preview.count);
+        let mut last = std::time::Instant::now();
+        let result = leo_capture::parallel::map(
+            (0..preview.count).collect(),
+            workers,
+            |i| Preview::prepare_record(super::compact::record(preview.record(i))?, i),
+            |done, total| {
+                if done == 0 || done == total || last.elapsed().as_millis() >= 100 {
+                    let _ = tx.send(Event::Progress(format!(
+                        "Simplifying AOIs: {done} / {total} · {workers} CPU workers"
+                    )));
+                    ctx.request_repaint();
+                    last = std::time::Instant::now();
+                }
+            },
+        )
+        .map(|prepared| {
+            let mut result = Preview::empty(preview.count, preview.seed);
+            for aoi in prepared {
+                result.push_prepared(aoi);
+            }
+            let _ = tx.send(Event::Progress("Preparing AOI display buffers…".into()));
+            ctx.request_repaint();
+            result.finish()
+        });
+        let _ = tx.send(Event::Finished(result));
+        ctx.request_repaint();
+    });
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = async {
+            let mut result = Preview::empty(preview.count, preview.seed);
+            let mut last = web_time::Instant::now();
+            for i in 0..preview.count {
+                result.push_record(super::compact::record(preview.record(i))?)?;
+                if last.elapsed().as_millis() >= 4 {
+                    let _ = tx.send(Event::Progress(format!(
+                        "Simplifying AOIs: {} / {}",
+                        i + 1,
+                        preview.count
+                    )));
+                    ctx.request_repaint();
+                    crate::tle::yield_now().await;
+                    last = web_time::Instant::now();
+                }
+            }
+            Ok(result.finish())
+        }
+        .await;
+        let _ = tx.send(Event::Finished(result));
+        ctx.request_repaint();
+    });
+    rx
+}
+
 pub(super) enum Event {
     Progress(String),
     Finished(Result<Preview, String>),
@@ -20,29 +83,31 @@ pub(super) fn start(
     let (tx, rx) = mpsc::channel();
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(move || {
+        leo_capture::resources::background_thread();
         let result = (|| {
             settings.validate()?;
+            let workers = leo_capture::parallel::worker_count(settings.count());
+            let _ = tx.send(Event::Progress(format!(
+                "Loading geographic source · {workers} CPU workers…"
+            )));
+            ctx.request_repaint();
             let dataset = if settings.uniform() {
                 None
             } else {
                 Some(data::load(&input, settings.source_kind())?)
             };
-            let total = settings.count();
-            let mut job = Job::new(settings, dataset)?;
             let mut last = std::time::Instant::now();
-            loop {
-                if let Some(preview) = job.step()? {
-                    return Ok(preview);
-                }
-                if last.elapsed().as_millis() >= 100 {
+            let mut previous_stage = "";
+            Job::new(settings, dataset)?.run_parallel(workers, |stage, done, total| {
+                if stage != previous_stage || done == total || last.elapsed().as_millis() >= 100 {
                     let _ = tx.send(Event::Progress(format!(
-                        "Generating AOIs: {} / {total}",
-                        job.completed
+                        "{stage}: {done} / {total} · {workers} CPU workers"
                     )));
                     ctx.request_repaint();
                     last = std::time::Instant::now();
+                    previous_stage = stage;
                 }
-            }
+            })
         })();
         let _ = tx.send(Event::Finished(result));
         ctx.request_repaint();
@@ -82,6 +147,7 @@ pub(super) fn load_preset(ctx: egui::Context, legacy: bool) -> mpsc::Receiver<Ev
     let (tx, rx) = mpsc::channel();
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(move || {
+        leo_capture::resources::background_thread();
         let _ = tx.send(Event::Finished(super::presets::load(legacy)));
         ctx.request_repaint();
     });

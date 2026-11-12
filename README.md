@@ -169,6 +169,33 @@ independent overlays. Fetch the prepared snapshots for desktop or local web buil
 git lfs pull --include="assets/aois/*.aoi-data.json.gz"
 ```
 
+New forest, river and coast AOIs have at most **100 stored boundary edges each**,
+counting all holes and separate pieces together. Simplification runs before
+triangulation and render preparation; capture simulation and saved geometry use
+the same reduced footprint. Smallest holes or pieces are discarded when needed
+to meet the cap, and the area is recalculated. The panel reports boundary counts,
+removed features and the largest area change. For existing layers, use
+**Simplify loaded AOIs to 100 edges** on each environmental source page, then
+**Assign jobs to AOIs** again and **Save AOIs** to retain the result. Loading a file
+preserves its original geometry until you explicitly simplify it.
+
+Desktop AOI generation and simplification use a worker pool sized automatically
+from the available logical CPUs, leaving two CPUs free and using at most eight
+workers by default (limited to the item count, falling back to one).
+Seeded locations and shape parameters are sampled in their original order;
+geometry, simplification, triangulation and outline preparation run in parallel.
+Results are assembled in input order, so worker count does not change geometry,
+IDs or saved workloads. Progress reports the stage, count and number of workers.
+The browser yields between short batches on its main thread.
+Generated layers accumulate in memory without per-AOI disk writes. **Save AOIs** streams the completed layers as
+JSON (optionally gzip-compressed) through a buffered temporary file and atomically
+replaces the destination, without building a second full JSON copy in memory.
+
+The GDP preset is unchanged: its ground rectangles have sampled curved sides and
+dateline splits, so they can use more than four stored edges. GPU geometry counts
+also include outline detail levels, spherical subdivision and fill triangles;
+the stored-edge cap is not a GPU vertex cap.
+
 In the browser, each source is fetched only when generating AOIs and cached for
 the session, rather than embedded in WebAssembly. The four snapshots total about
 26 MiB compressed. WorldCover uses a coarse 0.05-degree tree-cover proxy; sensor
@@ -199,6 +226,13 @@ After loading or generating AOIs, open **Earth Observation → Jobs → Job gene
 and click **Assign jobs to AOIs**. All loaded GDP, forest, river and coast AOIs
 receive one independent job, including hidden overlays. Geography does not select
 an application type. Jobs are independent of the circular routing-demo AOIs.
+
+Desktop job assignment uses the same CPU budget and runs off the UI
+thread, with a progress meter. The shared headless generator uses the same pool.
+Assignments remain identical for the same seed and AOIs regardless of worker count.
+The previous workload stays available until all new assignments succeed; a result
+is discarded if its inputs changed while it was running. Browser assignment uses
+cooperative batches without shared-memory threads.
 
 The generator has a seed, relative weights for **Map**, **Map → Window**, and
 **Window**, joint cadence/window profiles, global cadence and history-span bounds,
@@ -286,8 +320,9 @@ apply to the next run, so they never invalidate the active session.
 
 The optional **Open capture diagnostic map** uses the session's own clock and saved constellation, independent
 of the setup preview. It shows AOIs, current satellite ground positions, and
-retained crop outlines from the last 10 simulated minutes (latest 2,000). Zoom to
-inspect AOI boundaries. The complete capture ledger remains in the session even
+retained crop outlines from the last 10 simulated minutes (latest 2,000 records,
+up to 100,000 vertices). Zoom to inspect AOI boundaries (up to 50,000 vertices
+per frame, with spatial culling). The complete capture ledger remains in the session even
 when its footprints are no longer displayed. Starting or loading a run leaves the
 current globe view intact. That globe remains the setup/orbit preview and does not
 follow capture time. In the diagnostic map, blue points are AOIs, amber points are
@@ -330,6 +365,43 @@ rectangular AOIs.
   later progress is not automatically saved. Worker errors include the operation
   and failure text, preserve the last completed display, and disable run/save until
   a session is loaded or restarted. No image pixels are generated or stored.
+
+**Native resource limits** in the capture panel configure a shared background-worker
+budget, simulation calculation/rest ratio (75% active by default), and client-memory
+pause threshold. The worker budget defaults to `min(8, max(1, CPUs - 2))` and is
+shared across AOI generation, job assignment, capture preparation and capture
+intersection workers. On macOS these calculation threads use Utility QoS so
+interactive work takes precedence. Settings apply for the current app session;
+CPU budget changes take effect as admitted work batches finish.
+
+The memory pause threshold defaults to 16 GiB and can be adjusted in the panel.
+The monitor measures the whole process (including compressed memory on macOS;
+RSS plus swap on Linux). Other platforms explicitly report when monitoring is
+unavailable. A run reaching the threshold pauses at a completed tick, remains
+saveable, and can resume after the limit is raised or memory is freed. Preparation,
+checkpoint decoding and validation can cancel before retaining more state. This
+is a **soft pause threshold**, not an OS allocation cap: one in-flight operation
+can overshoot it, and GPU/other applications' memory is not separately controlled.
+No captured data is deleted to meet the threshold. **Unload session** explicitly
+stops capture and releases the session; save first because unsaved progress is
+lost. This lets you release an old session before loading another large checkpoint.
+Simulated satellite storage
+capacity is a separate quantity and remains diagnostic in this unconstrained baseline.
+
+Preparation clips independent AOIs in bounded parallel batches. Capture intersection
+work is parallel for large workloads, then updates commit in the original
+satellite/patch/crop order so reuse and checkpoints stay deterministic. Dense atlas
+cells use an additional spatial index. UI snapshots copy only the displayed jobs,
+share immutable inputs, incrementally maintain 24-hour capture totals and replace
+stale snapshots in a single-slot mailbox. Paused sessions do not rebuild unchanged
+views, and a closed diagnostic map generates no satellite/footprint display geometry.
+The complete retained ledger still grows with the run; it is needed for checkpoints.
+
+For a repeatable 50,000-AOI / 169-satellite performance check:
+
+```sh
+cargo test --manifest-path crates/leo-capture/Cargo.toml benchmark_capture_pipeline -- --ignored --nocapture
+```
 
 The job generator and individual inspector now include acquisition requirements:
 
