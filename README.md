@@ -141,11 +141,16 @@ and the boundary between infrastructure actions and the future job layer.
 The Rust AOI generator creates reproducible, overlapping AOIs as rectangles
 or environmental patches and corridors, using weighted geographic data or uniform sampling.
 At the top of the right **Earth Observation** sidebar, open
-**AOI presets / save / load → Default Jobs → Load preset**. This loads 53,000 AOIs:
-50,000 bundled GDP rectangles plus 1,000 each of forests, rivers and coasts,
-generated with the environmental pages' default settings and seed 42. The latter
-use the bundled geographic snapshots and the 100-edge-per-AOI cap. Loading runs
-in the background and replaces all four layers together only after success;
+**AOIs & jobs · presets → Default AOIs (bundled) → Load**. This loads 53,000 AOIs:
+50,000 bundled GDP rectangles plus 1,000 each of forests, rivers and coasts.
+All four layers load **saved polygon coordinates**, without regenerating AOIs or
+loading geographic source datasets. The environmental samples were frozen from
+the generator's default settings and seed 42, with the 100-edge-per-AOI cap.
+Native loading prepares geometry on the bounded CPU worker pool; loading the
+same preset again reuses any layers still in memory, including their display
+buffers. This cache holds weak references, so clearing/replacing the layers can
+release their memory. Loading runs in the background, reports each layer and
+preparation stage, and replaces all four layers together only after success;
 an error preserves the previous layers. Job settings are assigned separately.
 GDP generation defaults are an
 expected mean area of 100 km², a 1,000× max/min area ratio, seed 42, 600 hotspots,
@@ -157,6 +162,23 @@ sample averages 99.4 km² and lives in
 The adjacent manifest records provenance, library versions, statistics and hashes.
 The preset menu also retains **Legacy rectangles (1,000 km²)** for existing saved
 workloads. Geometry changes require assigning a new set of jobs.
+
+The frozen environmental files are `assets/aois/default-{forest,river,coast}.json.gz`.
+`assets/aois/default-environment.manifest.json` records their generator settings,
+source and output hashes, geometry identities and complexity. To deliberately
+rebuild these assets after changing defaults (requires the geographic snapshots):
+
+```sh
+cargo test --release rebuild_environment_presets -- --ignored --nocapture
+```
+
+This command checks that saved coordinates and workload identities exactly match
+the generated sample. Ordinary **Load** never runs this command. For load
+timings, use `cargo test --release benchmark_preset_loading -- --ignored --nocapture`.
+An optimized native run with eight workers measured about 6.5 seconds for the
+previous GDP-load-plus-environment-generation path and 1.22 seconds for a cold
+load of all 53,000 saved AOIs. Reusing the loaded layers took under 1 ms (worker
+loading time, excluding UI frame scheduling and first GPU upload).
 
 For new samples, tune the parameters and click **Generate**. Generation runs in
 Rust on desktop and in the browser, with no Python installation or subprocess.
@@ -182,7 +204,7 @@ the same reduced footprint. Smallest holes or pieces are discarded when needed
 to meet the cap, and the area is recalculated. The panel reports boundary counts,
 removed features and the largest area change. For existing layers, use
 **Simplify loaded AOIs to 100 edges** on each environmental source page, then
-**Assign jobs to AOIs** again and **Save AOIs** to retain the result. Loading a file
+**Assign jobs to AOIs** again and **Save** to retain the result. Loading a file
 preserves its original geometry until you explicitly simplify it.
 
 Desktop AOI generation and simplification use a worker pool sized automatically
@@ -193,7 +215,7 @@ geometry, simplification, triangulation and outline preparation run in parallel.
 Results are assembled in input order, so worker count does not change geometry,
 IDs or saved workloads. Progress reports the stage, count and number of workers.
 The browser yields between short batches on its main thread.
-Generated layers accumulate in memory without per-AOI disk writes. **Save AOIs** streams the completed layers as
+Generated layers accumulate in memory without per-AOI disk writes. **Save** streams the completed layers as
 JSON (optionally gzip-compressed) through a buffered temporary file and atomically
 replaces the destination, without building a second full JSON copy in memory.
 
@@ -292,56 +314,76 @@ imagery, distinct from the Data pane's continuous full-swath sensor production.
 All sizes are linear in area, so these aggregate estimates do not require a
 choice of observation-unit subdivision or simultaneous whole-AOI acquisitions.
 
-**Earth Observation → AOI presets / save / load** is the single preset and file
-menu, above **AOI Generator**. It saves all loaded GDP, forest, river and
-coast layers, including hidden layers. Set the path and click **Save AOIs**;
-`.json.gz` writes compressed JSON and `.json` writes plain JSON. The file contains
-the original polygon coordinates (including holes and dateline parts), IDs,
-sources, anchors, areas, source seeds and path metadata. It uses the same AOI
-dataset format accepted by the headless capture simulator. Saving and loading
-run in the background; saves replace the destination atomically. **Load AOIs**
-validates the entire file before replacing all AOI layers; failed loads preserve
-the current layers. Loading requires neither Python nor the geographic source
-datasets. Job settings and capture progress are saved separately.
+**Earth Observation → AOIs & jobs · presets** has one **Save / Load** pair above
+**AOI Generator**. **Save** writes every loaded GDP, forest, river and coast AOI,
+including hidden layers, plus all currently assigned jobs and their shared Data
+settings. With no jobs assigned, it writes AOIs only. Jobs that no longer match
+the loaded AOIs must be reassigned before saving; the previous file is preserved
+if validation fails. Saving is disabled while assignment is running.
+
+The default file is `assets/presets/default-preset.json.gz`. Saving selects
+**Saved preset**, and **Load** restores that file's geometry and assignments
+together. On startup, the saved preset is selected if the default file exists.
+Selecting **Default AOIs (bundled)** or the legacy sample loads only their AOIs.
+Loading any AOI-only file/sample clears existing assignments. Shared Data
+settings are restored when jobs are included; AOI-only files leave them as-is.
+
+Use `.json.gz` for compressed JSON or `.json` for plain JSON. Geometry includes
+original coordinates, holes, dateline parts, IDs, sources, anchors, areas,
+source seeds and path metadata. The outer document retains AOI schema version 1
+for headless geometry readers, adds `preset_version: 1`, and optionally embeds a
+versioned `workload` containing actual jobs, generator parameters and image settings.
+Older AOI files and workload-only files also use the same **Load** button;
+workload-only imports require matching AOIs already loaded.
+
+Saving and loading run in the background with bounded geometry preparation.
+Saves replace the destination atomically. Loads validate geometry and every job
+reference before replacing the current setup; failure preserves AOIs, jobs and
+Data settings. Loading needs neither Python nor geographic source datasets.
+Capture progress and constellation state remain in simulation checkpoints.
 
 The **Satisfiability** section checks the current visible constellation against
-all assigned/loaded jobs and their matching AOI geometry. Click **Check current
-jobs** to forecast from the current simulation time. The default horizon is
-30 days; **Fit job cadences (up to 30 days)** includes the first deadline of each
-job where possible. Longer cadences or phases without a due deadline are
-explicitly **untested**, never passed. Playback does not move the forecast.
+all assigned/loaded jobs using **Observation reach**. Click **Check current jobs**
+to forecast from the current simulation time. The default horizon is 30 days;
+**Fit job cadences (up to 30 days)** covers the longest requested cadence where
+possible. Jobs with a cadence longer than the forecast remain **untested**.
+Playback does not move an existing forecast.
 
-The check uses the same swept-polygon acquisition generator as capture simulation:
-all portions of each AOI must be covered within each phase-aligned cadence window,
-with cumulative captures, holes, overlapping jobs, local solar time and solar
-elevation honored. Independent crops can produce useful partial output, but a
-full AOI update still requires full coverage; mosaics become ready only when
-complete. Results show satisfied, partially covered, missed-window and untested
-jobs, grouped by cadence, plus job details with failures first. Final incomplete
-windows are censored. Halve the track step and polygon edge spacing under
-**Accuracy** to check sensitivity near a boundary.
+Every AOI polygon must have full usable coverage, and the longest silence at
+any of its locations must be **no greater than its required cadence**. The check
+tracks the most recent access interval separately for each observed polygon
+fragment; it does not substitute an AOI centre or average observation count.
+Unlike fixed cadence windows, this catches observations near the beginning of
+one window and the end of the next that leave an excessive gap between them.
+Holes, separate pieces, overlaps and each job's solar-time/daylight requirements
+are respected. Phase, fulfilment mode, storage capacity and sensor byte settings
+belong to scheduling/execution and do not affect this geometric verdict.
 
-This is a **finite-horizon acquisition assessment**, not an all-time revisit
-certificate or a constrained schedule. A wider observable corridor retains the
-existing continuous-access approximation, without pointing/collection capacity.
-Finite storage is measured using the capture panel's capacity and sensor profile:
-a baseline overflow warns that a feasible allocation has not been established,
-but does not prove that another allocation cannot fit. There is no downlink,
-deletion, cloud, energy, compute or priority-based dropping in this assessment.
-The background worker shares the native CPU/memory limits, throttles to the
-configured duty percentage and supports cancellation. It stores only active
-coverage and summary counters, without a retained crop ledger or checkpoint.
-Setup/job/AOI changes cancel an active check and mark an old result outdated.
+Results show satisfied, incomplete-coverage, too-slow, resolution-limited and
+untested jobs, grouped by cadence. Job details show coverage percentage,
+required cadence and longest-silence bounds. Forecast start/end gaps count.
+A crop's acquisition time lies within its sampled track segment; results near
+the cadence threshold remain inconclusive when that timing uncertainty can
+change the verdict. Halve the track step and polygon edge spacing under
+**Accuracy** to check convergence. Coverage uses the existing relative area
+tolerance of one part per million.
 
-**Save / load workload** writes versioned compressed JSON containing actual
-assignments, generator parameters and shared image settings. The file references
-AOIs rather than duplicating geometry. Use **Load AOIs** first, then **Load workload**; loading
-verifies IDs, geometry hashes, areas and anchors, and restores the shared Data
-settings. Adding/replacing/removing an AOI dataset hides stale totals until jobs
-are reassigned or a matching workload is loaded. Visibility alone has no effect.
+This is a **finite-forecast geometric assessment**, not an all-time guarantee
+or a pointing/collection schedule. No data processing, storage allocation,
+downlink, clouds, energy or compute is simulated. The native worker shares CPU,
+memory and duty limits and supports cancellation. It retains a spatial partition
+of last-access intervals, not a crop history or capture ledger. Job/AOI/orbit/reach
+changes cancel an active check and mark an old result outdated; changing the
+imaging width alone (within the same reach) or Data settings does not.
+
+Assigned jobs, including individual edits, are stored in the combined preset
+above. Loading checks IDs, geometry hashes, areas and anchors, and restores
+shared Data settings without reassigning jobs. Adding/replacing/removing AOI
+layers hides stale totals until jobs are reassigned or a matching preset is
+loaded. Visibility alone has no effect.
 
 The implementation separates pure generation/accounting (`src/jobs/model.rs`),
-compressed persistence (`src/jobs/storage.rs`), and UI (`src/jobs/mod.rs`). Totals
+combined persistence (`src/aoi/storage.rs`, using `leo_capture::storage` for jobs), and UI (`src/jobs/mod.rs`). Totals
 are cached until jobs or capture settings change; they are not recomputed each
 animation frame.
 
@@ -509,8 +551,8 @@ The Earth constellation **Preset** dropdown includes **WorldView-3** (one
 satellite), **WorldView-30**, and **WorldView-60**. The latter two are hypothetical
 fleets using WorldView-3's nominal **617 km altitude and 97.9° retrograde
 inclination**, propagated with secular J2. The presets replace orbital overrides,
-clear stale tracks, and set the view's shared observable width to **450 km** and
-imaging swath to **13.1 km**. Both overlays are enabled: a faint cyan band with
+clear stale tracks, and set the view's **Observation reach** to **450 km** and
+**Observation width** to **13.1 km**. Both overlays are enabled: a faint cyan band with
 dashed edges shows the observable corridor, and a solid strip in each orbital
 plane's color shows the imaging swath. Their visibility toggles are independent.
 They preserve resource profiles. RAAN and phase are design coordinates, not a
@@ -526,9 +568,9 @@ The 450 km width represents an **idealized accessible corridor**. WorldView-3's
 native camera swath is **13.1 km**; its operator quotes 4.5-day revisit at 40° N
 with viewing angles within 20° of nadir. That is not a worst-case whole-band
 guarantee, and dividing it by satellite count does not determine a fleet's
-maximum revisit. Revisit calculations, data estimates, and the capture baseline
-still treat the full observable width as continuously available. The solid
-swath overlay and image previews use the narrower imaging width. Steering schedules,
+maximum revisit. Coverage/revisit calculations and the unconstrained capture baseline treat the
+full observation reach as accessible. Data rates, the solid swath overlay and
+image previews use the narrower observation width. Steering schedules,
 simultaneous collection capacity, and daylight are excluded from geometric
 revisit. See the [operator datasheet](https://pacgeo.com/wp-content/uploads/2025/12/Vantor_WorldView-3_25AUG2025_Datasheet_PacGeo.pdf)
 and [USGS orbit characterization](https://pubs.usgs.gov/of/2021/1030/i/ofr20211030i_ver1.1.pdf).
@@ -581,15 +623,15 @@ The default swath is 20 km and the trail covers the last 60 simulation seconds;
 both are adjustable. **Show sensor fan** adds faint rays from the satellite to
 the scanline. Pause freezes the trail; hiding both overlays clears it.
 
-Enable **Separate observable width** to model and display a wider accessible
-corridor alongside the imaging swath. **Observable corridor** toggles its faint
+Enable **Separate observation reach** to model and display a wider accessible
+corridor alongside the imaging swath. **Show observation reach** toggles its faint
 cyan fill and dashed edges independently of **Pushbroom sweeps**. Both widths
 remain physically to scale, share one bounded history per satellite, and use the
 same recent-trail duration. The WorldView presets configure these widths and
-enable both overlays automatically. Revisit, data estimates and the capture
-baseline use the observable width when configured, even when its overlay is
-hidden; the model still assumes continuous access across that width. Turning
-off **Separate observable width** restores the imaging width for calculations.
+enable both overlays automatically. Coverage, revisit, satisfiability and the unconstrained capture baseline use
+observation reach even when its overlay is hidden. Data rates always use the
+smaller observation width. Turning off **Separate observation reach** makes
+reach equal to width.
 
 This is a continuous nadir-imaging geometry preview on Earth globes, using the
 satellite positions already shown (including TLE/numerical positions). It does
@@ -626,7 +668,7 @@ reduce the texture to its supported maximum dimension.
 ## Earth Observation
 
 The resizable right **Earth Observation** sidebar contains **AOI Generator**,
-**Observation model** (imaging/observable widths, overlay visibility, coverage and a point sampler),
+**Observation model** (observation width/reach, overlay visibility, coverage and a point sampler),
 and **Data**. With **Display** set to **Planet**, select **Application → Earth Observation** to open it;
 select **None** or close it with **−** to restore the full view width. The application
 is available only when the active planet view contains exactly one Earth.
@@ -723,10 +765,10 @@ Earth rotation over a centred 0.5-second interval; summaries refresh up to four
 times per wall-clock second during playback. Numerical/42 configurations report
 an unsupported estimate rather than silently substituting another propagator.
 
-These are continuous acquisition estimates across the observation model's width,
-using the observable corridor when configured, or the imaging swath otherwise.
-The wider corridor is an access approximation, not simultaneous collection by
-the native camera. Estimates are independent of playback
+These are continuous acquisition estimates across **Observation width**, the
+actual sensor imaging swath. **Observation reach** is used for access and revisit
+and does not multiply data volume. For WorldView, the rates therefore use
+13.1 km rather than 450 km (about 34.35 times less). Estimates are independent of playback
 speed and sweep-overlay visibility. Hidden constellations and debris are excluded;
 overlapping captures count separately. They do not integrate an observation
 schedule or apply AOI cropping, illumination, clouds, imaging duty limits or
@@ -776,8 +818,8 @@ Open **Earth Observation → Observation model → Sampled latitude forecast…*
 When a common repeat cycle is known, the button is **Sample one repeat cycle…**
 and initializes the forecast with that exact cycle and Earth view. This remains a
 sampled regional estimate, separate from the analytical coverage guarantee.
-The background forecast uses visible Earth constellations, the observation width
-(observable corridor when configured, otherwise imaging swath), and the current
+The background forecast uses visible Earth constellations, the observation reach
+(equal to imaging width unless a wider reach is configured), and the current
 simulation time. Choose 0.01–30 days, longitude sample count,
 and an optional specific latitude/longitude (initially Gothenburg). Results show
 observations per day, successive-observation gap ranges, never-seen locations,

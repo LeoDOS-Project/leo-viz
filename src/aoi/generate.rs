@@ -32,7 +32,7 @@ pub(super) struct Gdp {
     pub max_aspect: f64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
 pub(super) struct Environment {
     pub kind: &'static str,
     pub count: usize,

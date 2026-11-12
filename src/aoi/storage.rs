@@ -1,10 +1,12 @@
-//! Native AOI geometry persistence, independent of workloads and checkpoints.
+//! One native preset file: exact AOI geometry and optional assigned workload.
 use super::{
-    preview::{Config, Document, Preview},
+    preview::{Config, Document, Preview, Record},
     AoiGenerator,
 };
 use eframe::egui;
-use serde::{ser::SerializeSeq, Serialize};
+use leo_capture::storage::Document as Workload;
+use leo_sim::acquisition::CaptureProfile;
+use serde::{ser::SerializeSeq, Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     io::{BufRead, BufReader, BufWriter, Read, Write},
@@ -15,6 +17,35 @@ use std::{
 const MAX_JSON_BYTES: u64 = 256 * 1024 * 1024;
 const KINDS: [&str; 4] = ["gdp", "forest", "river", "coast"];
 type Layers = [Option<Arc<Preview>>; 4];
+
+struct Snapshot {
+    layers: Vec<Arc<Preview>>,
+    workload: Option<Workload>,
+}
+struct Loaded {
+    layers: Layers,
+    workload: Option<Workload>,
+}
+#[derive(Deserialize)]
+struct SavedDocument {
+    schema_version: u32,
+    #[serde(default)]
+    preset_version: Option<u32>,
+    config: Config,
+    aois: Vec<Record>,
+    #[serde(default)]
+    workload: Option<Workload>,
+}
+
+fn validate_workload(workload: &Option<Workload>, layers: &[Arc<Preview>]) -> Result<(), String> {
+    if let Some(workload) = workload {
+        workload.validate()?;
+        if !crate::jobs::layers_match(&workload.jobs, layers) {
+            return Err("Saved jobs do not match the AOI geometry. No changes were made.".into());
+        }
+    }
+    Ok(())
+}
 
 struct Records<'a>(&'a [Arc<Preview>]);
 impl Serialize for Records<'_> {
@@ -37,7 +68,7 @@ impl<W: Write> Write for LimitedWriter<W> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         if bytes.len() as u64 > self.remaining {
             return Err(std::io::Error::other(
-                "AOIs exceed the 256 MB decoded limit",
+                "Preset exceeds the 256 MB decoded limit",
             ));
         }
         let n = self.inner.write(bytes)?;
@@ -49,7 +80,12 @@ impl<W: Write> Write for LimitedWriter<W> {
     }
 }
 
-fn save(path: &Path, layers: &[Arc<Preview>]) -> Result<usize, String> {
+fn save(
+    path: &Path,
+    layers: &[Arc<Preview>],
+    workload: Option<Workload>,
+) -> Result<(usize, usize), String> {
+    validate_workload(&workload, layers)?;
     let count = layers.iter().map(|p| p.count).sum();
     if count == 0 {
         return Err("Load or generate AOIs first.".into());
@@ -76,17 +112,22 @@ fn save(path: &Path, layers: &[Arc<Preview>]) -> Result<usize, String> {
     #[derive(Serialize)]
     struct Saved<'a> {
         schema_version: u32,
+        preset_version: u32,
         config: Config,
         aois: Records<'a>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workload: Option<&'a Workload>,
     }
     let saved = Saved {
         schema_version: 1,
+        preset_version: 1,
         config: Config {
             seed: layers[0].seed,
             count,
             source_seeds,
         },
         aois: Records(layers),
+        workload: workload.as_ref(),
     };
     let tmp = path.with_extension(format!(
         "{}.{}.tmp",
@@ -135,7 +176,7 @@ fn save(path: &Path, layers: &[Arc<Preview>]) -> Result<usize, String> {
     if result.is_err() {
         let _ = std::fs::remove_file(tmp);
     }
-    result.map(|()| count)
+    result.map(|()| (count, workload.as_ref().map_or(0, |w| w.jobs.len())))
 }
 
 #[cfg(test)]
@@ -190,8 +231,10 @@ mod tests {
                 std::process::id(),
                 extension
             ));
-            assert_eq!(save(&path, &originals).unwrap(), 4);
-            let restored = load(&path, |_| {}).unwrap();
+            assert_eq!(save(&path, &originals, None).unwrap(), (4, 0));
+            let restored = load(&path, std::array::from_fn(|_| None), |_| {})
+                .unwrap()
+                .layers;
             for (a, b) in originals.iter().zip(restored.iter()) {
                 let b = b.as_ref().unwrap();
                 assert_eq!(a.aois, b.aois);
@@ -262,8 +305,10 @@ mod tests {
                 std::process::id(),
                 extension
             ));
-            save(&path, &[Arc::clone(&reduced)]).unwrap();
-            let loaded = load(&path, |_| {}).unwrap();
+            save(&path, &[Arc::clone(&reduced)], None).unwrap();
+            let loaded = load(&path, std::array::from_fn(|_| None), |_| {})
+                .unwrap()
+                .layers;
             let loaded = loaded[1].as_ref().unwrap();
             assert_eq!(loaded.edge_count, reduced.edge_count);
             assert_eq!(loaded.original_edges, reduced.original_edges);
@@ -285,6 +330,7 @@ mod tests {
     fn frame(
         panel: &mut AoiGenerator,
         ctx: &egui::Context,
+        capture: &mut CaptureProfile,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
         ctx.run_ui(
@@ -296,14 +342,19 @@ mod tests {
                 events,
                 ..Default::default()
             },
-            |ui| panel.storage_ui(ui),
+            |ui| panel.storage_ui(ui, capture),
         )
     }
-    fn click(panel: &mut AoiGenerator, ctx: &egui::Context, label: &str) {
+    fn click(
+        panel: &mut AoiGenerator,
+        ctx: &egui::Context,
+        capture: &mut CaptureProfile,
+        label: &str,
+    ) {
         for _ in 0..2 {
-            let _ = frame(panel, ctx, vec![]);
+            let _ = frame(panel, ctx, capture, vec![]);
         }
-        let output = frame(panel, ctx, vec![]);
+        let output = frame(panel, ctx, capture, vec![]);
         let pos = output
             .shapes
             .iter()
@@ -318,6 +369,7 @@ mod tests {
             let _ = frame(
                 panel,
                 ctx,
+                capture,
                 vec![
                     egui::Event::PointerMoved(pos),
                     egui::Event::PointerButton {
@@ -335,7 +387,8 @@ mod tests {
             // Completion also works when the EO sidebar has been closed.
             panel.poll(ctx);
         }
-        assert!(!panel.storage.busy(), "AOI file operation timed out");
+        assert!(!panel.storage.busy(), "Preset file operation timed out");
+        let _ = frame(panel, ctx, capture, vec![]);
     }
     #[test]
     fn save_load_buttons_include_hidden_layers_and_bad_load_preserves_current_aois() {
@@ -348,7 +401,8 @@ mod tests {
         panel.sources[0].visible = false;
         let expected = panel.sources[0].preview.as_ref().unwrap().aois.clone();
         let ctx = egui::Context::default();
-        click(&mut panel, &ctx, "Save AOIs");
+        let mut capture = CaptureProfile::default();
+        click(&mut panel, &ctx, &mut capture, "Save");
         assert!(panel.storage.error.is_none(), "{:?}", panel.storage.error);
         assert!(panel
             .storage
@@ -359,22 +413,190 @@ mod tests {
         panel.preview = None;
         panel.sources[0].preview = None;
         panel.sources[2].preview = Some(preview("coast", 99, false));
-        click(&mut panel, &ctx, "Load AOIs");
+        click(&mut panel, &ctx, &mut capture, "Load");
         assert!(panel.storage.error.is_none(), "{:?}", panel.storage.error);
         assert!(panel.preview.is_some());
         assert_eq!(panel.sources[0].preview.as_ref().unwrap().aois, expected);
         assert!(panel.sources[2].preview.is_none()); // Replace all, don't leave stale AOIs.
         let prior = panel.preview.as_ref().unwrap().clone();
         std::fs::write(&path, b"invalid file").unwrap();
-        click(&mut panel, &ctx, "Load AOIs");
+        click(&mut panel, &ctx, &mut capture, "Load");
         assert!(panel.storage.error.is_some());
         assert!(Arc::ptr_eq(panel.preview.as_ref().unwrap(), &prior));
         assert_eq!(panel.sources[0].preview.as_ref().unwrap().aois, expected);
         std::fs::remove_file(path).unwrap();
     }
+
+    fn workload(layers: &[Arc<Preview>]) -> Workload {
+        let generator = leo_capture::workload::Generator::default();
+        let mut jobs = generator
+            .generate(layers.iter().flat_map(|p| p.aois.clone()))
+            .unwrap();
+        jobs[0].acquisition.priority = 987;
+        jobs[0].acquisition.solar_time_hours = 10.25;
+        Workload {
+            schema_version: 3,
+            generator,
+            jobs,
+            capture: CaptureProfile {
+                channels: 8,
+                resolution_m: 1.5,
+                bits_per_sample: 16,
+                compression_ratio: 2.5,
+            },
+        }
+    }
+
+    #[test]
+    fn unified_buttons_restore_jobs_and_image_settings_and_aoi_only_clears_jobs() {
+        let path =
+            std::env::temp_dir().join(format!("leo-preset-buttons-{}.json.gz", std::process::id()));
+        let mut panel = AoiGenerator::default();
+        panel.storage.path = path.display().to_string();
+        panel.preview = Some(preview("gdp", 42, true));
+        panel.sources[0].preview = Some(preview("forest", 43, false));
+        panel.sources[0].visible = false;
+        let layers = vec![
+            panel.preview.clone().unwrap(),
+            panel.sources[0].preview.clone().unwrap(),
+        ];
+        let expected = workload(&layers);
+        let expected_jobs = expected.jobs.clone();
+        let expected_generator = expected.generator.clone();
+        let expected_capture = expected.capture;
+        panel.jobs.restore_workload(Some(expected));
+        let mut capture = CaptureProfile::default();
+        let ctx = egui::Context::default();
+        click(&mut panel, &ctx, &mut capture, "Save");
+        assert!(panel.storage.error.is_none(), "{:?}", panel.storage.error);
+        assert!(panel.storage.selected_saved);
+        assert!(panel
+            .storage
+            .message
+            .as_ref()
+            .unwrap()
+            .contains("2 AOIs and 2 assigned jobs"));
+
+        panel.preview = None;
+        panel.sources[0].preview = None;
+        panel.sources[2].preview = Some(preview("coast", 99, false));
+        panel.jobs.restore_workload(None);
+        capture = CaptureProfile::default();
+        click(&mut panel, &ctx, &mut capture, "Load");
+        assert!(panel.storage.error.is_none(), "{:?}", panel.storage.error);
+        assert!(panel.sources[2].preview.is_none());
+        let restored_layers = vec![
+            panel.preview.clone().unwrap(),
+            panel.sources[0].preview.clone().unwrap(),
+        ];
+        let restored = panel
+            .jobs
+            .saved_workload(&restored_layers, capture)
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.jobs, expected_jobs);
+        assert_eq!(restored.generator, expected_generator);
+        assert_eq!(capture, expected_capture);
+        assert_eq!(restored_layers[0].aois, layers[0].aois);
+        assert_eq!(restored_layers[1].aois, layers[1].aois);
+
+        // Corrupt only the job reference. Neither geometry, assignments nor Data
+        // settings may change when validation fails late in a load.
+        let mut json = Vec::new();
+        flate2::read::GzDecoder::new(std::fs::File::open(&path).unwrap())
+            .read_to_end(&mut json)
+            .unwrap();
+        let mut invalid: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        invalid["workload"]["jobs"][0]["aoi"]["geometry_hash"] = 0.into();
+        std::fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+        click(&mut panel, &ctx, &mut capture, "Load");
+        assert!(panel
+            .storage
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("do not match"));
+        assert!(Arc::ptr_eq(
+            panel.preview.as_ref().unwrap(),
+            &restored_layers[0]
+        ));
+        assert_eq!(
+            panel
+                .jobs
+                .saved_workload(&restored_layers, capture)
+                .unwrap()
+                .unwrap()
+                .jobs,
+            expected_jobs
+        );
+        assert_eq!(capture, expected_capture);
+
+        // Also accept old AOI-only JSON, without a preset version or workload.
+        invalid.as_object_mut().unwrap().remove("workload");
+        invalid.as_object_mut().unwrap().remove("preset_version");
+        std::fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+        click(&mut panel, &ctx, &mut capture, "Load");
+        assert!(panel.storage.error.is_none(), "{:?}", panel.storage.error);
+        let current = vec![
+            panel.preview.clone().unwrap(),
+            panel.sources[0].preview.clone().unwrap(),
+        ];
+        assert!(panel
+            .jobs
+            .saved_workload(&current, capture)
+            .unwrap()
+            .is_none());
+        assert_eq!(capture, expected_capture); // AOI-only files have no Data settings.
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn combined_files_and_legacy_workloads_validate_jobs_before_replacement() {
+        let layers = vec![preview("gdp", 42, true), preview("forest", 43, false)];
+        let expected = workload(&layers);
+        let current = [Some(layers[0].clone()), Some(layers[1].clone()), None, None];
+        for extension in ["json", "json.gz"] {
+            let path = std::env::temp_dir().join(format!(
+                "leo-preset-roundtrip-{}.{}",
+                std::process::id(),
+                extension
+            ));
+            assert_eq!(
+                save(&path, &layers, Some(workload(&layers))).unwrap(),
+                (2, 2)
+            );
+            let restored = load(&path, [None, None, None, None], |_| {}).unwrap();
+            assert_eq!(restored.workload.unwrap().jobs, expected.jobs);
+            let before = std::fs::read(&path).unwrap();
+            let mut wrong = workload(&layers);
+            wrong.jobs[0].aoi.geometry_hash = 0;
+            assert!(save(&path, &layers, Some(wrong)).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            let legacy = if extension == "json.gz" {
+                expected.encode().unwrap()
+            } else {
+                serde_json::to_vec(&expected).unwrap()
+            };
+            std::fs::write(&path, legacy).unwrap();
+            assert!(load(&path, [None, None, None, None], |_| {}).is_err());
+            let restored = load(&path, current.clone(), |_| {}).unwrap();
+            assert!(Arc::ptr_eq(
+                restored.layers[0].as_ref().unwrap(),
+                &layers[0]
+            ));
+            assert_eq!(restored.workload.unwrap().jobs, expected.jobs);
+            std::fs::remove_file(path).unwrap();
+        }
+        let mut jobs = crate::jobs::Panel::default();
+        jobs.restore_workload(Some(expected));
+        assert!(jobs
+            .saved_workload(&[layers[0].clone()], CaptureProfile::default())
+            .is_err());
+    }
 }
 
-fn load(path: &Path, mut progress: impl FnMut(String)) -> Result<Layers, String> {
+fn load(path: &Path, current: Layers, mut progress: impl FnMut(String)) -> Result<Loaded, String> {
+    progress("Reading saved AOIs and jobs…".into());
     let mut file = BufReader::new(std::fs::File::open(path).map_err(|e| e.to_string())?);
     let compressed = file
         .fill_buf()
@@ -385,19 +607,44 @@ fn load(path: &Path, mut progress: impl FnMut(String)) -> Result<Layers, String>
     } else {
         Box::new(file)
     };
-    let mut reader = reader.take(MAX_JSON_BYTES + 1);
-    let doc: Document =
-        serde_json::from_reader(&mut reader).map_err(|e| format!("Invalid AOI file: {e}"))?;
-    if reader.limit() == 0 {
-        return Err("AOIs exceed the 256 MB decoded limit.".into());
+    let mut json = Vec::new();
+    reader
+        .take(MAX_JSON_BYTES + 1)
+        .read_to_end(&mut json)
+        .map_err(|e| e.to_string())?;
+    if json.len() as u64 > MAX_JSON_BYTES {
+        return Err("Preset exceeds the 256 MB decoded limit.".into());
     }
+    // Probe without allocating a JSON value tree. Older workload-only files can
+    // still be imported through the same Load button, against the current AOIs.
+    #[derive(Deserialize)]
+    struct Kind {
+        aois: Option<serde::de::IgnoredAny>,
+    }
+    let kind: Kind = serde_json::from_slice(&json).map_err(|e| format!("Invalid preset: {e}"))?;
+    if kind.aois.is_none() {
+        let workload = Some(Workload::from_json(&json)?);
+        validate_workload(
+            &workload,
+            &current.iter().flatten().cloned().collect::<Vec<_>>(),
+        )?;
+        return Ok(Loaded {
+            layers: current,
+            workload,
+        });
+    }
+    let doc: SavedDocument =
+        serde_json::from_slice(&json).map_err(|e| format!("Invalid preset: {e}"))?;
+    drop(json);
     if doc.schema_version != 1
+        || doc.preset_version.is_some_and(|v| v != 1)
         || doc.aois.is_empty()
         || doc.aois.len() != doc.config.count
         || doc.aois.len() > 200_000
     {
-        return Err("Invalid AOI version or count (1–200,000 required).".into());
+        return Err("Invalid preset version or AOI count (1–200,000 required).".into());
     }
+    let workload = doc.workload.map(Workload::into_current).transpose()?;
     let mut groups: [Vec<_>; 4] = std::array::from_fn(|_| Vec::new());
     for (index, mut aoi) in doc.aois.into_iter().enumerate() {
         if aoi.source_kind.is_empty() {
@@ -418,11 +665,6 @@ fn load(path: &Path, mut progress: impl FnMut(String)) -> Result<Layers, String>
         if aois.is_empty() {
             continue;
         }
-        progress(format!(
-            "Preparing {} layer · {} AOIs…",
-            KINDS[i],
-            aois.len()
-        ));
         let config = Config {
             seed: *doc
                 .config
@@ -432,18 +674,37 @@ fn load(path: &Path, mut progress: impl FnMut(String)) -> Result<Layers, String>
             count: aois.len(),
             source_seeds: BTreeMap::new(),
         };
-        layers[i] = Some(Arc::new(Preview::from_document(Document {
-            schema_version: 1,
-            config,
-            aois,
-        })?));
+        let workers = leo_capture::parallel::worker_count(aois.len());
+        let mut last = std::time::Instant::now();
+        layers[i] = Some(Arc::new(Preview::from_document_parallel(
+            Document {
+                schema_version: 1,
+                config,
+                aois,
+            },
+            workers,
+            |stage, done, total| {
+                if done == 0 || done == total || last.elapsed().as_millis() >= 100 {
+                    progress(format!(
+                        "{} · {stage}: {done} / {total} · {workers} CPU workers",
+                        KINDS[i]
+                    ));
+                    last = std::time::Instant::now();
+                }
+            },
+        )?));
     }
-    Ok(layers)
+    progress("Validating saved job assignments…".into());
+    validate_workload(
+        &workload,
+        &layers.iter().flatten().cloned().collect::<Vec<_>>(),
+    )?;
+    Ok(Loaded { layers, workload })
 }
 
 enum Outcome {
-    Saved(usize),
-    Loaded(Layers),
+    Saved(usize, usize),
+    Loaded(Loaded),
 }
 enum Event {
     Progress(String),
@@ -451,6 +712,7 @@ enum Event {
 }
 pub(super) struct Panel {
     path: String,
+    pub(super) selected_saved: bool,
     pending: Option<mpsc::Receiver<Event>>,
     message: Option<String>,
     error: Option<String>,
@@ -458,11 +720,11 @@ pub(super) struct Panel {
 }
 impl Default for Panel {
     fn default() -> Self {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/presets/default-preset.json.gz");
         Self {
-            path: Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("assets/aois/saved-aois.json.gz")
-                .display()
-                .to_string(),
+            selected_saved: path.is_file(),
+            path: path.display().to_string(),
             pending: None,
             message: None,
             error: None,
@@ -470,32 +732,37 @@ impl Default for Panel {
         }
     }
 }
+
 impl Panel {
     pub fn busy(&self) -> bool {
         self.pending.is_some()
     }
-    fn start(&mut self, layers: Option<Vec<Arc<Preview>>>, ctx: egui::Context) {
+    fn start(&mut self, snapshot: Option<Snapshot>, current: Layers, ctx: egui::Context) {
         let (tx, rx) = mpsc::channel();
         self.pending = Some(rx);
         self.message = None;
         self.error = None;
-        self.progress = if layers.is_some() {
-            "Saving all loaded AOI layers…"
+        self.progress = if snapshot.is_some() {
+            "Saving AOIs and assigned jobs…"
         } else {
-            "Reading AOI geometry…"
+            "Reading saved preset…"
         }
         .into();
         let path = self.path.clone();
         std::thread::spawn(move || {
-            let result = if let Some(layers) = layers {
-                save(Path::new(&path), &layers).map(Outcome::Saved)
-            } else {
-                load(Path::new(&path), |p| {
-                    let _ = tx.send(Event::Progress(p));
-                    ctx.request_repaint();
-                })
-                .map(Outcome::Loaded)
-            };
+            leo_capture::resources::background_thread();
+            let result = leo_capture::resources::check_memory().and_then(|()| {
+                if let Some(snapshot) = snapshot {
+                    save(Path::new(&path), &snapshot.layers, snapshot.workload)
+                        .map(|(aois, jobs)| Outcome::Saved(aois, jobs))
+                } else {
+                    load(Path::new(&path), current, |p| {
+                        let _ = tx.send(Event::Progress(p));
+                        ctx.request_repaint();
+                    })
+                    .map(Outcome::Loaded)
+                }
+            });
             let _ = tx.send(Event::Finished(result));
             ctx.request_repaint();
         });
@@ -505,14 +772,12 @@ impl AoiGenerator {
     fn install_aois(&mut self, mut layers: Layers) {
         self.error = None;
         self.preview = layers[0].take();
-        self.preview_name = "Loaded AOIs";
+        self.preview_name = "Loaded preset";
         self.visible = self.preview.is_some();
         for (source, layer) in self.sources.iter_mut().zip(layers.into_iter().skip(1)) {
             source.preview = layer;
             source.visible = source.preview.is_some();
         }
-        // The job panel checks identity/geometry against these new layers on its
-        // next UI call. Existing assignments and running capture sessions persist.
     }
     pub(super) fn poll_storage(&mut self) {
         while let Some(rx) = &self.storage.pending {
@@ -521,16 +786,20 @@ impl AoiGenerator {
                 Ok(Event::Finished(result)) => {
                     self.storage.pending = None;
                     match result {
-                        Ok(Outcome::Saved(count)) => {
-                            self.storage.message =
-                                Some(format!("Saved {count} AOIs to {}", self.storage.path))
-                        }
-                        Ok(Outcome::Loaded(layers)) => {
-                            let count: usize = layers.iter().flatten().map(|p| p.count).sum();
-                            self.install_aois(layers);
+                        Ok(Outcome::Saved(aois, jobs)) => {
+                            self.storage.selected_saved = true;
                             self.storage.message = Some(format!(
-                                "Loaded {count} AOIs. You can now load their matching workload."
+                                "Saved {aois} AOIs and {jobs} assigned jobs to {}",
+                                self.storage.path
                             ));
+                        }
+                        Ok(Outcome::Loaded(loaded)) => {
+                            let aois: usize = loaded.layers.iter().flatten().map(|p| p.count).sum();
+                            let jobs = loaded.workload.as_ref().map_or(0, |w| w.jobs.len());
+                            self.install_aois(loaded.layers);
+                            self.jobs.restore_workload(loaded.workload);
+                            self.storage.message =
+                                Some(format!("Loaded {aois} AOIs and {jobs} assigned jobs."));
                         }
                         Err(e) => self.storage.error = Some(e),
                     }
@@ -538,30 +807,61 @@ impl AoiGenerator {
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.storage.pending = None;
-                    self.storage.error =
-                        Some("AOI file worker stopped. Current layers were preserved.".into());
+                    self.storage.error = Some(
+                        "Preset file worker stopped. Current AOIs and jobs were preserved.".into(),
+                    );
                 }
             }
         }
     }
-    pub(super) fn storage_ui(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn storage_ui(&mut self, ui: &mut egui::Ui, capture: &mut CaptureProfile) {
         self.poll_storage();
+        self.jobs.apply_restored_capture(capture);
         ui.push_id("aoi-storage", |ui| {
-            let busy = self.storage.busy() || self.pending.is_some();
+            let busy = self.busy() || self.jobs.assigning();
             ui.add_enabled_ui(!busy, |ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.storage.path).desired_width(f32::INFINITY));
+                egui::ComboBox::from_id_salt("preset-choice")
+                    .selected_text(if self.storage.selected_saved { "Saved preset" }
+                        else if self.legacy_preset { super::presets::LEGACY_JOBS }
+                        else { super::presets::DEFAULT_JOBS })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.storage.selected_saved, true, "Saved preset");
+                        for (legacy, name) in [(false, super::presets::DEFAULT_JOBS), (true, super::presets::LEGACY_JOBS)] {
+                            if ui.selectable_label(!self.storage.selected_saved && self.legacy_preset == legacy, name).clicked() {
+                                self.storage.selected_saved = false;
+                                self.legacy_preset = legacy;
+                            }
+                        }
+                    });
+                ui.label("Saved preset file (.json.gz or .json)");
+                if ui.add(egui::TextEdit::singleline(&mut self.storage.path).desired_width(f32::INFINITY)).changed() {
+                    self.storage.selected_saved = true;
+                }
                 ui.horizontal_wrapped(|ui| {
-                    let has_aois = self.preview.is_some() || self.sources.iter().any(|s| s.preview.is_some());
-                    if ui.add_enabled(has_aois, egui::Button::new("Save AOIs")).clicked() {
-                        let layers = self.preview.iter().chain(self.sources.iter().filter_map(|s| s.preview.as_ref())).cloned().collect();
-                        self.storage.start(Some(layers), ui.ctx().clone());
+                    let current: Layers = std::array::from_fn(|i| if i == 0 { self.preview.clone() } else { self.sources[i - 1].preview.clone() });
+                    let has_aois = current.iter().any(Option::is_some);
+                    if ui.add_enabled(has_aois, egui::Button::new("Save")).on_hover_text("Save every loaded AOI layer and its assigned jobs to the file above.").clicked() {
+                        let layers: Vec<_> = current.iter().flatten().cloned().collect();
+                        match self.jobs.saved_workload(&layers, *capture) {
+                            Ok(workload) => self.storage.start(Some(Snapshot { layers, workload }), current.clone(), ui.ctx().clone()),
+                            Err(e) => { self.storage.error = Some(e); self.storage.message = None; }
+                        }
                     }
-                    if ui.button("Load AOIs").on_hover_text("Replace all AOI layers with the file's layers. Workloads and capture sessions are separate.").clicked() {
-                        self.storage.start(None, ui.ctx().clone());
+                    if ui.button("Load").on_hover_text("Load the selected preset, replacing AOIs and assigned jobs together.").clicked() {
+                        self.storage.message = None;
+                        self.storage.error = None;
+                        if self.storage.selected_saved {
+                            self.storage.start(None, current, ui.ctx().clone());
+                        } else {
+                            self.load_default_jobs(ui.ctx());
+                        }
                     }
                 });
             });
-            ui.small("Saves all loaded layers, including hidden AOIs, with exact boundaries and IDs. Use .json.gz for compressed JSON or .json. Save job settings separately with Save workload. Loading replaces the AOI layers after the entire file validates.");
+            ui.small("Save includes hidden AOIs and current job assignments. Load restores exactly the saved contents; AOI-only presets clear existing jobs. Built-in samples contain AOIs only.");
+            ui.collapsing("Older files", |ui| {
+                ui.small("Select Saved preset and enter an existing AOI or workload file above. Workload-only files require matching AOIs already loaded.");
+            });
             if self.storage.busy() {
                 ui.horizontal_wrapped(|ui| {ui.spinner(); ui.label(&self.storage.progress);});
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));

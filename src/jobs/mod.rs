@@ -2,8 +2,6 @@
 mod capture_ui;
 mod capture_worker;
 pub(crate) mod model;
-#[cfg(any(test, not(target_arch = "wasm32")))]
-mod storage;
 mod worker;
 mod satisfiability;
 
@@ -27,7 +25,7 @@ pub(crate) struct Panel {
     capture: Option<CaptureProfile>,
     report: Option<Result<(Totals, [Totals; 3]), String>>,
     #[cfg(not(target_arch = "wasm32"))]
-    path: String,
+    restored_capture: Option<CaptureProfile>,
     message: Option<String>,
     revision: u64,
     baseline: capture_ui::Panel,
@@ -64,10 +62,7 @@ impl Default for Panel {
             capture: None,
             report: None,
             #[cfg(not(target_arch = "wasm32"))]
-            path: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("assets/jobs/default-workload.json.gz")
-                .to_string_lossy()
-                .into_owned(),
+            restored_capture: None,
             message: None,
         }
     }
@@ -89,7 +84,7 @@ fn duration(hours: f64) -> String {
         format!("{hours:.2} hours")
     }
 }
-fn layers_match(jobs: &[Job], layers: &[Arc<Preview>]) -> bool {
+pub(crate) fn layers_match(jobs: &[Job], layers: &[Arc<Preview>]) -> bool {
     let regions: HashMap<_, _> = layers
         .iter()
         .flat_map(|p| &p.aois)
@@ -101,6 +96,61 @@ fn layers_match(jobs: &[Job], layers: &[Arc<Preview>]) -> bool {
             .all(|j| regions.get(&j.aoi.key()) == Some(&&j.aoi))
 }
 impl Panel {
+    pub(crate) fn assigning(&self) -> bool {
+        self.assignment.is_some()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn saved_workload(
+        &self,
+        layers: &[Arc<Preview>],
+        capture: CaptureProfile,
+    ) -> Result<Option<leo_capture::storage::Document>, String> {
+        if self.assigning() {
+            return Err("Wait for job assignment to finish before saving.".into());
+        }
+        if self.jobs.is_empty() {
+            return Ok(None);
+        }
+        if !layers_match(&self.jobs, layers) {
+            return Err("Assigned jobs no longer match the AOIs. Reassign jobs before saving.".into());
+        }
+        Ok(Some(leo_capture::storage::Document {
+            schema_version: 3,
+            generator: self.applied.clone().ok_or("Missing assigned job settings")?,
+            capture,
+            jobs: self.jobs.clone(),
+        }))
+    }
+
+    /// Installation follows validation of the entire preset on the file worker.
+    /// Existing capture sessions keep their immutable input snapshot.
+    pub(crate) fn restore_workload(&mut self, document: Option<leo_capture::storage::Document>) {
+        self.hits.clear();
+        self.selected = None;
+        self.edit = None;
+        self.message = None;
+        self.timing = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.restored_capture = document.as_ref().map(|d| d.capture);
+        }
+        if let Some(document) = document {
+            self.config = document.generator.clone();
+            self.install(document.jobs, document.generator);
+        } else {
+            self.install(Vec::new(), self.config.clone());
+            self.applied = None;
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn apply_restored_capture(&mut self, capture: &mut CaptureProfile) {
+        if let Some(saved) = self.restored_capture.take() {
+            *capture = saved;
+        }
+    }
+
     pub fn selected(&self) -> Option<(&Arc<Preview>, usize)> {
         self.selected.as_ref().map(|hit| (&hit.preview, hit.index))
     }
@@ -253,6 +303,8 @@ impl Panel {
         layers: Vec<Arc<Preview>>,
         capture: &mut CaptureProfile,
     ) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.apply_restored_capture(capture);
         self.poll(ui.ctx(), &layers);
         let reveal = std::mem::take(&mut self.reveal);
         egui::CollapsingHeader::new("Jobs")
@@ -267,7 +319,7 @@ impl Panel {
                         .text(format!("{} / {} jobs", pending.completed, pending.total)));
                 }
                 if !self.compatible {
-                    ui.colored_label(egui::Color32::YELLOW, "AOIs changed. Assign jobs again, or load a workload matching these AOIs.");
+                    ui.colored_label(egui::Color32::YELLOW, "AOIs changed. Assign jobs again, or load a saved preset with its jobs.");
                 }
                 self.inspector(ui, *capture);
                 if !self.jobs.is_empty() && self.compatible {
@@ -291,13 +343,11 @@ impl Panel {
                         }
                         if ui.add_enabled(!busy && self.compatible && !self.jobs.is_empty(), egui::Button::new("Regenerate capture timing")).on_hover_text("Apply the cadence-aware illumination rule and redraw solar preferences using this seed and acquisition settings. Keeps AOIs, cadences, priorities, fulfilment modes, pipelines and output sizes. Existing capture sessions are unchanged.").clicked() {
                             self.message = Some(match self.regenerate_timing() {
-                                Ok(()) => "Regenerated capture timing. Save the workload and start a new capture run to use it; checkpoints retain their original jobs.".into(),
+                                Ok(()) => "Regenerated capture timing. Save the preset and start a new capture run to use it; checkpoints retain their original jobs.".into(),
                                 Err(e) => e,
                             });
                         }
                     });
-                #[cfg(not(target_arch = "wasm32"))]
-                ui.add_enabled_ui(self.assignment.is_none(), |ui| self.storage_ui(ui, capture));
                 if let Some(message) = &self.message { ui.small(message); }
                 ui.collapsing("Calculation assumptions", |ui| {
                     ui.label("Input is new useful imagery over each AOI, using the Data pane's channels, resolution, packed encoding and compression. It excludes unused swath pixels and repeated reads of history.");
@@ -597,35 +647,6 @@ impl Panel {
             "Cadence applies throughout the AOI; its parts need not be acquired simultaneously.",
         );
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    fn storage_ui(&mut self, ui: &mut egui::Ui, capture: &mut CaptureProfile) {
-        ui.collapsing("Save / load workload", |ui| {
-            ui.label("Compressed job file (.json.gz)");
-            ui.add(egui::TextEdit::singleline(&mut self.path).desired_width(f32::INFINITY));
-            ui.horizontal(|ui| {
-                if ui.add_enabled(!self.jobs.is_empty() && self.compatible, egui::Button::new("Save workload")).clicked() {
-                    let document = storage::Document { schema_version: 3, generator: self.applied.clone().unwrap(), capture: *capture, jobs: self.jobs.clone() };
-                    self.message = Some(match document.save(std::path::Path::new(&self.path)) {
-                        Ok(()) => format!("Saved {} job configurations.", self.jobs.len()), Err(error) => format!("Could not save: {error}"),
-                    });
-                }
-                if ui.button("Load workload").clicked() {
-                    let result = std::fs::read(&self.path).map_err(|e| e.to_string()).and_then(|bytes| storage::Document::decode(&bytes));
-                    self.message = Some(match result {
-                        Ok(document) if layers_match(&document.jobs, &self.layers) => {
-                            *capture = document.capture;
-                            self.config = document.generator.clone();
-                            self.install(document.jobs, document.generator);
-                            format!("Loaded {} jobs and their shared image settings.", self.jobs.len())
-                        }
-                        Ok(_) => "AOIs do not match this workload. Load the same AOI datasets first.".into(),
-                        Err(error) => format!("Could not load: {error}"),
-                    });
-                }
-            });
-            ui.small("Saves assignments, seed, parameters and shared image settings. References existing AOI geometry; loading verifies IDs and shapes. Load restores Data settings.");
-        });
-    }
 }
 fn output_control(ui: &mut egui::Ui, label: &str, value: &mut f64) {
     ui.horizontal_wrapped(|ui| {
@@ -766,14 +787,14 @@ mod tests {
             assert_eq!(panel.report(capture).unwrap(), report);
         }
         let cached_time = start.elapsed();
-        let document = storage::Document {
+        let document = leo_capture::storage::Document {
             schema_version: 2,
             generator: panel.applied.clone().unwrap(),
             capture,
             jobs: panel.jobs.clone(),
         };
         let encoded = document.encode().unwrap();
-        let loaded = storage::Document::decode(&encoded).unwrap();
+        let loaded = leo_capture::storage::Document::decode(&encoded).unwrap();
         assert!(layers_match(&loaded.jobs, &[preview]));
         assert_eq!(model::totals(&loaded.jobs, loaded.capture).unwrap(), report);
         eprintln!("50k jobs: assignment {assign_time:?}; summary {summary_time:?}; 1000 cached summaries {cached_time:?}; compressed {} bytes", encoded.len());

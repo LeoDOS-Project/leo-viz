@@ -5,7 +5,7 @@ use super::{
     preview::Preview,
 };
 use eframe::egui;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 
 pub(super) fn compact(
     preview: std::sync::Arc<Preview>,
@@ -73,7 +73,7 @@ pub(super) fn compact(
 pub(super) enum Event {
     Progress(String),
     Finished(Result<Preview, String>),
-    PresetFinished(Result<Vec<Preview>, String>),
+    PresetFinished(Result<Vec<Arc<Preview>>, String>),
 }
 
 pub(super) fn start(
@@ -149,43 +149,10 @@ pub(super) fn load_preset(ctx: egui::Context, legacy: bool) -> mpsc::Receiver<Ev
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(move || {
         leo_capture::resources::background_thread();
-        let result = (|| {
-            leo_capture::resources::check_memory()?;
-            let _ = tx.send(Event::Progress(
-                "Loading 50,000 bundled GDP rectangles…".into(),
-            ));
+        let result = super::presets::load_native(legacy, |message| {
+            let _ = tx.send(Event::Progress(message));
             ctx.request_repaint();
-            let mut layers = vec![super::presets::load(legacy)?];
-            if !legacy {
-                for (kind, name) in [
-                    ("forest", "Forests"),
-                    ("river", "Rivers"),
-                    ("coast", "Coasts"),
-                ] {
-                    leo_capture::resources::check_memory()?;
-                    let source = super::environment::Source::new(kind, name);
-                    let (settings, input) = source.request();
-                    let _ = tx.send(Event::Progress(format!("Loading default {name} source…")));
-                    ctx.request_repaint();
-                    let dataset = data::load(&input, kind)?;
-                    let workers = leo_capture::parallel::worker_count(settings.count());
-                    let mut last = std::time::Instant::now();
-                    layers.push(Job::new(settings, Some(dataset))?.run_parallel(
-                        workers,
-                        |stage, done, total| {
-                            if done == total || last.elapsed().as_millis() >= 100 {
-                                let _ = tx.send(Event::Progress(format!(
-                                    "{name} · {stage}: {done} / {total} · {workers} CPU workers"
-                                )));
-                                ctx.request_repaint();
-                                last = std::time::Instant::now();
-                            }
-                        },
-                    )?);
-                }
-            }
-            Ok(layers)
-        })();
+        });
         let _ = tx.send(Event::PresetFinished(result));
         ctx.request_repaint();
     });
@@ -193,33 +160,43 @@ pub(super) fn load_preset(ctx: egui::Context, legacy: bool) -> mpsc::Receiver<Ev
     wasm_bindgen_futures::spawn_local(async move {
         crate::tle::yield_now().await;
         let result = async {
-            let mut layers = vec![super::presets::load(legacy)?];
-            if !legacy {
-                for (kind, name) in [
-                    ("forest", "Forests"),
-                    ("river", "Rivers"),
-                    ("coast", "Coasts"),
-                ] {
-                    let (settings, input) = super::environment::Source::new(kind, name).request();
-                    let _ = tx.send(Event::Progress(format!("Loading default {name} source…")));
+            let bundled = super::presets::layers(legacy);
+            let mut loaded = Vec::with_capacity(bundled.len());
+            for (index, layer) in bundled.iter().enumerate() {
+                let label = format!("Layer {}/{} · {}", index + 1, bundled.len(), layer.name);
+                if let Some(cached) = layer.cached() {
+                    loaded.push(cached);
+                    continue;
+                }
+                let document = layer.document(|stage| {
+                    let _ = tx.send(Event::Progress(format!("{label} · {stage}")));
                     ctx.request_repaint();
-                    let dataset = data::load(&input, kind).await?;
-                    let mut job = Job::new(settings, Some(dataset))?;
-                    loop {
-                        if let Some(layer) = job.step()? {
-                            layers.push(layer);
-                            break;
-                        }
+                })?;
+                document.validate()?;
+                crate::tle::yield_now().await;
+                let total = document.config.count;
+                let mut preview = Preview::empty(total, document.config.seed);
+                let mut last = web_time::Instant::now();
+                for aoi in document.aois {
+                    preview.push_record(aoi)?;
+                    if last.elapsed().as_millis() >= 4 {
                         let _ = tx.send(Event::Progress(format!(
-                            "Generating {name}: {} / 1,000",
-                            job.completed
+                            "{label} · Preparing saved geometry: {} / {total}",
+                            preview.aois.len()
                         )));
                         ctx.request_repaint();
                         crate::tle::yield_now().await;
+                        last = web_time::Instant::now();
                     }
                 }
+                let _ = tx.send(Event::Progress(format!(
+                    "{label} · Building display buffers…"
+                )));
+                ctx.request_repaint();
+                crate::tle::yield_now().await;
+                loaded.push(layer.remember(preview.finish()));
             }
-            Ok::<_, String>(layers)
+            Ok::<_, String>(loaded)
         }
         .await;
         let _ = tx.send(Event::PresetFinished(result));

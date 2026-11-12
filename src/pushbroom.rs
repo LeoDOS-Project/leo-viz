@@ -40,7 +40,13 @@ impl Default for Settings {
     }
 }
 impl Settings {
+    /// Instantaneous imaging width, used for sensor data rates.
     pub fn observation_width_km(&self) -> f64 {
+        self.swath_km
+    }
+
+    /// Full cross-track field of regard, used for access and revisit checks.
+    pub fn observation_reach_km(&self) -> f64 {
         self.observable_width_km
             .unwrap_or(self.swath_km)
             .max(self.swath_km)
@@ -75,13 +81,13 @@ impl Settings {
         .on_hover_text("Show each satellite's ground scanline and recent swept strip on Earth");
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal(|ui| {
-                ui.label("Swath width");
+                ui.label("Observation width");
                 ui.add(egui::DragValue::new(&mut self.swath_km).range(1.0..=500.0).speed(0.1).suffix(" km"))
                     .on_hover_text("Actual imaging width: solid strip and image previews");
             });
             let mut separate = self.observable_width_km.is_some();
-            if ui.checkbox(&mut separate, "Separate observable width").on_hover_text(
-                "Model a wider steerable field of regard. Revisit and the unconstrained capture baseline use this width; it is not simultaneous imaging."
+            if ui.checkbox(&mut separate, "Separate observation reach").on_hover_text(
+                "Model a wider steerable field of regard. Revisit, satisfiability and the unconstrained capture baseline use this reach; it is not simultaneous imaging."
             ).changed() {
                 self.observable_width_km = separate.then_some(self.swath_km.max(450.0));
                 self.show_observable = separate;
@@ -89,15 +95,15 @@ impl Settings {
             if let Some(width) = &mut self.observable_width_km {
                 *width = width.max(self.swath_km);
                 ui.horizontal(|ui| {
-                    ui.label("Observable width");
+                    ui.label("Observation reach");
                     ui.add(egui::DragValue::new(width).range(self.swath_km..=500.0).speed(1.0).suffix(" km"));
                 });
-                ui.checkbox(&mut self.show_observable, "Observable corridor");
+                ui.checkbox(&mut self.show_observable, "Show observation reach");
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Solid: imaging swath");
-                    ui.colored_label(OBSERVABLE_COLOR, "Dashed cyan: observable corridor");
+                    ui.label("Solid: observation width");
+                    ui.colored_label(OBSERVABLE_COLOR, "Dashed cyan: observation reach");
                 });
-                ui.small("Revisit, data estimates and the capture baseline use the observable width as an access approximation. The wider band is not all imaged at once.");
+                ui.small("Data rates use observation width. Coverage, revisit and satisfiability use observation reach; pointing and collection capacity are not modeled.");
             }
             ui.add_enabled_ui(self.visible(), |ui| {
                 ui.horizontal(|ui| {
@@ -465,7 +471,7 @@ impl<'a> Overlay<'a> {
             self.append_mesh(
                 &mut mesh,
                 transform,
-                self.settings.observation_width_km(),
+                self.settings.observation_reach_km(),
                 true,
             );
         }
@@ -934,7 +940,8 @@ mod tests {
         settings.enabled = false;
         settings.show_observable = false;
         assert!(draw(settings).vertices.is_empty());
-        assert_eq!(settings.observation_width_km(), 450.0); // Display toggles cannot change coverage.
+        assert_eq!(settings.observation_width_km(), 13.1);
+        assert_eq!(settings.observation_reach_km(), 450.0); // Display toggles cannot change coverage.
         settings.show_observable = true;
         assert!(settings.visible());
         let rotation = crate::math::rotation_from_drag(std::f64::consts::PI, 0.0);
@@ -943,7 +950,7 @@ mod tests {
             .vertices
             .is_empty());
         settings.apply_swath(20.0);
-        assert_eq!(settings.observation_width_km(), 20.0);
+        assert_eq!(settings.observation_reach_km(), 20.0);
         assert!(!settings.observable_visible());
     }
 
@@ -1000,7 +1007,7 @@ mod tests {
             .any(|s| text(&s.shape, "Pushbroom sweeps")));
         s.enabled = true;
         let output = ctx.run_ui(Default::default(), |ui| s.ui(ui, true));
-        assert!(output.shapes.iter().any(|s| text(&s.shape, "Swath width")));
+        assert!(output.shapes.iter().any(|s| text(&s.shape, "Observation width")));
         assert!(output.shapes.iter().any(|s| text(&s.shape, "Recent trail")));
     }
     #[test]

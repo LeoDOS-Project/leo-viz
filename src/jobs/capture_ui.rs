@@ -105,8 +105,6 @@ impl Default for Panel {
     }
 }
 impl Panel {
-    pub(super) fn storage_capacity_bytes(&self) -> u64 { self.options.storage_bytes_per_satellite }
-
     fn poll(&mut self, ctx: &egui::Context) {
         if let Some(p) = &self.pending {
             if let Some(view) = p.take_view() {

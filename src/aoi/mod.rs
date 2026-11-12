@@ -91,7 +91,7 @@ impl Default for AoiGenerator {
 
 impl AoiGenerator {
     fn busy(&self) -> bool {
-        let busy = self.pending.is_some();
+        let busy = self.pending.is_some() || self.jobs.assigning();
         #[cfg(not(target_arch = "wasm32"))]
         let busy = busy || self.storage.busy();
         busy
@@ -210,10 +210,19 @@ impl AoiGenerator {
         ui.small("Off-screen regions are skipped. Distant AOIs use simpler outlines or grouped dots; zoom in for detail.");
     }
 
-    pub fn presets_ui(&mut self, ui: &mut egui::Ui) {
+    pub fn presets_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        capture: &mut leo_sim::acquisition::CaptureProfile,
+    ) {
+        #[cfg(target_arch = "wasm32")]
+        let _ = capture;
         self.poll(ui.ctx());
-        egui::CollapsingHeader::new("AOI presets / save / load")
+        #[cfg(not(target_arch = "wasm32"))]
+        self.jobs.apply_restored_capture(capture);
+        egui::CollapsingHeader::new("AOIs & jobs · presets")
             .id_salt("aoi-library").default_open(true).show(ui, |ui| {
+                #[cfg(target_arch = "wasm32")]
                 ui.add_enabled_ui(!self.busy(), |ui| {
                     ui.horizontal_wrapped(|ui| {
                         egui::ComboBox::from_id_salt("aoi-preset-choice")
@@ -222,12 +231,13 @@ impl AoiGenerator {
                                 ui.selectable_value(&mut self.legacy_preset, false, presets::DEFAULT_JOBS);
                                 ui.selectable_value(&mut self.legacy_preset, true, presets::LEGACY_JOBS);
                             });
-                        if ui.button("Load preset").clicked() { self.load_default_jobs(ui.ctx()); }
+                        if ui.button("Load").clicked() { self.load_default_jobs(ui.ctx()); }
                     });
                     ui.small(if self.legacy_preset { "50,000 original GDP rectangles · 1,000 km² average." } else { "53,000 AOIs: 50,000 GDP rectangles + 1,000 each of forests, rivers and coasts. Assign job settings separately below." });
+                    ui.small("Presets contain saved geometry. Loading does not regenerate AOIs.");
                 });
                 #[cfg(not(target_arch = "wasm32"))]
-                self.storage_ui(ui);
+                self.storage_ui(ui, capture);
                 if self.pending.is_some() {
                     ui.horizontal_wrapped(|ui| { ui.spinner(); ui.label(&self.progress); });
                 }
@@ -401,13 +411,14 @@ impl AoiGenerator {
                     self.pending = None;
                     match result {
                         Ok(layers) => {
+                            self.jobs.restore_workload(None);
                             let mut layers = layers.into_iter();
-                            self.preview = layers.next().map(Arc::new);
+                            self.preview = layers.next();
                             self.visible = true;
                             self.preview_name = self.pending_name;
                             for source in &mut self.sources {
                                 *source = environment::Source::new(source.kind, source.name);
-                                source.preview = layers.next().map(Arc::new);
+                                source.preview = layers.next();
                                 source.visible = source.preview.is_some();
                             }
                         }
@@ -501,8 +512,8 @@ mod tests {
         }
         let shapes = &output.unwrap().shapes;
         assert!(text_position(shapes, "Number of AOIs").is_some());
-        assert!(text_position(shapes, "Default Jobs").is_none());
-        assert!(text_position(shapes, "Load preset").is_none());
+        assert!(text_position(shapes, "Default AOIs (bundled)").is_none());
+        assert!(text_position(shapes, "Load").is_none());
         assert!(text_position(shapes, "Average area").is_some());
         assert!(text_position(shapes, "Generate").is_some());
         let (lo, hi) = panel.bounds();
@@ -514,6 +525,7 @@ mod tests {
     fn default_jobs_loads_without_python_or_demand_files() {
         let ctx = egui::Context::default();
         let mut panel = AoiGenerator::default();
+        panel.storage.selected_saved = false;
         assert_eq!(panel.count, 50_000);
         assert_eq!(panel.mean_area, 100.0);
         assert_eq!(panel.size_ratio, 1000.0);
@@ -534,13 +546,13 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ui| panel.presets_ui(ui),
+                |ui| panel.presets_ui(ui, &mut Default::default()),
             )
         };
         let _ = frame(&mut panel, vec![]);
         let _ = frame(&mut panel, vec![]);
         let output = frame(&mut panel, vec![]);
-        let pos = text_position(&output.shapes, "Load preset").unwrap();
+        let pos = text_position(&output.shapes, "Load").unwrap();
         for pressed in [true, false] {
             let _ = frame(
                 &mut panel,
@@ -566,7 +578,7 @@ mod tests {
         let preview = panel.preview.as_ref().unwrap();
         assert_eq!(preview.count, 50_000);
         assert_eq!(preview.seed, 42);
-        assert_eq!(panel.preview_name, "Default Jobs");
+        assert_eq!(panel.preview_name, "Default AOIs (bundled)");
         assert_eq!(panel.count, 50_000);
         assert!(panel.overlay().is_some());
         let (lo, hi) = panel.bounds();
@@ -579,6 +591,19 @@ mod tests {
             assert!(layer.aois.iter().all(|a| a.source == source.kind));
         }
         assert_eq!(panel.overlays().iter().map(|(p, _, _)| p.count).sum::<usize>(), 53_000);
+        // A second click reuses prepared geometry and GPU buffers for every layer.
+        let previous: Vec<_> = panel.overlays().iter().map(|(p, _, _)| Arc::clone(p)).collect();
+        panel.load_default_jobs(&ctx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while panel.pending.is_some() && std::time::Instant::now() < deadline {
+            panel.poll(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(panel.pending.is_none(), "cached preset loading timed out");
+        assert!(panel.error.is_none(), "{:?}", panel.error);
+        for (old, (current, _, _)) in previous.iter().zip(panel.overlays()) {
+            assert!(Arc::ptr_eq(old, current));
+        }
         assert!(panel.random_rotation);
         assert_eq!(panel.fill_opacity, 0.1);
         assert_eq!(

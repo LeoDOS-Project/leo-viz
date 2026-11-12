@@ -72,20 +72,27 @@ impl Document {
         if json.len() > 256 * 1024 * 1024 {
             return Err("Workload exceeds the 256 MB decoded limit.".into());
         }
-        let mut document: Self = serde_json::from_slice(&json).map_err(|e| e.to_string())?;
-        if document.schema_version == 1 {
+        Self::from_json(&json)
+    }
+    /// Decode a workload embedded in a larger preset, or an uncompressed file.
+    pub fn from_json(json: &[u8]) -> Result<Self, String> {
+        let document: Self = serde_json::from_slice(json).map_err(|e| e.to_string())?;
+        document.into_current()
+    }
+    pub fn into_current(mut self) -> Result<Self, String> {
+        if self.schema_version == 1 {
             // Legacy workloads had no acquisition semantics. Deterministically
             // add the new defaults without changing existing byte/pipeline draws.
-            document.generator.validate()?;
-            for job in &mut document.jobs {
-                job.acquisition = document
+            self.generator.validate()?;
+            for job in &mut self.jobs {
+                job.acquisition = self
                     .generator
                     .acquisition_for(&job.aoi, job.cadence_hours);
             }
-            document.schema_version = 3;
+            self.schema_version = 3;
         }
-        document.validate()?;
-        Ok(document)
+        self.validate()?;
+        Ok(self)
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn save(&self, path: &std::path::Path) -> Result<(), String> {

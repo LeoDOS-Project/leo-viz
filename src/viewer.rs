@@ -2588,7 +2588,7 @@ impl ViewerState {
                                     if ui.add_enabled(planet.celestial_body == CelestialBody::Earth,
                                         egui::Button::selectable(cons.preset == crate::orbit_presets::worldview_preset(fleet), fleet.name()))
                                         .on_hover_text(format!(
-                                            "{} satellite(s): {} planes × {}, 617 km, 97.9°, J2. Shows the 450 km observable corridor and 13.1 km imaging swath separately. Revisit uses the observable width. {} No daylight or pointing schedule is included.",
+                                            "{} satellite(s): {} planes × {}, 617 km, 97.9°, J2. Shows the 450 km observation reach and 13.1 km observation width separately. Revisit uses observation reach. {} No daylight or pointing schedule is included.",
                                             shell.count(), shell.planes, shell.satellites_per_plane, fleet.baseline_note()))
                                         .clicked() {
                                         crate::orbit_presets::apply_worldview(cons, fleet);

@@ -360,7 +360,7 @@ fn duration_text(seconds: f64) -> String {
 fn results_ui(ui: &mut egui::Ui, report: &Report) {
     let start = DateTime::from_timestamp(report.start_unix as i64, 0).unwrap_or_default();
     ui.label(format!(
-        "{} satellites · {:.1} km observation width · {:.1} days from {} UTC",
+        "{} satellites · {:.1} km observation reach · {:.1} days from {} UTC",
         report.satellites,
         report.swath,
         report.options.days,
@@ -449,16 +449,16 @@ impl Panel {
                 });
             });
             let planet=&tab.planets[self.planet];
-            let swath=tab.settings.pushbroom.observation_width_km();
+            let swath=tab.settings.pushbroom.observation_reach_km();
             let key=fingerprint(planet,swath,epoch);
-            ui.label(format!("Uses the current {:.1} km observation width and visible constellations in this Earth view.",swath));
+            ui.label(format!("Uses the current {:.1} km observation reach and visible constellations in this Earth view.",swath));
             if tab.settings.pushbroom.observable_width_km.is_some() {
-                ui.small("Uses the observable corridor as an access approximation; it does not model a pointing schedule or simultaneous imaging across that width.");
+                ui.small("Uses observation reach as an access approximation; it does not model a pointing schedule or simultaneous imaging across that width.");
             }
             if crate::orbit_presets::has_worldview(planet) {
                 crate::orbit_presets::worldview_note(ui);
             }
-            ui.small("Continuous nadir imaging on a spherical Earth. Daylight, clouds, jobs, resource limits, maneuvers and debris are excluded. A point observation does not imply full AOI coverage.");
+            ui.small("Geometric access within observation reach on a spherical Earth. Daylight, clouds, jobs, resource limits, maneuvers and debris are excluded. A point observation does not imply full AOI coverage.");
             if ui.add_enabled(!busy,egui::Button::new("Calculate revisit")).clicked() {
                 #[cfg(not(target_arch="wasm32"))]
                 match orbits(planet) {

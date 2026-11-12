@@ -79,7 +79,7 @@ impl Panel {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
-                        aoi.presets_ui(ui);
+                        aoi.presets_ui(ui, &mut tab.settings.observation_data);
                         ui.separator();
                         egui::CollapsingHeader::new("AOI Generator")
                             .id_salt("sidebar-aoi")
@@ -99,14 +99,11 @@ impl Panel {
                             .id_salt("sidebar-data")
                             .default_open(true)
                             .show(ui, |ui| {
-                                if tab.settings.pushbroom.observable_width_km.is_some() {
-                                    ui.small("Uses the wider observable corridor as an access approximation, not simultaneous imaging across that width.");
-                                }
                                 self.data.ui(
                                     ui,
                                     &mut tab.settings.observation_data,
                                     &tab.planets[self.planet],
-                                    tab.settings.pushbroom.observation_width_km(),
+                                    &tab.settings.pushbroom,
                                     tab.settings.time,
                                     epoch,
                                 );
@@ -115,14 +112,14 @@ impl Panel {
                         aoi.jobs_ui(ui, &mut tab.settings.observation_data);
                         ui.separator();
                         aoi.jobs.satisfiability_ui(ui, &tab.planets[self.planet],
-                            tab.settings.observation_data, tab.settings.pushbroom.observation_width_km(),
+                            tab.settings.pushbroom.observation_reach_km(),
                             tab.settings.pushbroom.observable_width_km.is_some(), tab.settings.time, epoch);
                         ui.separator();
                         aoi.jobs.capture_ui(
                             ui,
                             &tab.planets[self.planet],
                             tab.settings.observation_data,
-                            tab.settings.pushbroom.observation_width_km(),
+                            tab.settings.pushbroom.observation_reach_km(),
                             tab.settings.time,
                             epoch,
                         );
@@ -207,15 +204,13 @@ mod tests {
         }
         for label in [
             "Sim",
-            "AOI presets / save / load",
-            "Default Jobs",
-            "Load preset",
-            "Save AOIs",
-            "Load AOIs",
+            "AOIs & jobs · presets",
+            "Load",
+            "Save",
             "AOI Generator",
             "Observation model",
             "Data",
-            "Swath width",
+            "Observation width",
             "Channels",
             "Resolution per channel",
             "Bits per sample",
@@ -233,11 +228,13 @@ mod tests {
                 "Clipped control {label}: {rect:?}"
             );
         }
-        let preset = shapes.iter().find_map(|s| text_rect(&s.shape, "AOI presets / save / load")).unwrap();
+        let preset = shapes.iter().find_map(|s| text_rect(&s.shape, "AOIs & jobs · presets")).unwrap();
         let generator = shapes.iter().find_map(|s| text_rect(&s.shape, "AOI Generator")).unwrap();
         assert!(preset.bottom() < generator.top());
-        assert_eq!(shapes.iter().filter(|s| text_rect(&s.shape, "Load preset").is_some()).count(), 1);
+        assert_eq!(shapes.iter().filter(|s| text_rect(&s.shape, "Load").is_some()).count(), 1);
+        assert_eq!(shapes.iter().filter(|s| text_rect(&s.shape, "Save").is_some()).count(), 1);
         assert!(!shapes.iter().any(|s| text_rect(&s.shape, "Save / load AOIs").is_some()));
+        assert!(!shapes.iter().any(|s| text_rect(&s.shape, "Save / load workload").is_some()));
         assert!(
             available.width() >= 900.0 && available.width() <= 1250.0,
             "{available:?}"

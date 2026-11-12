@@ -1,17 +1,13 @@
-//! Read-only acquisition forecast. Uses the same windows/geometry as capture,
+//! Read-only reach/revisit forecast over full AOI geometry,
 //! with no session, retained ledger, checkpoint writes or simulation clock edits.
 #[cfg(not(target_arch = "wasm32"))]
 use crate::aoi::preview::Preview;
 use crate::{config::PlanetConfig, revisit};
 use chrono::{DateTime, Utc};
 use eframe::egui;
+use leo_capture::satisfiability::{Assessment, Options, Progress, Stage};
 #[cfg(not(target_arch = "wasm32"))]
 use leo_capture::session::Inputs;
-use leo_capture::{
-    baseline::Options,
-    satisfiability::{Assessment, Progress, Stage},
-};
-use leo_sim::acquisition::CaptureProfile;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -24,7 +20,6 @@ use std::{
 struct Key {
     orbits: u64,
     revision: u64,
-    capture: CaptureProfile,
     options: Options,
 }
 struct Worker {
@@ -174,7 +169,6 @@ impl super::Panel {
         &mut self,
         ui: &mut egui::Ui,
         planet: &PlanetConfig,
-        capture: CaptureProfile,
         width: f64,
         access: bool,
         start: f64,
@@ -182,18 +176,15 @@ impl super::Panel {
     ) {
         #[cfg(target_arch = "wasm32")]
         let _ = start;
-        self.satisfiability.options.storage_bytes_per_satellite =
-            self.baseline.storage_capacity_bytes();
         let key = Key {
             orbits: revisit::fingerprint(planet, width, epoch),
             revision: self.revision,
-            capture,
             options: self.satisfiability.options.clone(),
         };
         self.satisfiability.poll(&key, self.compatible, ui.ctx());
         egui::CollapsingHeader::new("Satisfiability").id_salt("job-satisfiability").default_open(false).show(ui, |ui| {
-            ui.small("Checks cumulative AOI coverage in every job cadence window, including phase, local solar time and daylight. Starts at the current simulation time; playback does not move an existing forecast.");
-            if access { ui.small("Uses the observable corridor as continuous access. Pointing schedules and simultaneous imaging capacity are not modeled."); }
+            ui.small("Checks full AOI coverage and the longest usable observation gap against each job’s required cadence. Uses observation reach, with job solar-time and daylight filters.");
+            if access { ui.small("Observation reach is a steerable field of regard, not simultaneous imaging. This checks access opportunities; pointing, collection capacity and execution are not scheduled."); }
             let busy = self.satisfiability.worker.is_some();
             ui.add_enabled_ui(!busy, |ui| {
                 ui.horizontal_wrapped(|ui| {
@@ -203,7 +194,7 @@ impl super::Panel {
                         self.satisfiability.options.duration_s = days * 86400.0;
                     }
                     if ui.button("Fit job cadences (up to 30 days)").clicked() {
-                        let hours = self.jobs.iter().map(|j| j.cadence_hours + j.acquisition.phase_hours).fold(0.0_f64, f64::max);
+                        let hours = self.jobs.iter().map(|j| j.cadence_hours).fold(0.0_f64, f64::max);
                         self.satisfiability.options.duration_s = (hours * 3600.0).clamp(86.4, 30.0 * 86400.0);
                     }
                 });
@@ -217,10 +208,10 @@ impl super::Panel {
                     ui.small("Halve both spacings to check convergence. Full coverage uses the capture model's one-part-per-million area tolerance.");
                 });
             });
-            let untested = self.jobs.iter().filter(|j| (j.cadence_hours + j.acquisition.phase_hours) * 3600.0 > self.satisfiability.options.duration_s + 1e-6).count();
-            if untested > 0 { ui.colored_label(egui::Color32::YELLOW, format!("{untested} jobs have no deadline within this forecast and will remain untested (maximum 30 days).")); }
+            let untested = self.jobs.iter().filter(|j| j.cadence_hours * 3600.0 > self.satisfiability.options.duration_s + 1e-6).count();
+            if untested > 0 { ui.colored_label(egui::Color32::YELLOW, format!("{untested} jobs require a longer forecast to assess their cadence (maximum 30 days).")); }
             if self.jobs.is_empty() { ui.label("Load or assign jobs first."); }
-            if !self.compatible { ui.colored_label(egui::Color32::YELLOW, "AOIs and jobs do not match. Reassign jobs or load a matching workload."); }
+            if !self.compatible { ui.colored_label(egui::Color32::YELLOW, "AOIs and jobs do not match. Reassign jobs or load a matching preset."); }
             #[cfg(not(target_arch = "wasm32"))]
             if ui.add_enabled(!busy && self.compatible && self.assignment.is_none() && !self.jobs.is_empty(), egui::Button::new("Check current jobs")).clicked() {
                 match revisit::capture_satellites(planet) {
@@ -229,7 +220,7 @@ impl super::Panel {
                         let mut key = key.clone();
                         key.options = self.satisfiability.options.clone();
                         let inputs = Inputs { orbit_epoch_unix_s: epoch.timestamp_millis() as f64 / 1000.0, start_s: start,
-                            satellites, jobs: self.jobs.clone(), regions: Vec::new(), capture, swath_km: width, options: key.options.clone() };
+                            satellites, jobs: self.jobs.clone(), regions: Vec::new(), capture: Default::default(), swath_km: width, options: (&key.options).into() };
                         self.satisfiability.worker = Some(Worker::start(inputs, self.layers.clone(), key, ui.ctx().clone()));
                         self.satisfiability.message = None;
                         self.satisfiability.result = None;
@@ -237,10 +228,10 @@ impl super::Panel {
                 }
             }
             #[cfg(target_arch = "wasm32")]
-            ui.small("Acquisition satisfiability checks require the native app.");
+            ui.small("Coverage and revisit checks require the native app.");
             if let Some(worker) = &self.satisfiability.worker {
                 let p = *worker.progress.lock().unwrap();
-                let label = match p.stage { Stage::Validate => "Preparing jobs and AOI geometry", Stage::Geometry => "Building spatial coverage index", Stage::Forecast => "Checking acquisition windows" };
+                let label = match p.stage { Stage::Validate => "Preparing jobs and AOI geometry", Stage::Geometry => "Building spatial coverage index", Stage::Forecast => "Checking AOI coverage and revisit gaps" };
                 ui.label(format!("{label} · {:.0} s elapsed", worker.started.elapsed().as_secs_f64()));
                 ui.add(egui::ProgressBar::new(p.fraction).show_percentage());
                 if p.stage == Stage::Forecast { ui.small(format!("{:.2} / {:.2} forecast days", p.fraction as f64 * worker.key.options.duration_s / 86400.0, worker.key.options.duration_s / 86400.0)); }
@@ -255,57 +246,57 @@ impl super::Panel {
                 if stale { ui.colored_label(egui::Color32::YELLOW, "OUTDATED — setup changed. Run the check again."); }
                 results(ui, report, stale);
             }
-            ui.small("A satisfied job has full AOI coverage in every completed window. Independent crops can still produce useful partial output; mosaics wait for completion. Final unfinished windows are untested.");
-            ui.small("This is a finite-forecast acquisition check, not an all-time guarantee or a constrained schedule. No clouds, energy, compute, downlink or job dropping. Shared captures are reused. Native worker, memory and CPU-duty limits apply.");
+            ui.small("Satisfied means the entire AOI is reachable and its longest silence is no greater than the job cadence. Forecast start/end gaps count. Borderline results require a smaller time step.");
+            ui.small("This is a finite-forecast geometric check, not an all-time guarantee. Storage, data rates, job phase, mosaics, execution capacity and scheduling do not affect the verdict. Native resource limits still apply.");
         });
     }
 }
 
 fn results(ui: &mut egui::Ui, result: &Assessment, stale: bool) {
     let c = &result.counts;
-    let r = &result.report;
-    let start = DateTime::from_timestamp_millis((r.epoch_unix_s * 1000.0) as i64)
+    let start = DateTime::from_timestamp_millis((result.epoch_unix_s * 1000.0) as i64)
         .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
         .unwrap_or_default();
     ui.separator();
     ui.small(format!(
-        "{} jobs · {} satellites · {:.1} km observation width · {:.2} days from {start}",
-        r.jobs.len(),
-        r.satellites.len(),
-        r.swath_km,
-        r.options.duration_s / 86400.0
+        "{} jobs · {} satellites · {:.1} km observation reach · {:.2} days from {start}",
+        result.jobs.len(),
+        result.satellite_count,
+        result.reach_km,
+        result.options.duration_s / 86400.0
     ));
     let (color, verdict) = if stale {
         (egui::Color32::GRAY, "Previous forecast result")
-    } else if c.missed + c.partial > 0 {
+    } else if c.uncovered + c.too_slow > 0 {
         (
             egui::Color32::LIGHT_RED,
-            "Acquisition requirements not met in this forecast",
+            "Coverage or revisit requirements not met in this forecast",
         )
     } else if c.all_satisfied() {
         (
             egui::Color32::LIGHT_GREEN,
-            "All acquisition requirements met in this forecast",
+            "All coverage and revisit requirements met in this forecast",
         )
     } else {
         (
             egui::Color32::YELLOW,
-            "Insufficient forecast: some jobs remain untested",
+            "Inconclusive: extend the forecast or refine the time step",
         )
     };
     ui.colored_label(color, verdict);
-    ui.label(format!(
-        "{} satisfied · {} partially covered · {} with missed windows · {} untested",
-        c.satisfied, c.partial, c.missed, c.untested
-    ));
-    ui.label(format!(
-        "{} / {} due acquisition updates complete",
-        c.complete_updates, c.due_updates
-    ));
+    ui.label(format!("{} satisfied · {} incomplete coverage · {} revisit too slow · {} refine step · {} untested",
+        c.satisfied, c.uncovered, c.too_slow, c.resolution_limited, c.untested));
     egui::Grid::new("satisfiability-cadences")
         .striped(true)
         .show(ui, |ui| {
-            for label in ["Cadence", "Satisfied", "Partial", "Missed", "Untested"] {
+            for label in [
+                "Required cadence",
+                "Satisfied",
+                "Coverage",
+                "Too slow",
+                "Refine",
+                "Untested",
+            ] {
                 ui.strong(label);
             }
             ui.end_row();
@@ -313,8 +304,9 @@ fn results(ui: &mut egui::Ui, result: &Assessment, stale: bool) {
                 ui.label(super::duration(*hours));
                 for n in [
                     counts.satisfied,
-                    counts.partial,
-                    counts.missed,
+                    counts.uncovered,
+                    counts.too_slow,
+                    counts.resolution_limited,
                     counts.untested,
                 ] {
                     ui.label(n.to_string());
@@ -322,29 +314,20 @@ fn results(ui: &mut egui::Ui, result: &Assessment, stale: bool) {
                 ui.end_row();
             }
         });
-    let overloaded = r
-        .satellites
-        .iter()
-        .filter(|s| s.first_capacity_exceeded_s.is_some())
-        .count();
-    if overloaded > 0 {
-        ui.colored_label(egui::Color32::YELLOW, format!("Storage: {overloaded} satellites exceed {:.1} TB in this baseline. A storage-feasible allocation has not been established.", r.options.storage_bytes_per_satellite as f64 / 1e12));
-    } else {
-        ui.small(
-            "Baseline retained crops fit the configured satellite storage over this forecast.",
-        );
-    }
-    ui.small("Storage counts every retained crop with no deletion or downlink. Baseline allocation is not optimized, so overload alone is not proof that no feasible schedule exists.");
+    ui.small("Longest silence includes forecast boundaries. The range accounts for acquisition time within each track segment; halve the track step for a tighter bound.");
     ui.collapsing("Job details — failures first", |ui| {
-        ui.small(format!("Showing up to 100 of {} jobs. Complete / due counts full AOI updates; partial counts windows with some coverage.", r.jobs.len()));
+        ui.small(format!("Showing up to 100 of {} jobs. Coverage checks polygons, including separate pieces and holes.", result.jobs.len()));
         egui::ScrollArea::both().max_height(300.0).show(ui, |ui| {
             egui::Grid::new("satisfiability-jobs").striped(true).show(ui, |ui| {
-                for label in ["Job", "Mode", "Priority", "Complete / due", "Partial", "Missed"] { ui.strong(label); } ui.end_row();
+                for label in ["Job", "Required cadence", "AOI coverage", "Longest silence", "Result"] { ui.strong(label); }
+                ui.end_row();
                 for &i in result.details.iter().take(100) {
-                    let j = &r.jobs[i];
-                    ui.label(&j.job_key); ui.label(j.fulfilment.label()); ui.label(j.priority.to_string());
-                    ui.label(format!("{} / {}", j.complete_due_updates, j.due_updates));
-                    ui.label(j.partial_due_updates.to_string()); ui.label(j.missed_due_updates.to_string()); ui.end_row();
+                    let j = &result.jobs[i];
+                    ui.label(&j.job_key);
+                    ui.label(super::duration(j.cadence_hours));
+                    ui.label(format!("{:.4}%", 100.0 * j.coverage_fraction));
+                    ui.label(format!("{}–{}", super::duration(j.silence_min_s / 3600.0), super::duration(j.silence_max_s / 3600.0)));
+                    ui.label(j.verdict.label()); ui.end_row();
                 }
             });
         });
@@ -395,15 +378,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    jobs.satisfiability_ui(
-                        ui,
-                        &planet,
-                        CaptureProfile::default(),
-                        20.0,
-                        false,
-                        0.0,
-                        epoch,
-                    );
+                    jobs.satisfiability_ui(ui, &planet, 20.0, false, 0.0, epoch);
                 },
             )
         };
@@ -458,8 +433,8 @@ mod tests {
             jobs.satisfiability.message
         );
         let (_, result) = jobs.satisfiability.result.as_ref().unwrap();
-        assert_eq!(result.report.jobs.len(), 1);
-        assert_eq!(result.counts.due_updates, 2);
+        assert_eq!(result.jobs.len(), 1);
+        assert_eq!(result.jobs[0].cadence_hours, 0.01);
         let output = frame(&mut jobs, vec![]);
         assert!(text_position(
             &output.shapes,
@@ -481,7 +456,6 @@ mod tests {
         let key = Key {
             orbits: 1,
             revision: 1,
-            capture: CaptureProfile::default(),
             options: panel.options.clone(),
         };
         let cancel = Arc::new(AtomicBool::new(false));

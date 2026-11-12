@@ -9,11 +9,39 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub(super) struct Document {
     pub schema_version: u32,
     pub config: Config,
     pub aois: Vec<Record>,
+}
+impl Document {
+    pub(super) fn validate(&self) -> Result<(), String> {
+        if self.schema_version != 1
+            || self.aois.is_empty()
+            || self.aois.len() > 50_000
+            || self.aois.len() != self.config.count
+        {
+            return Err("Invalid AOI response version or count".into());
+        }
+        let mut identifiers = std::collections::HashSet::with_capacity(self.aois.len());
+        for (index, aoi) in self.aois.iter().enumerate() {
+            let source = if aoi.source_kind.is_empty() {
+                "gdp"
+            } else {
+                &aoi.source_kind
+            };
+            let id = if aoi.id.is_empty() {
+                format!("aoi-{index:08}")
+            } else {
+                aoi.id.clone()
+            };
+            if !identifiers.insert(format!("{source}:{id}")) {
+                return Err("Duplicate AOI identifier".into());
+            }
+        }
+        Ok(())
+    }
 }
 #[derive(Deserialize, Serialize)]
 pub(super) struct Config {
@@ -427,21 +455,35 @@ impl Preview {
     }
 
     pub(super) fn from_document(doc: Document) -> Result<Self, String> {
-        if doc.schema_version != 1
-            || doc.aois.is_empty()
-            || doc.aois.len() > 50_000
-            || doc.aois.len() != doc.config.count
-        {
-            return Err("Invalid AOI response version or count".into());
-        }
+        doc.validate()?;
         let mut preview = Self::empty(doc.config.count, doc.config.seed);
-        let mut identifiers = std::collections::HashSet::new();
         for aoi in doc.aois {
             preview.push_record(aoi)?;
-            if !identifiers.insert(preview.aois.last().unwrap().key()) {
-                return Err("Duplicate AOI identifier".into());
-            }
         }
+        Ok(preview.finish())
+    }
+
+    /// Prepare saved geometry on the same bounded pool used by generation.
+    /// Ordered results preserve fallback IDs, colors, and workload identities.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn from_document_parallel(
+        doc: Document,
+        workers: usize,
+        mut progress: impl FnMut(&'static str, usize, usize),
+    ) -> Result<Self, String> {
+        doc.validate()?;
+        let total = doc.config.count;
+        let prepared = leo_capture::parallel::map(
+            doc.aois.into_iter().enumerate().collect(),
+            workers,
+            |(index, aoi)| Self::prepare_record(aoi, index),
+            |done, total| progress("Preparing saved geometry", done, total),
+        )?;
+        let mut preview = Self::empty(total, doc.config.seed);
+        for aoi in prepared {
+            preview.push_prepared(aoi);
+        }
+        progress("Building display buffers", total, total);
         Ok(preview.finish())
     }
 
@@ -1652,6 +1694,103 @@ mod tests {
         .is_err());
         assert!(ring(vec![[0.0, 0.0]; 3]).is_err());
         assert!(ring(vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]).is_err());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn parallel_loading_preserves_geometry_order_ids_and_display_buffers() {
+        let shapes = [
+            serde_json::json!({"type": "Polygon", "coordinates": [
+                [[22,45],[29,45],[29,52],[22,52],[22,45]],
+                [[25,48],[26,48],[26,49],[25,49],[25,48]]
+            ]}),
+            serde_json::json!({"type": "MultiPolygon", "coordinates": [
+                [[[179,-2],[180,-2],[180,2],[179,2],[179,-2]]],
+                [[[-180,-2],[-179,-2],[-179,2],[-180,2],[-180,-2]]]
+            ]}),
+        ];
+        let records: Vec<_> = (0..72)
+            .map(|i| {
+                serde_json::json!({
+                    "id": if i % 3 == 0 { String::new() } else { format!("explicit-{i}") },
+                    "source_kind": (["", "forest", "river", "coast"][i % 4]),
+                    "area_km2": 1000, "anchor_lon": 25.5, "anchor_lat": 48.7,
+                    "geometry": shapes[i % 2]
+                })
+            })
+            .collect();
+        let json = serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1, "config": {"count": records.len(), "seed": 42}, "aois": records
+        }))
+        .unwrap();
+        let serial = Preview::from_json(&json).unwrap();
+        let mut completed = Vec::new();
+        let parallel = Preview::from_document_parallel(
+            serde_json::from_slice(&json).unwrap(),
+            3,
+            |_, done, total| {
+                assert_eq!(total, 72);
+                completed.push(done);
+            },
+        )
+        .unwrap();
+        assert_eq!(serial.aois, parallel.aois);
+        assert_eq!(serial.aois[0].id, "aoi-00000000");
+        assert_eq!(serial.edge_count, parallel.edge_count);
+        assert_eq!(serial.mean_area, parallel.mean_area);
+        for i in 0..serial.count {
+            assert_eq!(
+                serde_json::to_vec(&serial.record(i)).unwrap(),
+                serde_json::to_vec(&parallel.record(i)).unwrap()
+            );
+        }
+        assert_eq!(completed.first(), Some(&0));
+        assert_eq!(completed.last(), Some(&72));
+        assert!(completed.windows(2).all(|w| w[0] <= w[1]));
+        let (a, b) = (serial.gpu_geometry(), parallel.gpu_geometry());
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&a.segments),
+            bytemuck::cast_slice::<_, u8>(&b.segments)
+        );
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&a.triangles),
+            bytemuck::cast_slice::<_, u8>(&b.triangles)
+        );
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&a.dots),
+            bytemuck::cast_slice::<_, u8>(&b.dots)
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn parallel_loading_rejects_invalid_documents_and_resolved_duplicate_ids() {
+        let valid = serde_json::json!({
+            "schema_version": 1, "config": {"count": 2, "seed": 42},
+            "aois": [
+                {"area_km2": 100, "anchor_lon": 0, "anchor_lat": 0,
+                 "geometry": {"type": "Polygon", "coordinates": [[[0,0],[1,0],[1,1],[0,0]]]}},
+                {"area_km2": 100, "anchor_lon": 0, "anchor_lat": 0,
+                 "geometry": {"type": "Polygon", "coordinates": [[[0,0],[1,0],[1,1],[0,0]]]}}
+            ]
+        });
+        let mut duplicate = valid.clone();
+        duplicate["aois"][1]["id"] = "aoi-00000000".into();
+        duplicate["aois"][1]["source_kind"] = "gdp".into();
+        let mut count = valid.clone();
+        count["config"]["count"] = 3.into();
+        let mut version = valid.clone();
+        version["schema_version"] = 2.into();
+        let mut ring = valid;
+        ring["aois"][1]["geometry"]["coordinates"][0][3][0] = 2.into();
+        for value in [duplicate, count, version, ring] {
+            assert!(Preview::from_document_parallel(
+                serde_json::from_value(value).unwrap(),
+                2,
+                |_, _, _| {},
+            )
+            .is_err());
+        }
     }
     #[test]
     fn front_and_back_globes_render_different_geometry() {

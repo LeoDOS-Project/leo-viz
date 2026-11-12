@@ -59,9 +59,9 @@ pub(crate) fn has_worldview(planet: &crate::config::PlanetConfig) -> bool {
 
 pub(crate) fn worldview_note(ui: &mut eframe::egui::Ui) {
     ui.small(format!(
-        "WorldView access approximation: {:.0} km accessible corridor, {:.1} km native imaging swath. \
-         The solid strip shows the native swath; the dashed corridor shows potential access. Capture and data estimates \
-         still use the wider access approximation. Pointing schedules and daylight are not part of geometric revisit.",
+        "WorldView: {:.0} km observation reach, {:.1} km observation width. \
+         Data rates use the narrow imaging width; coverage and revisit use the wider reach. \
+         The unconstrained capture baseline still approximates access across the reach. Pointing schedules are not modeled.",
         leo_sim::worldview::ACCESS_WIDTH_KM, leo_sim::worldview::IMAGING_SWATH_KM,
     ));
 }

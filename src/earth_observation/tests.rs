@@ -47,7 +47,7 @@ fn sampler_selects_only_its_globe_and_changed_configuration_clears_results() {
         let _ = frame(&mut panel, &mut tab, vec![]);
     }
     let out = frame(&mut panel, &mut tab, vec![]);
-    assert!(text_position(&out.shapes, "Swath width").is_some()); // independently of visualization
+    assert!(text_position(&out.shapes, "Observation width").is_some()); // independently of visualization
     let pos = text_position(&out.shapes, "Sampler").unwrap();
     for pressed in [true, false] {
         let _ = frame(

@@ -1,0 +1,92 @@
+{
+  "generator": "src/aoi/generate.rs + compact.rs (100-edge cap)",
+  "hash_algorithm": "leo_capture::workload::hash (FNV-1a 64)",
+  "layers": [
+    {
+      "count": 1000,
+      "edge_count": 32574,
+      "file": "default-forest.json.gz",
+      "file_hash": 18214170406545046357,
+      "geometry_identity_hash": 10966505401962095792,
+      "max_edges": 100,
+      "settings": {
+        "buffer": 2.0,
+        "count": 1000,
+        "flow": 10.0,
+        "forest_adherence": 0.8,
+        "inland": 2.0,
+        "kind": "forest",
+        "latitude": 70.0,
+        "length_ratio": 20.0,
+        "max_elongation": 3.0,
+        "mean_area": 1000.0,
+        "mean_length": 100.0,
+        "offshore": 1.0,
+        "outline_variation": 0.7,
+        "seed": 42,
+        "size_ratio": 100.0,
+        "tile_edge": 0.1
+      },
+      "source": "forest.aoi-data.json.gz",
+      "source_hash": 8820973526564914529
+    },
+    {
+      "count": 1000,
+      "edge_count": 99964,
+      "file": "default-river.json.gz",
+      "file_hash": 9450559970831134743,
+      "geometry_identity_hash": 1085877198068596622,
+      "max_edges": 100,
+      "settings": {
+        "buffer": 2.0,
+        "count": 1000,
+        "flow": 10.0,
+        "forest_adherence": 0.8,
+        "inland": 2.0,
+        "kind": "river",
+        "latitude": 70.0,
+        "length_ratio": 20.0,
+        "max_elongation": 3.0,
+        "mean_area": 1000.0,
+        "mean_length": 100.0,
+        "offshore": 1.0,
+        "outline_variation": 0.7,
+        "seed": 42,
+        "size_ratio": 100.0,
+        "tile_edge": 0.1
+      },
+      "source": "river.aoi-data.json.gz",
+      "source_hash": 6331971948192232873
+    },
+    {
+      "count": 1000,
+      "edge_count": 99774,
+      "file": "default-coast.json.gz",
+      "file_hash": 9265403043343218322,
+      "geometry_identity_hash": 7508605634890845886,
+      "max_edges": 100,
+      "settings": {
+        "buffer": 2.0,
+        "count": 1000,
+        "flow": 10.0,
+        "forest_adherence": 0.8,
+        "inland": 2.0,
+        "kind": "coast",
+        "latitude": 70.0,
+        "length_ratio": 20.0,
+        "max_elongation": 3.0,
+        "mean_area": 1000.0,
+        "mean_length": 100.0,
+        "offshore": 1.0,
+        "outline_variation": 0.7,
+        "seed": 42,
+        "size_ratio": 100.0,
+        "tile_edge": 0.1
+      },
+      "source": "coast.aoi-data.json.gz",
+      "source_hash": 11924858465119957088
+    }
+  ],
+  "rebuild": "cargo test --release rebuild_environment_presets -- --ignored --nocapture",
+  "schema_version": 1
+}

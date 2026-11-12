@@ -129,6 +129,6 @@ fn adding_can_keep_other_shells_and_can_keep_or_apply_published_swath() {
     imaging.apply_worldview();
     library.add(&mut p, &mut imaging);
     assert_eq!(imaging.swath_km, 60.0);
-    assert_eq!(imaging.observation_width_km(), 60.0);
+    assert_eq!(imaging.observation_reach_km(), 60.0);
     assert!(!imaging.observable_visible());
 }

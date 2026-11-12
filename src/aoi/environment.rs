@@ -159,7 +159,7 @@ impl Source {
                     ui.small(format!("Actual average path {length:.1} km · {} paths ended early at outlets, gaps or closed coastlines", preview.truncated_paths));
                 }
                 preview.complexity_ui(ui);
-                if ui.add_enabled(!busy && preview.max_edges > super::compact::EDGE_LIMIT, egui::Button::new("Simplify loaded AOIs to 100 edges")).on_hover_text("Changes the stored footprint and area. Reassign jobs afterward and use Save AOIs to keep the simplified geometry. Existing files and capture checkpoints are unchanged.").clicked() {
+                if ui.add_enabled(!busy && preview.max_edges > super::compact::EDGE_LIMIT, egui::Button::new("Simplify loaded AOIs to 100 edges")).on_hover_text("Changes the stored footprint and area. Reassign jobs afterward and use Save in the presets menu to keep the simplified geometry. Existing files and capture checkpoints are unchanged.").clicked() {
                     request = Some(Action::Compact(Arc::clone(preview)));
                 }
                 ui.checkbox(&mut self.visible, "Show on Earth globes");

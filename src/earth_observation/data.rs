@@ -64,11 +64,13 @@ impl Panel {
         ui: &mut egui::Ui,
         profile: &mut CaptureProfile,
         planet: &PlanetConfig,
-        swath_km: f64,
+        observation: &crate::pushbroom::Settings,
         time: f64,
         epoch: DateTime<Utc>,
     ) {
-        ui.small("Continuous acquisition across the observation model's width");
+        let swath_km = observation.observation_width_km();
+        ui.small("Continuous acquisition across the actual observation width.");
+        ui.small(format!("Imaging width: {swath_km:.1} km · observation reach: {:.1} km. Reach does not multiply data volume.", observation.observation_reach_km()));
         egui::Grid::new("capture-profile")
             .num_columns(2)
             .show(ui, |ui| {
@@ -265,5 +267,62 @@ mod tests {
     fn formatting_uses_decimal_bytes() {
         assert_eq!(bytes(9_333_333_333.0), "9.33 GB");
         assert_eq!(bytes(33.6e12), "33.60 TB");
+    }
+
+    #[test]
+    fn worldview_data_uses_imaging_width_and_is_independent_of_reach() {
+        let mut tab = TabConfig::new("WorldView".into());
+        let mut c = ConstellationConfig::new(0);
+        crate::orbit_presets::apply_worldview(&mut c, leo_sim::worldview::Fleet::WorldView30);
+        tab.planets[0].constellations = vec![c];
+        let mut observation = crate::pushbroom::Settings::default();
+        observation.apply_worldview();
+        let epoch = DateTime::from_timestamp(946728000, 0).unwrap();
+        let speed = snapshot(&tab.planets[0], 0.0, epoch).unwrap()[0].speed_sum;
+        let mut profile = CaptureProfile::default();
+        let total = profile.raw_bytes_per_second(13.1, speed).unwrap();
+        let wrong = profile.raw_bytes_per_second(450.0, speed).unwrap();
+        let ctx = egui::Context::default();
+        let mut panel = Panel::default();
+        for reach in [450.0, 100.0, 500.0] {
+            observation.observable_width_km = Some(reach);
+            let mut output = None;
+            for _ in 0..3 {
+                output = Some(ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1400.0, 1600.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| panel.ui(ui, &mut profile, &tab.planets[0], &observation, 0.0, epoch),
+                ));
+            }
+            let texts: Vec<_> = output
+                .unwrap()
+                .shapes
+                .into_iter()
+                .filter_map(|s| {
+                    if let egui::Shape::Text(t) = s.shape {
+                        Some(t.galley.job.text.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for expected in [
+                bytes(total),
+                bytes(total / 30.0),
+                bytes(total * 86400.0),
+                bytes(total * 86400.0 / 30.0),
+            ] {
+                assert!(
+                    texts.contains(&expected),
+                    "Missing correct data rate {expected}"
+                );
+            }
+            assert!(!texts.contains(&bytes(wrong)));
+        }
     }
 }
