@@ -69,7 +69,7 @@ pub(super) fn job_controls(ui: &mut egui::Ui, a: &mut Acquisition, cadence: f64)
 }
 
 use super::capture_worker::{Command, Event, Initial, View, Worker};
-use leo_capture::session::{Inputs, Orbit, PreparationStage, Satellite};
+use leo_capture::session::{Inputs, PreparationStage};
 
 pub(super) struct Panel {
     options: Options,
@@ -105,6 +105,8 @@ impl Default for Panel {
     }
 }
 impl Panel {
+    pub(super) fn storage_capacity_bytes(&self) -> u64 { self.options.storage_bytes_per_satellite }
+
     fn poll(&mut self, ctx: &egui::Context) {
         if let Some(p) = &self.pending {
             if let Some(view) = p.take_view() {
@@ -307,16 +309,9 @@ impl Panel {
             });
             #[cfg(not(target_arch="wasm32"))]
             if ui.add_enabled(compatible&&!jobs.is_empty(),egui::Button::new("Start new capture run from setup")).clicked() {
-                match crate::revisit::orbit_groups(planet) {
+                match crate::revisit::capture_satellites(planet) {
                     Err(e)=>self.error=Some(e),
-                    Ok(groups)=> {
-                        let satellites=groups.into_iter().flat_map(|(name,orbits)|orbits.into_iter().enumerate().map(move |(i,o)| {
-                            let (label,orbit)=match o {
-                                crate::revisit::Orbit::Analytical(elements)=>(format!("Satellite {}",i+1),Orbit::Analytical{elements}),
-                                crate::revisit::Orbit::Tle(t)=>(format!("{} ({})",t.name,t.norad_id),Orbit::Sgp4{constants:t.constants,epoch_minutes:t.epoch_minutes}),
-                            };
-                            Satellite {name:label,constellation:name.clone(),orbit}
-                        })).collect();
+                    Ok(satellites)=> {
                         self.start(Initial::New(Inputs {orbit_epoch_unix_s:epoch.timestamp_millis() as f64/1000.0,start_s:start,satellites,jobs:jobs.to_vec(),
                             regions:layers.iter().flat_map(|p|p.capture_regions()).collect(),capture,swath_km:swath,options:self.options.clone()}));
                     }

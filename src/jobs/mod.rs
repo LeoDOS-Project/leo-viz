@@ -5,6 +5,7 @@ pub(crate) mod model;
 #[cfg(any(test, not(target_arch = "wasm32")))]
 mod storage;
 mod worker;
+mod satisfiability;
 
 use crate::aoi::preview::{Hit, Preview};
 use eframe::egui;
@@ -30,6 +31,7 @@ pub(crate) struct Panel {
     message: Option<String>,
     revision: u64,
     baseline: capture_ui::Panel,
+    satisfiability: satisfiability::Panel,
     timing: Option<(u64, model::TimingSummary)>,
     assignment: Option<Assignment>,
 }
@@ -46,6 +48,7 @@ impl Default for Panel {
         Self {
             revision: 0,
             baseline: capture_ui::Panel::default(),
+            satisfiability: satisfiability::Panel::default(),
             timing: None,
             assignment: None,
             config: Generator::default(),

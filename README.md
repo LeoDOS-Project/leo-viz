@@ -140,8 +140,14 @@ and the boundary between infrastructure actions and the future job layer.
 
 The Rust AOI generator creates reproducible, overlapping AOIs as rectangles
 or environmental patches and corridors, using weighted geographic data or uniform sampling.
-In the right **Earth Observation** sidebar, open **AOI Generator → Default Jobs → Load preset** to display the bundled
-50,000 AOIs without Python or external data files. Generation defaults are an
+At the top of the right **Earth Observation** sidebar, open
+**AOI presets / save / load → Default Jobs → Load preset**. This loads 53,000 AOIs:
+50,000 bundled GDP rectangles plus 1,000 each of forests, rivers and coasts,
+generated with the environmental pages' default settings and seed 42. The latter
+use the bundled geographic snapshots and the 100-edge-per-AOI cap. Loading runs
+in the background and replaces all four layers together only after success;
+an error preserves the previous layers. Job settings are assigned separately.
+GDP generation defaults are an
 expected mean area of 100 km², a 1,000× max/min area ratio, seed 42, 600 hotspots,
 0.4 clustered fraction and 100 km hotspot spread. Rectangles have random bearings
 and log-uniform aspect ratios up to 3:1, defined in a local equal-area projection
@@ -286,7 +292,8 @@ imagery, distinct from the Data pane's continuous full-swath sensor production.
 All sizes are linear in area, so these aggregate estimates do not require a
 choice of observation-unit subdivision or simultaneous whole-AOI acquisitions.
 
-**Earth Observation → Save / load AOIs** saves all loaded GDP, forest, river and
+**Earth Observation → AOI presets / save / load** is the single preset and file
+menu, above **AOI Generator**. It saves all loaded GDP, forest, river and
 coast layers, including hidden layers. Set the path and click **Save AOIs**;
 `.json.gz` writes compressed JSON and `.json` writes plain JSON. The file contains
 the original polygon coordinates (including holes and dateline parts), IDs,
@@ -296,6 +303,35 @@ run in the background; saves replace the destination atomically. **Load AOIs**
 validates the entire file before replacing all AOI layers; failed loads preserve
 the current layers. Loading requires neither Python nor the geographic source
 datasets. Job settings and capture progress are saved separately.
+
+The **Satisfiability** section checks the current visible constellation against
+all assigned/loaded jobs and their matching AOI geometry. Click **Check current
+jobs** to forecast from the current simulation time. The default horizon is
+30 days; **Fit job cadences (up to 30 days)** includes the first deadline of each
+job where possible. Longer cadences or phases without a due deadline are
+explicitly **untested**, never passed. Playback does not move the forecast.
+
+The check uses the same swept-polygon acquisition generator as capture simulation:
+all portions of each AOI must be covered within each phase-aligned cadence window,
+with cumulative captures, holes, overlapping jobs, local solar time and solar
+elevation honored. Independent crops can produce useful partial output, but a
+full AOI update still requires full coverage; mosaics become ready only when
+complete. Results show satisfied, partially covered, missed-window and untested
+jobs, grouped by cadence, plus job details with failures first. Final incomplete
+windows are censored. Halve the track step and polygon edge spacing under
+**Accuracy** to check sensitivity near a boundary.
+
+This is a **finite-horizon acquisition assessment**, not an all-time revisit
+certificate or a constrained schedule. A wider observable corridor retains the
+existing continuous-access approximation, without pointing/collection capacity.
+Finite storage is measured using the capture panel's capacity and sensor profile:
+a baseline overflow warns that a feasible allocation has not been established,
+but does not prove that another allocation cannot fit. There is no downlink,
+deletion, cloud, energy, compute or priority-based dropping in this assessment.
+The background worker shares the native CPU/memory limits, throttles to the
+configured duty percentage and supports cancellation. It stores only active
+coverage and summary counters, without a retained crop ledger or checkpoint.
+Setup/job/AOI changes cancel an active check and mark an old result outdated.
 
 **Save / load workload** writes versioned compressed JSON containing actual
 assignments, generator parameters and shared image settings. The file references

@@ -73,6 +73,7 @@ pub(super) fn compact(
 pub(super) enum Event {
     Progress(String),
     Finished(Result<Preview, String>),
+    PresetFinished(Result<Vec<Preview>, String>),
 }
 
 pub(super) fn start(
@@ -148,13 +149,80 @@ pub(super) fn load_preset(ctx: egui::Context, legacy: bool) -> mpsc::Receiver<Ev
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(move || {
         leo_capture::resources::background_thread();
-        let _ = tx.send(Event::Finished(super::presets::load(legacy)));
+        let result = (|| {
+            leo_capture::resources::check_memory()?;
+            let _ = tx.send(Event::Progress(
+                "Loading 50,000 bundled GDP rectangles…".into(),
+            ));
+            ctx.request_repaint();
+            let mut layers = vec![super::presets::load(legacy)?];
+            if !legacy {
+                for (kind, name) in [
+                    ("forest", "Forests"),
+                    ("river", "Rivers"),
+                    ("coast", "Coasts"),
+                ] {
+                    leo_capture::resources::check_memory()?;
+                    let source = super::environment::Source::new(kind, name);
+                    let (settings, input) = source.request();
+                    let _ = tx.send(Event::Progress(format!("Loading default {name} source…")));
+                    ctx.request_repaint();
+                    let dataset = data::load(&input, kind)?;
+                    let workers = leo_capture::parallel::worker_count(settings.count());
+                    let mut last = std::time::Instant::now();
+                    layers.push(Job::new(settings, Some(dataset))?.run_parallel(
+                        workers,
+                        |stage, done, total| {
+                            if done == total || last.elapsed().as_millis() >= 100 {
+                                let _ = tx.send(Event::Progress(format!(
+                                    "{name} · {stage}: {done} / {total} · {workers} CPU workers"
+                                )));
+                                ctx.request_repaint();
+                                last = std::time::Instant::now();
+                            }
+                        },
+                    )?);
+                }
+            }
+            Ok(layers)
+        })();
+        let _ = tx.send(Event::PresetFinished(result));
         ctx.request_repaint();
     });
     #[cfg(target_arch = "wasm32")]
     wasm_bindgen_futures::spawn_local(async move {
         crate::tle::yield_now().await;
-        let _ = tx.send(Event::Finished(super::presets::load(legacy)));
+        let result = async {
+            let mut layers = vec![super::presets::load(legacy)?];
+            if !legacy {
+                for (kind, name) in [
+                    ("forest", "Forests"),
+                    ("river", "Rivers"),
+                    ("coast", "Coasts"),
+                ] {
+                    let (settings, input) = super::environment::Source::new(kind, name).request();
+                    let _ = tx.send(Event::Progress(format!("Loading default {name} source…")));
+                    ctx.request_repaint();
+                    let dataset = data::load(&input, kind).await?;
+                    let mut job = Job::new(settings, Some(dataset))?;
+                    loop {
+                        if let Some(layer) = job.step()? {
+                            layers.push(layer);
+                            break;
+                        }
+                        let _ = tx.send(Event::Progress(format!(
+                            "Generating {name}: {} / 1,000",
+                            job.completed
+                        )));
+                        ctx.request_repaint();
+                        crate::tle::yield_now().await;
+                    }
+                }
+            }
+            Ok::<_, String>(layers)
+        }
+        .await;
+        let _ = tx.send(Event::PresetFinished(result));
         ctx.request_repaint();
     });
     rx

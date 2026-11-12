@@ -320,7 +320,7 @@ fn generator_splits_a_sweep_at_deadline_without_completing_either_mosaic() {
     assert!(report.jobs[0].captured_area_km2 > 0.0);
 }
 
-fn session_inputs() -> crate::session::Inputs {
+pub(crate) fn session_inputs() -> crate::session::Inputs {
     use crate::session::{Inputs, Orbit, Satellite};
     let epoch = 946728000.0;
     // Eastbound equatorial orbit begins just west of two overlapping AOIs.

@@ -243,6 +243,7 @@ mod tests {
         let reduced = loop {
             match rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() {
                 worker::Event::Finished(result) => break Arc::new(result.unwrap()),
+                worker::Event::PresetFinished(_) => unreachable!(),
                 worker::Event::Progress(_) => (),
             }
         };
@@ -545,7 +546,7 @@ impl AoiGenerator {
     }
     pub(super) fn storage_ui(&mut self, ui: &mut egui::Ui) {
         self.poll_storage();
-        egui::CollapsingHeader::new("Save / load AOIs").id_salt("aoi-storage").default_open(true).show(ui, |ui| {
+        ui.push_id("aoi-storage", |ui| {
             let busy = self.storage.busy() || self.pending.is_some();
             ui.add_enabled_ui(!busy, |ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.storage.path).desired_width(f32::INFINITY));

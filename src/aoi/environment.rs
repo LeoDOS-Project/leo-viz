@@ -63,7 +63,7 @@ impl Source {
         self.dataset.accept_drop(file);
     }
 
-    fn request(&self) -> (generate::Settings, data::Input) {
+    pub(super) fn request(&self) -> (generate::Settings, data::Input) {
         (
             generate::Settings::Environment(generate::Environment {
                 kind: self.kind,

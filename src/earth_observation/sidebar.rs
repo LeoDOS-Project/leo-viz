@@ -79,6 +79,8 @@ impl Panel {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
+                        aoi.presets_ui(ui);
+                        ui.separator();
                         egui::CollapsingHeader::new("AOI Generator")
                             .id_salt("sidebar-aoi")
                             .show(ui, |ui| aoi.ui(ui));
@@ -111,6 +113,10 @@ impl Panel {
                             });
                         ui.separator();
                         aoi.jobs_ui(ui, &mut tab.settings.observation_data);
+                        ui.separator();
+                        aoi.jobs.satisfiability_ui(ui, &tab.planets[self.planet],
+                            tab.settings.observation_data, tab.settings.pushbroom.observation_width_km(),
+                            tab.settings.pushbroom.observable_width_km.is_some(), tab.settings.time, epoch);
                         ui.separator();
                         aoi.jobs.capture_ui(
                             ui,
@@ -201,6 +207,11 @@ mod tests {
         }
         for label in [
             "Sim",
+            "AOI presets / save / load",
+            "Default Jobs",
+            "Load preset",
+            "Save AOIs",
+            "Load AOIs",
             "AOI Generator",
             "Observation model",
             "Data",
@@ -222,6 +233,11 @@ mod tests {
                 "Clipped control {label}: {rect:?}"
             );
         }
+        let preset = shapes.iter().find_map(|s| text_rect(&s.shape, "AOI presets / save / load")).unwrap();
+        let generator = shapes.iter().find_map(|s| text_rect(&s.shape, "AOI Generator")).unwrap();
+        assert!(preset.bottom() < generator.top());
+        assert_eq!(shapes.iter().filter(|s| text_rect(&s.shape, "Load preset").is_some()).count(), 1);
+        assert!(!shapes.iter().any(|s| text_rect(&s.shape, "Save / load AOIs").is_some()));
         assert!(
             available.width() >= 900.0 && available.width() <= 1250.0,
             "{available:?}"

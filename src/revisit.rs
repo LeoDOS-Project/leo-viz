@@ -161,6 +161,20 @@ pub(crate) fn orbit_groups(p: &PlanetConfig) -> Result<Vec<(String, Vec<Orbit>)>
     Ok(result)
 }
 
+/// Freeze the same visible orbit selection for capture and feasibility checks.
+pub(crate) fn capture_satellites(p: &PlanetConfig) -> Result<Vec<leo_capture::session::Satellite>, String> {
+    use leo_capture::session::{Orbit as CaptureOrbit, Satellite};
+    Ok(orbit_groups(p)?.into_iter().flat_map(|(name, orbits)| {
+        orbits.into_iter().enumerate().map(move |(i, orbit)| {
+            let (label, orbit) = match orbit {
+                Orbit::Analytical(elements) => (format!("Satellite {}", i + 1), CaptureOrbit::Analytical { elements }),
+                Orbit::Tle(t) => (format!("{} ({})", t.name, t.norad_id), CaptureOrbit::Sgp4 { constants: t.constants, epoch_minutes: t.epoch_minutes }),
+            };
+            Satellite { name: label, constellation: name.clone(), orbit }
+        })
+    }).collect())
+}
+
 #[derive(Clone, Copy, PartialEq)]
 struct Options {
     days: f64,

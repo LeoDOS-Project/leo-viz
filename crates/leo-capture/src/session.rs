@@ -105,7 +105,7 @@ pub struct Inputs {
     pub options: Options,
 }
 impl Inputs {
-    fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         self.options.validate()?;
         if !self.epoch().is_finite()
             || !self.orbit_epoch_unix_s.is_finite()

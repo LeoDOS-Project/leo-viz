@@ -102,8 +102,6 @@ impl AoiGenerator {
         ui: &mut egui::Ui,
         capture: &mut leo_sim::acquisition::CaptureProfile,
     ) {
-        #[cfg(not(target_arch = "wasm32"))]
-        self.storage_ui(ui);
         let layers = self
             .preview
             .iter()
@@ -212,6 +210,31 @@ impl AoiGenerator {
         ui.small("Off-screen regions are skipped. Distant AOIs use simpler outlines or grouped dots; zoom in for detail.");
     }
 
+    pub fn presets_ui(&mut self, ui: &mut egui::Ui) {
+        self.poll(ui.ctx());
+        egui::CollapsingHeader::new("AOI presets / save / load")
+            .id_salt("aoi-library").default_open(true).show(ui, |ui| {
+                ui.add_enabled_ui(!self.busy(), |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        egui::ComboBox::from_id_salt("aoi-preset-choice")
+                            .selected_text(if self.legacy_preset { presets::LEGACY_JOBS } else { presets::DEFAULT_JOBS })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.legacy_preset, false, presets::DEFAULT_JOBS);
+                                ui.selectable_value(&mut self.legacy_preset, true, presets::LEGACY_JOBS);
+                            });
+                        if ui.button("Load preset").clicked() { self.load_default_jobs(ui.ctx()); }
+                    });
+                    ui.small(if self.legacy_preset { "50,000 original GDP rectangles · 1,000 km² average." } else { "53,000 AOIs: 50,000 GDP rectangles + 1,000 each of forests, rivers and coasts. Assign job settings separately below." });
+                });
+                #[cfg(not(target_arch = "wasm32"))]
+                self.storage_ui(ui);
+                if self.pending.is_some() {
+                    ui.horizontal_wrapped(|ui| { ui.spinner(); ui.label(&self.progress); });
+                }
+                if let Some(error) = &self.error { ui.colored_label(egui::Color32::LIGHT_RED, error); }
+            });
+    }
+
     fn gdp_ui(&mut self, ui: &mut egui::Ui) {
         let context = ui.ctx().clone();
         let ctx = &context;
@@ -219,20 +242,6 @@ impl AoiGenerator {
         let busy = self.busy();
 
         ui.push_id("aoi-generator", |ui| {
-                ui.add_enabled_ui(!busy, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label("AOI preset:");
-                        egui::ComboBox::from_id_salt("aoi-preset-choice")
-                            .selected_text(if self.legacy_preset { presets::LEGACY_JOBS } else { presets::DEFAULT_JOBS })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut self.legacy_preset, false, presets::DEFAULT_JOBS);
-                                ui.selectable_value(&mut self.legacy_preset, true, presets::LEGACY_JOBS);
-                            });
-                        if ui.button("Load preset").clicked() { self.load_default_jobs(ctx); }
-                    });
-                    ui.small(if self.legacy_preset { "50,000 original grid rectangles · 1,000 km² average." } else { "50,000 rotated ground rectangles · 100 km² average. Loads without Python." });
-                });
-                ui.separator();
                 ui.label("Generate rectangular AOIs on Earth. Overlaps are allowed.");
                 ui.add_enabled_ui(!busy, |ui| {
                     egui::Grid::new("aoi-generator-controls").num_columns(2).spacing([16.0, 9.0])
@@ -319,6 +328,7 @@ impl AoiGenerator {
     }
 
     pub(crate) fn load_default_jobs(&mut self, _ctx: &egui::Context) {
+        if self.busy() { return; }
         let defaults = presets::settings(self.legacy_preset);
         self.shape = defaults.generation.shape.clone();
         self.random_rotation = defaults.generation.random_rotation;
@@ -387,6 +397,24 @@ impl AoiGenerator {
                 Ok(worker::Event::Progress(message)) => {
                     self.progress = message;
                 }
+                Ok(worker::Event::PresetFinished(result)) => {
+                    self.pending = None;
+                    match result {
+                        Ok(layers) => {
+                            let mut layers = layers.into_iter();
+                            self.preview = layers.next().map(Arc::new);
+                            self.visible = true;
+                            self.preview_name = self.pending_name;
+                            for source in &mut self.sources {
+                                *source = environment::Source::new(source.kind, source.name);
+                                source.preview = layers.next().map(Arc::new);
+                                source.visible = source.preview.is_some();
+                            }
+                        }
+                        Err(error) => self.error = Some(error),
+                    }
+                    return;
+                }
                 Ok(worker::Event::Finished(Ok(preview))) => {
                     if let Some(index) = self.pending_source.take() {
                         self.sources[index].preview = Some(Arc::new(preview));
@@ -425,6 +453,22 @@ impl AoiGenerator {
 mod tests {
     use super::*;
 
+    #[test]
+    fn failed_preset_keeps_every_existing_layer() {
+        let preview = Arc::new(preview::Preview::empty(0, 42).finish());
+        let mut panel = AoiGenerator::default();
+        panel.preview = Some(preview.clone());
+        for source in &mut panel.sources { source.preview = Some(preview.clone()); }
+        let (tx, rx) = std::sync::mpsc::channel();
+        panel.pending = Some(rx);
+        tx.send(worker::Event::PresetFinished(Err("Missing forest source".into()))).unwrap();
+        panel.poll(&egui::Context::default());
+        assert!(Arc::ptr_eq(panel.preview.as_ref().unwrap(), &preview));
+        for source in &panel.sources { assert!(Arc::ptr_eq(source.preview.as_ref().unwrap(), &preview)); }
+        assert!(panel.error.as_ref().unwrap().contains("Missing forest"));
+        assert!(panel.pending.is_none());
+    }
+
     fn text_position(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<egui::Pos2> {
         fn find(shape: &egui::Shape, needle: &str) -> Option<egui::Pos2> {
             match shape {
@@ -457,8 +501,8 @@ mod tests {
         }
         let shapes = &output.unwrap().shapes;
         assert!(text_position(shapes, "Number of AOIs").is_some());
-        assert!(text_position(shapes, "Default Jobs").is_some());
-        assert!(text_position(shapes, "Load preset").is_some());
+        assert!(text_position(shapes, "Default Jobs").is_none());
+        assert!(text_position(shapes, "Load preset").is_none());
         assert!(text_position(shapes, "Average area").is_some());
         assert!(text_position(shapes, "Generate").is_some());
         let (lo, hi) = panel.bounds();
@@ -490,7 +534,7 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ui| panel.ui(ui),
+                |ui| panel.presets_ui(ui),
             )
         };
         let _ = frame(&mut panel, vec![]);
@@ -512,7 +556,7 @@ mod tests {
             );
         }
         assert!(panel.pending.is_some());
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
         while panel.pending.is_some() && std::time::Instant::now() < deadline {
             panel.poll(&ctx);
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -527,6 +571,14 @@ mod tests {
         assert!(panel.overlay().is_some());
         let (lo, hi) = panel.bounds();
         assert!(preview.min_area >= lo && preview.max_area <= hi);
+        assert_eq!(panel.overlays().len(), 4);
+        for source in &panel.sources {
+            let layer = source.preview.as_ref().unwrap();
+            assert_eq!(layer.count, 1000);
+            assert!(layer.max_edges <= compact::EDGE_LIMIT);
+            assert!(layer.aois.iter().all(|a| a.source == source.kind));
+        }
+        assert_eq!(panel.overlays().iter().map(|(p, _, _)| p.count).sum::<usize>(), 53_000);
         assert!(panel.random_rotation);
         assert_eq!(panel.fill_opacity, 0.1);
         assert_eq!(

@@ -4,6 +4,7 @@ pub mod dataset;
 pub mod geometry;
 pub mod parallel;
 pub mod resources;
+pub mod satisfiability;
 pub mod session;
 mod spatial;
 pub mod storage;
