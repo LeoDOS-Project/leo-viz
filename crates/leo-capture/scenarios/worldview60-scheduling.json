@@ -1,0 +1,18 @@
+{
+  "preset": "../../../assets/presets/default-preset.json.gz",
+  "output": "../../../artifacts/scheduling-graphs/worldview60-24h-20261113",
+  "epoch_unix_s": 1794528000,
+  "workers": 8,
+  "satellite_count": 60,
+  "options": {
+    "duration_s": 86400,
+    "step_s": 30,
+    "width_km": 13.1,
+    "reach_km": 450,
+    "cross_spacing_km": 11.79,
+    "along_offsets_km": [-150, 0, 150],
+    "settle_s": 2,
+    "edge_km": 2,
+    "cell_deg": 2
+  }
+}

@@ -205,6 +205,7 @@ pub(crate) fn opportunities_range(
                 na,
                 b,
                 nb,
+                None,
             )
         })?;
         for segment in segments {
@@ -808,13 +809,13 @@ mod regression_tests {
     }
 }
 
-struct Segment {
-    ops: Vec<Opportunity>,
+pub(crate) struct Segment {
+    pub ops: Vec<Opportunity>,
     geometric: u64,
     rejected: u64,
 }
 #[allow(clippy::too_many_arguments)]
-fn segment(
+pub(crate) fn segment(
     jobs: &[Job],
     atlas: &Atlas,
     epoch_unix_s: f64,
@@ -827,6 +828,7 @@ fn segment(
     na: Vector,
     b: Vector,
     nb: Vector,
+    eligible: Option<&[bool]>,
 ) -> Result<Segment, String> {
     let mut ops = Vec::new();
     let mut geometric = 0;
@@ -838,6 +840,9 @@ fn segment(
     }
     for patch_id in atlas.candidates(a, b, half) {
         let patch = &atlas.patches[patch_id];
+        if eligible.is_some_and(|mask| !patch.pieces.iter().any(|p| mask[p.job])) {
+            continue;
+        }
         // BVH leaves are conservative; filter each patch before projecting.
         let middle = geometry::unit(std::array::from_fn(|i| a[i] + b[i]));
         if norm(leo_sim::geometry::sub(patch.sphere.center, middle))
@@ -852,6 +857,9 @@ fn segment(
         let mut crops = Vec::new();
         for piece_id in patch.candidates(bounds) {
             let piece = &patch.pieces[piece_id];
+            if eligible.is_some_and(|mask| !mask[piece.job]) {
+                continue;
+            }
             let intersect = piece.shape.intersection(&full_strip);
             if intersect.unsigned_area() <= 1e-10 {
                 continue;

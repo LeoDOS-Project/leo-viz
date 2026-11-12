@@ -1,4 +1,5 @@
 target/
+artifacts/scheduling-graphs/
 dist/.stage/
 dist/
 

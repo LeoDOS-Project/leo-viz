@@ -1,0 +1,74 @@
+{
+  "status": "graphs_generated_and_verified; path optimization not performed",
+  "start_utc": "2026-11-13T00:00:00Z",
+  "end_utc": "2026-11-14T00:00:00Z",
+  "constellation": {
+    "planes": 20,
+    "satellites_per_plane": 3,
+    "altitude_km": 617.0,
+    "inclination_deg": 97.9,
+    "phasing": 14,
+    "raan_offset_deg": 0.0,
+    "star": false,
+    "eccentricity": 0.0,
+    "argument_deg": 0.0,
+    "propagation": "j2"
+  },
+  "satellite_count": 60,
+  "pointing_mode_count": 91,
+  "options": {
+    "duration_s": 86400.0,
+    "step_s": 30.0,
+    "width_km": 13.1,
+    "reach_km": 450.0,
+    "cross_spacing_km": 11.79,
+    "along_offsets_km": [
+      -150.0,
+      0.0,
+      150.0
+    ],
+    "settle_s": 2.0,
+    "edge_km": 2.0,
+    "cell_deg": 2.0
+  },
+  "saved_preset_sha256": "48d69f3954c627972237307db70f67ec46d44862dd2ae4afbec383631ab3cc8b",
+  "cadence_job_counts": {
+    "168 h": 13184,
+    "24 h": 13264,
+    "4 h": 13170,
+    "720 h": 13382
+  },
+  "metrics": {
+    "total_actions": 973789,
+    "total_nodes": 1994180,
+    "total_edges": 8094888,
+    "total_crop_records": 2516391,
+    "graph_and_action_bytes": 1150183345,
+    "elapsed_s": 903.838636402,
+    "observed_process_memory_bytes": 307986432,
+    "job_count": 53000,
+    "jobs_with_candidates": 52529,
+    "jobs_with_due_deadlines": 26434,
+    "jobs_with_no_due_deadline": 26566,
+    "due_observations": 92284,
+    "logical_cpus": 16,
+    "effective_worker_limit": 8,
+    "duty_percent": 75
+  },
+  "verification": {
+    "satellite_graphs": 60,
+    "actions": 973789,
+    "nodes": 1994180,
+    "edges": 8094888,
+    "sampled_crop_records_checked": 106350,
+    "result": "passed"
+  },
+  "artifact_directory": "artifacts/scheduling-graphs/worldview60-24h-20261113",
+  "limitations": [
+    "Finite 30-second acquisition slots and 91 pointing modes; not all physically possible acquisitions.",
+    "The graph represents alternatives, not captures that can all occur together.",
+    "Weekly/monthly jobs have opportunities but no due deadline in this horizon.",
+    "Memory is the observed process footprint during generation, not a hard allocation cap.",
+    "Full graph and crop artifacts and the saved workload are local and excluded from Git."
+  ]
+}

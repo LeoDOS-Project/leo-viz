@@ -5,6 +5,7 @@ pub mod geometry;
 pub mod parallel;
 pub mod resources;
 pub mod satisfiability;
+pub mod scheduling;
 pub mod session;
 mod spatial;
 pub mod storage;

@@ -1,5 +1,6 @@
 [package]
 name = "leo-capture"
+default-run = "leo-capture"
 version = "0.1.0"
 edition = "2021"
 description = "Polygon acquisition opportunities and unconstrained workload capture baseline"

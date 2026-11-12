@@ -4,6 +4,10 @@ Application-level workload/capture library above `leo-sim`. No renderer, GPU,
 processing kernels, execution actions, admission controller or rolling-horizon
 scheduler. The GUI and CLI share this implementation and job/persistence models.
 
+The separate [acquisition-graph experiment](SCHEDULING.md) builds timed imaging
+and maneuver choices from a saved AOI/jobs preset and WorldView-60. It preserves
+optional acquisitions and mosaic crop geometry; path optimization comes later.
+
 ```sh
 cargo test --manifest-path crates/leo-capture/Cargo.toml
 cargo run --release --manifest-path crates/leo-capture/Cargo.toml -- \
