@@ -97,11 +97,14 @@ impl Panel {
                             .id_salt("sidebar-data")
                             .default_open(true)
                             .show(ui, |ui| {
+                                if tab.settings.pushbroom.observable_width_km.is_some() {
+                                    ui.small("Uses the wider observable corridor as an access approximation, not simultaneous imaging across that width.");
+                                }
                                 self.data.ui(
                                     ui,
                                     &mut tab.settings.observation_data,
                                     &tab.planets[self.planet],
-                                    tab.settings.pushbroom.swath_km,
+                                    tab.settings.pushbroom.observation_width_km(),
                                     tab.settings.time,
                                     epoch,
                                 );
@@ -113,7 +116,7 @@ impl Panel {
                             ui,
                             &tab.planets[self.planet],
                             tab.settings.observation_data,
-                            tab.settings.pushbroom.swath_km,
+                            tab.settings.pushbroom.observation_width_km(),
                             tab.settings.time,
                             epoch,
                         );

@@ -1,5 +1,5 @@
-//! Illustrative continuous nadir imaging using the displayed satellite positions.
-//! Trails are observed simulation history, not completed acquisition jobs.
+//! Imaging swaths and separately styled observable corridors from displayed positions.
+//! Trails are geometric history, not completed acquisition jobs.
 use crate::drawing::{plane_color, DrawConstellationData};
 use crate::globe_overlay::{front_polygon, front_segment, line_quad, project_surface};
 use eframe::egui::{self, Color32, Mesh, Rect, Shape};
@@ -15,7 +15,11 @@ use std::{
 #[derive(Clone, Copy)]
 pub(crate) struct Settings {
     pub enabled: bool,
+    /// Actual imaging swath, used by the solid overlay and image previews.
     pub swath_km: f64,
+    /// Optional wider field of regard used by the idealized access baseline.
+    pub observable_width_km: Option<f64>,
+    pub show_observable: bool,
     pub trail_s: f64,
     pub show_fan: bool,
     pub show_images: bool,
@@ -26,6 +30,8 @@ impl Default for Settings {
         Self {
             enabled: false,
             swath_km: 20.0,
+            observable_width_km: None,
+            show_observable: false,
             trail_s: 60.0,
             show_fan: false,
             show_images: false,
@@ -34,6 +40,33 @@ impl Default for Settings {
     }
 }
 impl Settings {
+    pub fn observation_width_km(&self) -> f64 {
+        self.observable_width_km
+            .unwrap_or(self.swath_km)
+            .max(self.swath_km)
+    }
+
+    pub fn observable_visible(&self) -> bool {
+        self.show_observable && self.observable_width_km.is_some()
+    }
+
+    pub fn visible(&self) -> bool {
+        self.enabled || self.observable_visible()
+    }
+
+    pub fn apply_worldview(&mut self) {
+        self.swath_km = leo_sim::worldview::IMAGING_SWATH_KM;
+        self.observable_width_km = Some(leo_sim::worldview::ACCESS_WIDTH_KM);
+        self.enabled = true;
+        self.show_observable = true;
+    }
+
+    pub fn apply_swath(&mut self, width: f64) {
+        self.swath_km = width;
+        self.observable_width_km = None;
+        self.show_observable = false;
+    }
+
     pub fn ui(&mut self, ui: &mut egui::Ui, enabled: bool) {
         ui.add_enabled(
             enabled,
@@ -43,13 +76,36 @@ impl Settings {
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Swath width");
-                ui.add(egui::DragValue::new(&mut self.swath_km).range(1.0..=500.0).speed(1.0).suffix(" km"));
+                ui.add(egui::DragValue::new(&mut self.swath_km).range(1.0..=500.0).speed(0.1).suffix(" km"))
+                    .on_hover_text("Actual imaging width: solid strip and image previews");
             });
-            ui.add_enabled_ui(self.enabled, |ui| {
+            let mut separate = self.observable_width_km.is_some();
+            if ui.checkbox(&mut separate, "Separate observable width").on_hover_text(
+                "Model a wider steerable field of regard. Revisit and the unconstrained capture baseline use this width; it is not simultaneous imaging."
+            ).changed() {
+                self.observable_width_km = separate.then_some(self.swath_km.max(450.0));
+                self.show_observable = separate;
+            }
+            if let Some(width) = &mut self.observable_width_km {
+                *width = width.max(self.swath_km);
+                ui.horizontal(|ui| {
+                    ui.label("Observable width");
+                    ui.add(egui::DragValue::new(width).range(self.swath_km..=500.0).speed(1.0).suffix(" km"));
+                });
+                ui.checkbox(&mut self.show_observable, "Observable corridor");
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Solid: imaging swath");
+                    ui.colored_label(OBSERVABLE_COLOR, "Dashed cyan: observable corridor");
+                });
+                ui.small("Revisit, data estimates and the capture baseline use the observable width as an access approximation. The wider band is not all imaged at once.");
+            }
+            ui.add_enabled_ui(self.visible(), |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Recent trail");
                     ui.add(egui::DragValue::new(&mut self.trail_s).range(5.0..=300.0).speed(5.0).suffix(" s"));
                 });
+            });
+            ui.add_enabled_ui(self.enabled, |ui| {
                 ui.checkbox(&mut self.show_fan, "Show sensor fan");
                 ui.add_enabled(cfg!(not(target_arch = "wasm32")), egui::Checkbox::new(&mut self.show_images, "Pushbroom images"))
                     .on_hover_text("Click a satellite to open its swept-ground image from Esri World Imagery; desktop only");
@@ -223,7 +279,7 @@ impl History {
         constellations: &[DrawConstellationData],
         settings: Settings,
     ) {
-        if !settings.enabled || !time.is_finite() {
+        if !settings.visible() || !time.is_finite() {
             self.clear();
             return;
         }
@@ -316,6 +372,48 @@ pub(crate) struct Overlay<'a> {
     polar_scale: f64,
 }
 
+const OBSERVABLE_COLOR: Color32 = Color32::from_rgb(72, 210, 245);
+
+/// Clip before tessellating dashes: work stays bounded by the viewport even
+/// when a ground segment projects to millions of pixels at extreme zoom.
+fn dashed_line(
+    mesh: &mut Mesh,
+    a: egui::Pos2,
+    b: egui::Pos2,
+    frame: Rect,
+    color: Color32,
+    phase: &mut f32,
+) {
+    const PERIOD: f32 = 13.0;
+    const DASH: f32 = 8.0;
+    let length = a.distance(b);
+    if !length.is_finite() || length < 0.01 {
+        return;
+    }
+    if let Some((start, end)) = crate::drawing::clip_line_to_rect(a, b, frame) {
+        let clipped_length = start.distance(end);
+        if clipped_length >= 0.01 {
+            let direction = (end - start) / clipped_length;
+            let mut offset = -(*phase + a.distance(start)).rem_euclid(PERIOD);
+            while offset < clipped_length {
+                let left = offset.max(0.0);
+                let right = (offset + DASH).min(clipped_length);
+                if right > left {
+                    line_quad(
+                        mesh,
+                        start + direction * left,
+                        start + direction * right,
+                        color,
+                        1.0,
+                    );
+                }
+                offset += PERIOD;
+            }
+        }
+    }
+    *phase = (*phase + length).rem_euclid(PERIOD);
+}
+
 /// Retain the full history, but draw fewer segments when zoomed out. Bound
 /// angular spacing for curvature and temporal spacing for the fading gradient.
 fn drawing_samples(samples: &[Sample], pixel_radius: f64, trail_s: f64) -> Vec<usize> {
@@ -361,8 +459,31 @@ impl<'a> Overlay<'a> {
 
     fn mesh(&self, transform: &PlotTransform) -> Mesh {
         let mut mesh = Mesh::default();
+        // Draw every access corridor first so no wide band paints over another
+        // satellite's narrow imaging strip. Both layers reuse the same history.
+        if self.settings.observable_visible() {
+            self.append_mesh(
+                &mut mesh,
+                transform,
+                self.settings.observation_width_km(),
+                true,
+            );
+        }
+        if self.settings.enabled {
+            self.append_mesh(&mut mesh, transform, self.settings.swath_km, false);
+        }
+        mesh
+    }
+
+    fn append_mesh(
+        &self,
+        mesh: &mut Mesh,
+        transform: &PlotTransform,
+        width_km: f64,
+        observable: bool,
+    ) {
         let Some(now) = self.history.time else {
-            return mesh;
+            return;
         };
         let project = |p: Vector| {
             project_surface(
@@ -392,12 +513,12 @@ impl<'a> Overlay<'a> {
                 .iter()
                 .map(|s| norm(sub(s.centre, track.head.centre)))
                 .fold(0.0_f64, f64::max)
-                + self.settings.swath_km / (2.0 * self.radius);
+                + width_km / (2.0 * self.radius);
             let head = project(track.head.centre);
             if head.1 + extent / self.polar_scale < 0.0 {
                 continue;
             }
-            if !self.settings.show_fan
+            if (observable || !self.settings.show_fan)
                 && !transform.frame().intersects(Rect::from_center_size(
                     screen(head.0),
                     egui::Vec2::splat((2.0 * extent * pixel_radius + 6.0) as f32),
@@ -424,21 +545,21 @@ impl<'a> Overlay<'a> {
                     scanline(
                         s.centre,
                         sub(after, before),
-                        self.settings.swath_km,
+                        width_km,
                         self.radius,
                         s.radius_ratio,
                     )
                     .map(|edge| edge.map(project))
                 })
                 .collect();
-            let rgba = |alpha| {
-                Color32::from_rgba_unmultiplied(
-                    track.color.r(),
-                    track.color.g(),
-                    track.color.b(),
-                    alpha,
-                )
+            let color = if observable {
+                OBSERVABLE_COLOR
+            } else {
+                track.color
             };
+            let rgba =
+                |alpha| Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha);
+            let mut dash_phase = [0.0; 2];
             for i in 1..indices.len() {
                 let (Some(a), Some(b)) = (edges[i - 1], edges[i]) else {
                     continue;
@@ -455,7 +576,10 @@ impl<'a> Overlay<'a> {
                     if transform.frame().intersects(bounds) {
                         let first = mesh.vertices.len() as u32;
                         for p in pts.iter().copied() {
-                            mesh.colored_vertex(p, rgba((65.0 * fade) as u8));
+                            mesh.colored_vertex(
+                                p,
+                                rgba((if observable { 18.0 } else { 65.0 } * fade) as u8),
+                            );
                         }
                         for j in 1..pts.len() - 1 {
                             mesh.add_triangle(first, first + j as u32, first + j as u32 + 1);
@@ -464,21 +588,37 @@ impl<'a> Overlay<'a> {
                 }
                 for side in 0..2 {
                     if let Some((a, b)) = front_segment(a[side], b[side]) {
-                        line_quad(
-                            &mut mesh,
-                            screen(a),
-                            screen(b),
-                            rgba((150.0 * fade) as u8),
-                            0.8,
-                        );
+                        if observable {
+                            dashed_line(
+                                mesh,
+                                screen(a),
+                                screen(b),
+                                *transform.frame(),
+                                rgba((150.0 * fade) as u8),
+                                &mut dash_phase[side],
+                            );
+                        } else {
+                            line_quad(mesh, screen(a), screen(b), rgba((150.0 * fade) as u8), 0.8);
+                        }
                     }
                 }
             }
             if let Some(Some(edge)) = edges.last() {
                 if let Some((a, b)) = front_segment(edge[0], edge[1]) {
-                    line_quad(&mut mesh, screen(a), screen(b), rgba(255), 2.5);
+                    if observable {
+                        dashed_line(
+                            mesh,
+                            screen(a),
+                            screen(b),
+                            *transform.frame(),
+                            rgba(220),
+                            &mut 0.0,
+                        );
+                    } else {
+                        line_quad(mesh, screen(a), screen(b), rgba(255), 2.5);
+                    }
                 }
-                if self.settings.show_fan && project(track.head.centre).1 >= 0.0 {
+                if !observable && self.settings.show_fan && project(track.head.centre).1 >= 0.0 {
                     let satellite = project_surface(
                         Vector3::from(scale(track.head.centre, track.head.radius_ratio)),
                         &self.rotation,
@@ -488,13 +628,12 @@ impl<'a> Overlay<'a> {
                     .0;
                     if satellite.z >= 0.0 {
                         for &p in edge {
-                            line_quad(&mut mesh, screen(satellite), screen(p.0), rgba(65), 0.8);
+                            line_quad(mesh, screen(satellite), screen(p.0), rgba(65), 0.8);
                         }
                     }
                 }
             }
         }
-        mesh
     }
 }
 impl PlotItem for Overlay<'_> {
@@ -751,6 +890,85 @@ mod tests {
             .vertices
             .is_empty());
     }
+
+    #[test]
+    fn observable_corridor_is_independent_and_does_not_widen_image_previews() {
+        let mut h = History::default();
+        h.sources.insert(0, vec![0]);
+        for i in 0..60 {
+            h.record(
+                (0, 0, 0),
+                sample(i as f64),
+                Color32::from_rgb(255, 190, 65),
+                60.0,
+                R,
+            );
+        }
+        h.time = Some(59.0);
+        let mut settings = Settings::default();
+        settings.apply_worldview();
+        let image = h.image_strip(0, 0, 0, settings, R).unwrap();
+        for line in &image.lines {
+            assert!((angular_distance(line.edges[0], line.edges[1]) * R - 13.1).abs() < 0.01);
+        }
+        let draw = |s| Overlay::new(&h, s, Matrix3::identity(), R, 0.0).mesh(&transform());
+        let both = draw(settings);
+        let swath = draw(Settings {
+            show_observable: false,
+            ..settings
+        });
+        let corridor = draw(Settings {
+            enabled: false,
+            ..settings
+        });
+        assert!(both.is_valid() && swath.is_valid() && corridor.is_valid());
+        assert!(!swath.vertices.is_empty() && !corridor.vertices.is_empty());
+        assert_eq!(
+            both.vertices.len(),
+            swath.vertices.len() + corridor.vertices.len()
+        );
+        let bounds = |mesh: &Mesh| {
+            Rect::from_points(&mesh.vertices.iter().map(|v| v.pos).collect::<Vec<_>>())
+        };
+        assert!(bounds(&corridor).height() > bounds(&swath).height() * 8.0);
+        settings.enabled = false;
+        settings.show_observable = false;
+        assert!(draw(settings).vertices.is_empty());
+        assert_eq!(settings.observation_width_km(), 450.0); // Display toggles cannot change coverage.
+        settings.show_observable = true;
+        assert!(settings.visible());
+        let rotation = crate::math::rotation_from_drag(std::f64::consts::PI, 0.0);
+        assert!(Overlay::new(&h, settings, rotation, R, 0.0)
+            .mesh(&transform())
+            .vertices
+            .is_empty());
+        settings.apply_swath(20.0);
+        assert_eq!(settings.observation_width_km(), 20.0);
+        assert!(!settings.observable_visible());
+    }
+
+    #[test]
+    fn dashed_corridor_lines_clip_before_tessellation_at_extreme_zoom() {
+        let mut mesh = Mesh::default();
+        let frame = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 800.0));
+        dashed_line(
+            &mut mesh,
+            egui::pos2(-1e8, 400.0),
+            egui::pos2(1e8, 400.0),
+            frame,
+            OBSERVABLE_COLOR,
+            &mut 0.0,
+        );
+        assert!(mesh.is_valid() && !mesh.vertices.is_empty());
+        assert!(mesh.vertices.len() <= 4 * 64);
+        assert!(mesh.vertices.iter().all(|v| frame.contains(v.pos)));
+        assert!(mesh
+            .vertices
+            .chunks(4)
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|segments| segments[1][0].pos.x - segments[0][2].pos.x >= 4.0));
+    }
     #[test]
     fn horizon_clipping_retains_only_the_visible_patch() {
         let points = [
@@ -814,6 +1032,15 @@ mod tests {
         assert!(history.tracks.is_empty());
         history.update(202.0, &body, R, &data, settings);
         history.update(203.0, &body, R, &[], settings);
+        assert!(history.tracks.is_empty());
+        let mut corridor = Settings::default();
+        corridor.apply_worldview();
+        corridor.enabled = false;
+        history.update(204.0, &body, R, &data, corridor);
+        history.update(206.0, &body, R, &data, corridor);
+        assert_eq!(history.tracks.values().next().unwrap().samples.len(), 2);
+        corridor.show_observable = false;
+        history.update(207.0, &body, R, &data, corridor);
         assert!(history.tracks.is_empty());
     }
 

@@ -473,7 +473,10 @@ The Earth constellation **Preset** dropdown includes **WorldView-3** (one
 satellite), **WorldView-30**, and **WorldView-60**. The latter two are hypothetical
 fleets using WorldView-3's nominal **617 km altitude and 97.9° retrograde
 inclination**, propagated with secular J2. The presets replace orbital overrides,
-clear stale tracks, and set the view's shared effective width to **450 km**.
+clear stale tracks, and set the view's shared observable width to **450 km** and
+imaging swath to **13.1 km**. Both overlays are enabled: a faint cyan band with
+dashed edges shows the observable corridor, and a solid strip in each orbital
+plane's color shows the imaging swath. Their visibility toggles are independent.
 They preserve resource profiles. RAAN and phase are design coordinates, not a
 live ephemeris or a fixed 10:30 local solar time for every plane.
 
@@ -487,8 +490,9 @@ The 450 km width represents an **idealized accessible corridor**. WorldView-3's
 native camera swath is **13.1 km**; its operator quotes 4.5-day revisit at 40° N
 with viewing angles within 20° of nadir. That is not a worst-case whole-band
 guarantee, and dividing it by satellite count does not determine a fleet's
-maximum revisit. The preview, data estimates, and capture baseline currently
-treat the full selected width as continuously available. Steering schedules,
+maximum revisit. Revisit calculations, data estimates, and the capture baseline
+still treat the full observable width as continuously available. The solid
+swath overlay and image previews use the narrower imaging width. Steering schedules,
 simultaneous collection capacity, and daylight are excluded from geometric
 revisit. See the [operator datasheet](https://pacgeo.com/wp-content/uploads/2025/12/Vantor_WorldView-3_25AUG2025_Datasheet_PacGeo.pdf)
 and [USGS orbit characterization](https://pubs.usgs.gov/of/2021/1030/i/ofr20211030i_ver1.1.pdf).
@@ -539,7 +543,17 @@ in the right **Earth Observation** sidebar. Each displayed satellite
 leaves a fading, ground-fixed strip with a bright current cross-track scanline.
 The default swath is 20 km and the trail covers the last 60 simulation seconds;
 both are adjustable. **Show sensor fan** adds faint rays from the satellite to
-the scanline. Pause freezes the trail; disabling the overlay clears it.
+the scanline. Pause freezes the trail; hiding both overlays clears it.
+
+Enable **Separate observable width** to model and display a wider accessible
+corridor alongside the imaging swath. **Observable corridor** toggles its faint
+cyan fill and dashed edges independently of **Pushbroom sweeps**. Both widths
+remain physically to scale, share one bounded history per satellite, and use the
+same recent-trail duration. The WorldView presets configure these widths and
+enable both overlays automatically. Revisit, data estimates and the capture
+baseline use the observable width when configured, even when its overlay is
+hidden; the model still assumes continuous access across that width. Turning
+off **Separate observable width** restores the imaging width for calculations.
 
 This is a continuous nadir-imaging geometry preview on Earth globes, using the
 satellite positions already shown (including TLE/numerical positions). It does
@@ -576,7 +590,7 @@ reduce the texture to its supported maximum dimension.
 ## Earth Observation
 
 The resizable right **Earth Observation** sidebar contains **AOI Generator**,
-**Observation model** (swath width, sweep visibility, coverage and a point sampler),
+**Observation model** (imaging/observable widths, overlay visibility, coverage and a point sampler),
 and **Data**. With **Display** set to **Planet**, select **Application → Earth Observation** to open it;
 select **None** or close it with **−** to restore the full view width. The application
 is available only when the active planet view contains exactly one Earth.
@@ -673,7 +687,10 @@ Earth rotation over a centred 0.5-second interval; summaries refresh up to four
 times per wall-clock second during playback. Numerical/42 configurations report
 an unsupported estimate rather than silently substituting another propagator.
 
-These are continuous full-swath acquisition estimates, independent of playback
+These are continuous acquisition estimates across the observation model's width,
+using the observable corridor when configured, or the imaging swath otherwise.
+The wider corridor is an access approximation, not simultaneous collection by
+the native camera. Estimates are independent of playback
 speed and sweep-overlay visibility. Hidden constellations and debris are excluded;
 overlapping captures count separately. They do not integrate an observation
 schedule or apply AOI cropping, illumination, clouds, imaging duty limits or
@@ -723,8 +740,9 @@ Open **Earth Observation → Observation model → Sampled latitude forecast…*
 When a common repeat cycle is known, the button is **Sample one repeat cycle…**
 and initializes the forecast with that exact cycle and Earth view. This remains a
 sampled regional estimate, separate from the analytical coverage guarantee.
-The background forecast uses visible Earth constellations, the pushbroom swath
-width, and the current simulation time. Choose 0.01–30 days, longitude sample count,
+The background forecast uses visible Earth constellations, the observation width
+(observable corridor when configured, otherwise imaging swath), and the current
+simulation time. Choose 0.01–30 days, longitude sample count,
 and an optional specific latitude/longitude (initially Gothenburg). Results show
 observations per day, successive-observation gap ranges, never-seen locations,
 and the longest observation-free span including the forecast's boundary gaps.

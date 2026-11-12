@@ -126,6 +126,9 @@ fn adding_can_keep_other_shells_and_can_keep_or_apply_published_swath() {
     assert_eq!(c.phasing, 2.0); // published 5/5/3, reversed plane numbering
     assert!(c.propagator == Propagator::J2);
     library.use_swath = true;
+    imaging.apply_worldview();
     library.add(&mut p, &mut imaging);
     assert_eq!(imaging.swath_km, 60.0);
+    assert_eq!(imaging.observation_width_km(), 60.0);
+    assert!(!imaging.observable_visible());
 }

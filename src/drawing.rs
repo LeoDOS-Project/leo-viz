@@ -7652,7 +7652,7 @@ pub fn draw_torus(
     (user_rotation, zoom)
 }
 
-fn clip_line_to_rect(
+pub(crate) fn clip_line_to_rect(
     mut p0: egui::Pos2,
     mut p1: egui::Pos2,
     r: egui::Rect,

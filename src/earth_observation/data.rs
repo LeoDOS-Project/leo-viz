@@ -68,7 +68,7 @@ impl Panel {
         time: f64,
         epoch: DateTime<Utc>,
     ) {
-        ui.small("Continuous full-swath acquisition");
+        ui.small("Continuous acquisition across the observation model's width");
         egui::Grid::new("capture-profile")
             .num_columns(2)
             .show(ui, |ui| {
@@ -132,7 +132,7 @@ impl Panel {
         let count: usize = groups.iter().map(|g| g.count).sum();
         let speed: f64 = groups.iter().map(|g| g.speed_sum).sum();
         let Some(raw_total) = profile.raw_bytes_per_second(swath_km, speed) else {
-            ui.label("Enter a valid capture profile and swath width.");
+            ui.label("Enter a valid capture profile and observation width.");
             return;
         };
         let Some(compressed_total) = profile.compressed_bytes_per_second(raw_total) else {
@@ -141,7 +141,7 @@ impl Panel {
         };
         ui.separator();
         ui.label(format!(
-            "{count} visible satellites · {swath_km:.1} km swath"
+            "{count} visible satellites · {swath_km:.1} km observation width"
         ));
         let compressed = profile.compression_ratio > 1.0;
         egui::Grid::new("acquisition-rates")

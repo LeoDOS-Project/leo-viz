@@ -150,7 +150,7 @@ impl Literature {
         }
         if self.use_swath {
             if let Some(width) = preset.swath_km {
-                imaging.swath_km = width;
+                imaging.apply_swath(width);
             }
         }
         clear_tracks(p);

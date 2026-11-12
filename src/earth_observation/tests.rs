@@ -96,6 +96,26 @@ fn sampler_selects_only_its_globe_and_changed_configuration_clears_results() {
 }
 
 #[test]
+fn coverage_uses_observable_width_independently_of_overlay_visibility() {
+    let mut tab = TabConfig::new("Earth".into());
+    tab.planets[0].constellations = vec![ConstellationConfig::new(0)];
+    tab.settings.pushbroom.apply_worldview();
+    tab.settings.pushbroom.enabled = false;
+    tab.settings.pushbroom.show_observable = false;
+    let mut panel = Panel::default();
+    panel.refresh_scope((0, 0, 1), &tab);
+    let width = |panel: &Panel| {
+        panel.model.as_ref().unwrap().as_ref().unwrap().half_width
+            * 2.0
+            * CelestialBody::Earth.radius_km()
+    };
+    assert!((width(&panel) - 450.0).abs() < 1e-9);
+    tab.settings.pushbroom.apply_swath(13.1);
+    panel.refresh_scope((0, 0, 2), &tab);
+    assert!((width(&panel) - 13.1).abs() < 1e-9);
+}
+
+#[test]
 fn switching_views_cancels_selection_and_an_unsupported_model_is_explicit() {
     let mut tab = TabConfig::new("Earth".into());
     let mut c = ConstellationConfig::new(0);

@@ -2063,7 +2063,7 @@ impl ViewerState {
         if show_config && !self.show_tab_info {
             ui.separator();
 
-            let mut preset_swath = None;
+            let mut preset_imaging = None;
             let mut const_to_remove: Option<usize> = None;
             let mut cameras_to_clean: Vec<usize> = Vec::new();
             let altitude_edit_time = self.tabs[tab_idx].settings.time;
@@ -2580,7 +2580,7 @@ impl ViewerState {
                                     .on_hover_text("169 satellites: 13 × 13, 70°, daily repeat, +Grid. Sets the Earth Observation swath to 20 km (shared by this view). Coverage is recomputed for this width.")
                                     .clicked() {
                                     crate::orbit_presets::apply_adam(cons);
-                                    preset_swath = Some(crate::orbit_presets::ADAM_SWATH_KM);
+                                    preset_imaging = Some(false);
                                     cameras_to_clean.push(cidx);
                                 }
                                 for fleet in leo_sim::worldview::Fleet::ALL {
@@ -2588,11 +2588,11 @@ impl ViewerState {
                                     if ui.add_enabled(planet.celestial_body == CelestialBody::Earth,
                                         egui::Button::selectable(cons.preset == crate::orbit_presets::worldview_preset(fleet), fleet.name()))
                                         .on_hover_text(format!(
-                                            "{} satellite(s): {} planes × {}, 617 km, 97.9°, J2. Sets this view's effective access width to 450 km (native camera swath: 13.1 km). {} No daylight or pointing schedule is included.",
+                                            "{} satellite(s): {} planes × {}, 617 km, 97.9°, J2. Shows the 450 km observable corridor and 13.1 km imaging swath separately. Revisit uses the observable width. {} No daylight or pointing schedule is included.",
                                             shell.count(), shell.planes, shell.satellites_per_plane, fleet.baseline_note()))
                                         .clicked() {
                                         crate::orbit_presets::apply_worldview(cons, fleet);
-                                        preset_swath = Some(leo_sim::worldview::ACCESS_WIDTH_KM);
+                                        preset_imaging = Some(true);
                                         cameras_to_clean.push(cidx);
                                     }
                                 }
@@ -2914,8 +2914,13 @@ impl ViewerState {
             }
         }); });
 
-                if let Some(swath) = preset_swath {
-                    self.tabs[tab_idx].settings.pushbroom.swath_km = swath;
+                if let Some(worldview) = preset_imaging {
+                    let imaging = &mut self.tabs[tab_idx].settings.pushbroom;
+                    if worldview {
+                        imaging.apply_worldview();
+                    } else {
+                        imaging.apply_swath(crate::orbit_presets::ADAM_SWATH_KM);
+                    }
                     let planet = &mut self.tabs[tab_idx].planets[planet_idx];
                     planet.ground_track_history.clear();
                     planet.pushbroom_history.clear();
@@ -4283,7 +4288,7 @@ impl ViewerState {
                 if render_planet && !is_2d_projection {
                     ui.vertical(|ui| {
                         let planet = &mut self.tabs[tab_idx].planets[planet_idx];
-                        if celestial_body == CelestialBody::Earth && pushbroom_settings.enabled {
+                        if celestial_body == CelestialBody::Earth && pushbroom_settings.visible() {
                             planet.pushbroom_history.update(
                                 time,
                                 &body_y_rotation,
@@ -4607,7 +4612,7 @@ impl ViewerState {
                                 generated_aois: self.aoi_generator.overlays(),
                                 selected_aoi: self.aoi_generator.jobs.selected(),
                                 pushbroom: if celestial_body == CelestialBody::Earth
-                                    && pushbroom_settings.enabled
+                                    && pushbroom_settings.visible()
                                 {
                                     Some((&planet.pushbroom_history, pushbroom_settings))
                                 } else {

@@ -196,7 +196,7 @@ impl Panel {
                 crate::revisit::Orbit::Analytical(e)=>Ok(e),
                 crate::revisit::Orbit::Tle(_)=>Err("TLE/SGP4 satellites are active. Use the sampled forecast, or hide them for circular analytical calculations.".to_owned()),
             }).collect::<Result<Vec<_>,String>>()?;
-            Model::new(elements,tab.settings.pushbroom.swath_km,CelestialBody::Earth.radius_km())
+            Model::new(elements,tab.settings.pushbroom.observation_width_km(),CelestialBody::Earth.radius_km())
         }));
     }
 
@@ -229,11 +229,11 @@ impl Panel {
                 crate::orbit_presets::worldview_note(ui);
             }
             self.literature.ui(ui, &mut tab.planets[self.planet], &mut tab.settings.pushbroom);
-            if let Some(band)=self.designer.ui(ui,&mut tab.planets[self.planet],tab.settings.pushbroom.swath_km) {
+            if let Some(band)=self.designer.ui(ui,&mut tab.planets[self.planet],tab.settings.pushbroom.observation_width_km()) {
                 self.whole_earth=band>=90.0;
                 self.latitude_band=band;
             }
-            let key=crate::revisit::fingerprint(&tab.planets[self.planet],tab.settings.pushbroom.swath_km,epoch);
+            let key=crate::revisit::fingerprint(&tab.planets[self.planet],tab.settings.pushbroom.observation_width_km(),epoch);
             self.refresh_scope((tab_idx,self.planet,key),tab);
             ui.separator();
             ui.horizontal_wrapped(|ui| {
